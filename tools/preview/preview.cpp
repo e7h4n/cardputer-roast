@@ -185,6 +185,7 @@ int main(int argc, char** argv)
     type("guji g1");
     shot("batch_sheet");
     press("enter");
+    step(2500);  // let the toast fade so the next pages are clean
 
     press("c");
     shot("curves");
@@ -194,6 +195,7 @@ int main(int argc, char** argv)
     press("c");
     press("down");
     press("enter");
+    step(2500);
 
     press("e");
     shot("editor");

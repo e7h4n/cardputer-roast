@@ -1,0 +1,244 @@
+# Cardputer Roast
+
+[English](README.md) | **中文**
+
+Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE** 流化床咖啡烘豆机的随身控制器（这台机器原本用手机 App *myERoast* 控制）。它通过蓝牙 BLE 和烘豆机通信，由烘豆机自带的 PID 跟随烘焙曲线，并在 240×135 的屏幕上带你走完一锅：投豆、脱水、一爆、发展、排豆、冷却，最后生成总结。记录存到 SD 卡，可以直接导入 Artisan。它作为社区 [Launcher](https://github.com/bmorcelli/Launcher) 下的一个 app 运行。
+
+<p>
+<img src="docs/screenshots/prep.png" width="49%" alt="准备页">
+<img src="docs/screenshots/roast.png" width="49%" alt="烘焙中">
+</p>
+
+> **安全提示。** 本固件会控制加热器的开关。它与烘豆机厂家无关，也未经厂家认可，是根据实际观察到的设备行为编写的，不是依据厂家文档。烘焙时请勿离人，并确保随时能操作机器本身的控制按键。
+
+## 功能
+- **跟随曲线。** 烘豆机的 PID 跟随目标曲线，曲线的计算方式和手机 App 完全一致。曲线可以是内置示例、自己编辑的曲线，或 Artisan / myERoast 导出的 `.alog` 文件；也可以不用曲线，手动控制火力。
+- **打点和发展窗口。** Y / F / G 分别标记脱水结束、一爆开始和一爆结束。一条阶段条贯穿整锅；一爆之后，阶段条上会框出排豆窗口（时间和升温两个条件）。
+- **提醒和安全兜底。** 用整条彩色底栏提示：进入排豆窗口、到达立即排豆温度、发展超时、火力顶满或一爆后火力下降、RoR 过低、蓝牙断开。只有在豆温达到安全上限，或曲线结束很久之后，才会自动排豆。
+- **带保护的风力控制。** 风力每次调 1% 或 0.1%；要降到 50% 和 40% 以下，必须特意长按。
+- **手动火力。** 按 P 随时在 PID 和手动火力之间切换，← → 调节火力。
+- **曲线编辑器。** 和手机 App 一样的 8 个节点（初始、脱水、一爆始/末、二爆始/末、排豆、总用时），直接在设备上编辑，表格旁边实时显示曲线，保存到 SD 卡。
+- **烘焙记录。** 每锅都会保存 `.csv`（每秒一行）、`.json` 总结，以及可导入 Artisan 的 `.alog`。
+- **模拟器。** 内置简单的热学模型，没有机器也能练习；开启时右上角显示黄色 SIM 标签。
+- **按功能着色的界面。** 颜色 = 它控制什么：风机蓝、火力橙、曲线/PID 紫、打点黄/棕、排豆和报警红、"可以进行"绿。底栏永远显示当前能按的键。
+
+## 截图
+以下截图由桌面预览工具（`tools/preview`）运行固件自身的绘制代码生成，放大 2 倍。
+
+| | |
+|---|---|
+| ![连接](docs/screenshots/connect.png) 连接页：搜索 `E-Meter…BLE` | ![准备](docs/screenshots/prep.png) 准备页：曲线 → 批次 → 开风 → 投豆 |
+| ![曲线库](docs/screenshots/curves.png) 曲线库 | ![编辑器](docs/screenshots/editor.png) 曲线编辑器：节点表和曲线并排 |
+| ![烘焙中](docs/screenshots/roast.png) 烘焙中：美拉德阶段，显示预计一爆 | ![一爆后](docs/screenshots/roast-fc.png) 一爆后：阶段条上框出发展窗口 |
+| ![立即排豆](docs/screenshots/drop-now.png) 到达立即排豆温度 | ![曲线图](docs/screenshots/chart.png) 曲线图：豆温、目标、RoR、火力 |
+| ![冷却](docs/screenshots/cooling.png) 冷却：降到冷机温度的进度 | ![总结](docs/screenshots/summary.png) 总结，已保存到 SD 卡 |
+| ![规则](docs/screenshots/rules.png) 规则与提醒 | ![按键](docs/screenshots/keys.png) 按键页，按颜色分组 |
+
+## 安装（通过 Launcher）
+1. **安装 Launcher：** 用 [M5Burner](https://docs.m5stack.com/en/download) 或 [Launcher 网页刷机工具](https://bmorcelli.github.io/Launcher/) 给 Cardputer ADV 刷入 Launcher。
+2. **下载 `cardputer-roast-<版本>.bin`：** 在 [Releases](../../releases) 页面下载（每次 CI 运行也会保留一份附件）。这是 Launcher 安装用的 app 镜像，不是整片刷写镜像。
+3. **在 Launcher 里安装**，两种方式任选：
+   - **SD 卡：** 把 `.bin` 拷到 SD 卡，在 Launcher 里打开 SD 文件浏览，选中文件安装。
+   - **USB 串口：** 让 Launcher 停在菜单界面，然后运行
+     ```sh
+     pip install pyserial
+     python3 tools/launcher_flash.py Roast cardputer-roast-<版本>.bin
+     ```
+4. **可选：** 在 Launcher 设置（CFG）里打开开机直接进入 app，这样一开机就进 Roast。之后在 Roast 里按两次 Esc，会先显示约 5 秒 Launcher 启动画面，然后自动回到 Roast。
+
+请插入 FAT32 格式的 SD 卡来存放曲线和记录。没有 SD 卡时，最近一锅的记录只保存在内存里，离开总结页就没有了。
+
+## 使用说明
+先关掉手机上的 *myERoast*：烘豆机同一时间只接受一个蓝牙连接。
+
+Roast 会自动搜索名为 `E-Meter…BLE` 的设备并连接。没有机器想先试用，可以在连接页按 **D**，或在规则页（**O**）里打开 *simulator*（模拟器）。只有机器没在运行时才能切换模拟器。
+
+任何页面按 **H** 都能看到按颜色分组的按键说明。**M** 静音（报警仍会响）。右上角显示电量、连接状态（绿点）或 SIM 标签；静音时显示喇叭图标，没插 SD 卡时显示红色 **SD** 标签。
+
+### 准备页
+页面按四步引导：曲线 → 批次 → 开风 → 投豆。
+
+| 按键 | 作用 |
+|---|---|
+| C | 曲线库。第一项是"不用曲线"（手动火力）；Enter 选用，E 编辑，N 新建曲线。 |
+| E | 编辑当前曲线（没有曲线时新建）。 |
+| W / B | 批次卡：在一处填写生豆重量和豆名（Tab 切换输入框）。 |
+| O | 规则、提醒和模拟器开关。 |
+| S | 开风，不加热。放豆前先用冷风试吹，找到合适的风力。 |
+| ↑ ↓（`;` `.`） | 风力 ±1%（按住 Aa：±0.1%）。待机时只改开风的预设值，不会向机器发指令。 |
+| Enter | 投豆：开始计时，并启动烘豆机的 PID 跟随曲线。必须先开风。 |
+| X X | 停风。 |
+| Tab | 曲线预览。 |
+| Esc Esc | 返回 Launcher。风机运行时不能退出。 |
+
+### 烘焙中
+| 按键 | 作用 |
+|---|---|
+| Y / F / G | 标记脱水结束 / 一爆开始 / 一爆结束。已打的点再连按两次可以清除。 |
+| D D 或 空格 空格 | 排豆。按下第一次后，底栏会提示再按一次。 |
+| ↑ ↓ | 风力 ±1%（Aa：±0.1%）。 |
+| P | 手动火力：关闭 PID，火力保持当前值。← → 每次调 ±5%（Aa：±1%；按住会连续调节，每次按住最多连调 8 下）。再按 P 回到跟随曲线。 |
+| Tab | 切换数字界面和曲线图（豆温黑色、目标紫色、RoR 灰色、火力橙色区域）。 |
+
+阶段条贯穿整锅：脱水（浅绿）→ 美拉德（黄，按 Y 开始）→ 发展（棕，按 F 开始）。一爆之后，阶段条上会框出排豆窗口。排豆之前不能退出。
+
+### 冷却和总结
+- 冷却页显示风力、降温速度，以及离冷机温度还有多远。
+- **X X** 停风并进入总结。**Enter** 只结束记录、风机继续转；这时总结页会显示"fan still on"，在总结页（以及之后回到的准备页）仍然可以按 **X X** 停风。
+- **W** 填熟豆重量；**N** 添加备注；**Enter** 回到准备页。
+
+总结页显示：总时长、发展比例和失重率，阶段条上的整锅进程，一爆时间和到排豆的升温，一爆时和 30 秒后的 RoR，最大火力和跟随曲线的误差。
+
+### 最低风力保护
+烘豆机自己的最低风力寄存器是 50%。短按 ↓ 会停在 **50%**，再往下会停在 **40%**。要降到某道门槛以下，先停在门槛上，再长按 ↓ 至少 0.6 秒，会降到门槛下一档；之后短按又能继续往下，直到下一道门槛。待机时调开风预设、以及 0.1% 微调，都遵守同样的规则。
+
+### 规则、提醒和自动动作
+**O** 打开规则页，按用途分组。按 Enter 修改：← → 微调，也可以直接输入数字，下方显示允许的范围；窗口和升温这类范围规则，先改下限再改上限。设置保存在 NVS 中。
+
+| 设置 | 默认值 |
+|---|---|
+| 一爆后的发展时间窗口 | 75–85 秒 |
+| 一爆后的升温 | +5 ～ +6 °C |
+| 立即排豆温度 | 206 °C |
+| 安全自动排豆温度 | 225 °C |
+| 曲线结束后多久自动排豆 | 120 秒 |
+| RoR 过低提醒 | 低于 5 |
+| 一爆后火力下降提醒 | 5% |
+| 开风风力 | 53% |
+| 冷机温度 | 40 °C |
+| 曲线温度补偿 | 0 °C |
+
+底栏颜色的含义：进入排豆窗口时变绿；超过发展上限或到达立即排豆温度时变红并持续报警；以下情况变黄：火力在 95% 以上持续 20 秒、一爆后火力下降、在窗口之前就达到升温要求、一爆 30 秒后 RoR 过低。
+
+蓝牙断开时，读数变灰，底栏变红。因为烘豆机会按最后的目标温度继续加热，这个报警在静音状态下也会响；Roast 会自动重连。
+
+Roast 只在两种情况下自动排豆，作为安全兜底：豆温达到安全温度，或曲线结束后超过"曲线结束后多久自动排豆"设定的时间。如果想和手机 App 一样在曲线结束时就排豆，把这个值设为 0。
+
+### 曲线编辑器
+编辑器用表格列出和手机 App 相同的 8 个节点（初始、脱水、一爆始、一爆末、二爆始、二爆末、排豆、总用时），表格右侧显示曲线，并高亮当前节点。
+
+- **空格** 启用或关闭节点。排豆和总用时始终启用。第一次启用的节点，时间放在前后两个已启用节点的正中间。
+- **Enter**（或直接输入数字）编辑这一行：分钟，Enter，秒，Enter，温度，Enter。Tab 可以跳过时间直接改温度。时间必须落在前后两个已启用节点之间，排豆不能晚于总用时，总用时最长 30:00。
+- 灰色的温度表示没改过：这个节点只把曲线钉在原位，不改变曲线形状，和手机 App 一样。按 Backspace 可以把温度恢复为预设值。
+- **S** 保存到 SD 卡的 `roast/curves/`，**N** 重命名，**B** 设置投豆量，**Tab** 预览。
+
+新曲线以手机 App 的深烘预设为起点，曲线形状的计算方式和手机 App 一致（见[与手机 App 的一致性](#与手机-app-的一致性)）。
+
+## SD 卡
+SD 卡需要 FAT32 格式。没有 SD 卡时，记录只保存在内存里，关闭总结页后就没有了。
+
+| 路径 | 内容 |
+|---|---|
+| `roast/curves/*.json` | 曲线（格式见下）。 |
+| `roast/curves/*.alog` | Artisan 或 myERoast 导出的曲线，只读；以 `temp2` 作为目标温度。 |
+| `roast/logs/<编号>.csv` | 每秒一行：`t,bt,target,heat,fan,ror,pid,machine_t`。打点和操作记录在以 `#` 开头的行里。 |
+| `roast/logs/<编号>.json` | 本锅总结。 |
+| `roast/logs/<编号>.alog` | 可导入 Artisan。 |
+
+曲线 JSON：
+```json
+{
+  "name": "Gotiti 200g Light V3",
+  "note": "Drop 75-85 s after FC at +5-6 C, max 206 C",
+  "batch_g": 200,
+  "total_s": 570,
+  "points": [
+    {"t": 0,   "c": 50,  "tag": "CHARGE"},
+    {"t": 285, "c": 150, "tag": "DRY"},
+    {"t": 470, "c": 199, "tag": "FCs"},
+    {"t": 570, "c": 209, "tag": "DROP"}
+  ]
+}
+```
+- `t` 单位是秒，`c` 单位是 °C。
+- 省略 `c` 表示这个时间点沿用预设曲线的温度。
+- 标签有 `CHARGE`、`DRY`、`FCs`、`FCe`、`SCs`、`SCe` 和 `DROP`。
+
+## 协议说明（E-Meter621 BLE）
+- **GATT：** 服务 `FFF0`。
+  - 指令写到 `FFF1`（write-without-response + notify）。
+  - 回复以通知的形式从 `FFF2` 返回（notify + read）；直接读取 `FFF2` 得到的是设备名。
+  - 手机 App 代码里写的是 `FFE0`/`FFE1`，但这个模块实际提供的是 `FFF0`。
+- **帧格式：** Modbus RTU，从站地址 1。读寄存器用 FC03，写寄存器用 FC06，设备回显即表示写入成功。
+- **寄存器**（除特别说明外，数值都放大了 10 倍）：
+
+  | 寄存器 | 含义 |
+  |---|---|
+  | 2 | 烘焙计时（秒） |
+  | 4 | 豆温 |
+  | 9 | PID 目标温度 |
+  | 11 | 火力 % |
+  | 12 | 风力 % |
+  | 13 | `1` = 启动 |
+  | 14 | `2` = 排豆，`1` = 停机 |
+  | 15 | PID 开/关 |
+  | 16 | 风机输出 |
+  | 20 | PID 周期 |
+  | 21–23 | P/I/D |
+  | 28 | 最低风力 |
+  | 29 | 最大火力 |
+
+- **配对：** 这个模块不响应 SMP 配对。ESP-IDF 示例配置里设了 `CONFIG_BT_NIMBLE_SM_LVL=2`，NimBLE 会因此悄悄丢掉未加密连接上的通知。Roast 在连接期间把 `ble_hs_cfg.sm_sec_lvl` 设为 0，断开后恢复。
+- **节奏：** 每秒约读 2.8 帧。指令最多重试 3 次，每次等待回显 2 秒；连续 15 秒没有数据判定为断线。
+
+## 与手机 App 的一致性
+验证方法：在 Node 中运行手机 App 的原版 JavaScript，与本固件的 C++ 实现逐项对比。
+
+| 项目 | 结果 |
+|---|---|
+| 曲线生成 | 预设曲线按总用时截断或延长；初始温度用余弦平滑过渡；每个节点的温度修改，在相邻节点之间线性拉伸曲线。与手机 App 逐秒对比，误差在 0.01 °C 以内。 |
+| RoR | \|当前豆温 − 29 个读数前的豆温\| ÷ 0.5，35 秒后才显示。 |
+| 曲线时间基准 | 使用机器计时（寄存器 2）；与本地计时相差超过 5 秒时改用本地计时。 |
+| 指令 | 启动、无曲线投豆、风力 ±1、排豆、停机、每秒写目标温度，写入的寄存器和值完全相同。 |
+
+有意与手机 App 不同的地方：
+- 有曲线时投豆，会先写入起点目标温度（寄存器 9），再启动 PID。
+- 关闭 PID 时同时写入当前火力（寄存器 11），避免火力跳变。
+- 烘焙中按 P 可以重新打开 PID。
+- 火力调节只在手动模式下发送。
+- 曲线走完不会强制排豆（见"曲线结束后多久自动排豆"）。
+
+未实现：
+- 手机 App 的自动风力（按温度切换风力）；
+- 运行参数写入（寄存器 20–29）。
+
+## 编译
+使用 ESP-IDF **v5.4.2**：
+```sh
+python3 fetch_repos.py        # 把 M5GFX、M5Unified、mooncake 等依赖克隆到 components/
+idf.py build                  # 生成 build/cardputer-roast.bin（Launcher 安装用的 app 镜像）
+```
+CI 在 `espressif/idf:v5.4.2` 容器里执行同样的步骤。推送 `v*` 标签会自动发布 Release，并附上 `.bin`。
+
+### 桌面预览
+不用设备也能检查界面。`tools/preview/` 把 Roast 的真实代码（页面、按键、曲线、记录、模拟器）编译成桌面程序，用替身 HAL 和假时钟跑一锅预设的模拟烘焙，把每个页面导出为 240×135 的 PNG：
+```sh
+export IDF_PATH=~/esp/esp-idf-v5.4.2      # 用到其中的 cJSON
+tools/preview/build.sh && build_preview/preview build_preview/shots
+python3 tools/preview/sheet.py build_preview/shots sheet.png   # 可选：拼成总览图（需要 Pillow）
+```
+CI 会把同样的截图作为 `ui-preview` 附件上传。
+
+### 字体
+界面使用 Space Grotesk 字体（SIL OFL 1.1，见 `tools/fonts/OFL.txt`），以抗锯齿 VLW 格式编译进固件。运行 `python3 tools/fonts/make_vlw.py` 可重新生成 `main/apps/app_roast/fonts/roast_fonts_data.h`（需要 Pillow）。
+
+## USB 串口调试接口
+app 在 USB 串口上监听调试命令，可以用 `tools/rdbg.py` 操作：
+```sh
+python3 tools/rdbg.py quiet key s wait 2 shot prep.png
+python3 tools/rdbg.py raw regs 2
+python3 tools/rdbg.py raw 'ls /sdcard/roast/logs' 2
+```
+支持的操作：
+- 模拟按键、长按和输入文字；
+- 整屏（240×135）截图；
+- `quiet`、`ping`、`regs`；
+- SD 卡列目录（`ls`）、读文件（`cat`）、删除 `/sdcard/roast/` 下的文件（`rm`）、查看卡信息（`sdinfo`）。
+
+## 许可证
+[MIT](LICENSE)。本项目基于 M5Stack 的 [M5Cardputer-UserDemo](https://github.com/m5stack/M5Cardputer-UserDemo)（`CardputerADV` 分支，MIT 许可证），其版权声明保留在 `LICENSE` 中。第三方部分遵循各自的许可证：
+- Space Grotesk 字体：SIL Open Font License 1.1（`tools/fonts/OFL.txt`）；
+- 由 `fetch_repos.py` 拉取的 M5GFX、M5Unified、mooncake、mooncake_log、smooth_ui_toolkit：见各自的仓库；
+- `main/apps/app_roast/preset_dark.h` 中的深烘预设数据，是为了与手机 App 保持一致而复刻的 myERoast 内置预设，不在本项目许可证的覆盖范围内。
+
+app 打包面向 [bmorcelli/Launcher](https://github.com/bmorcelli/Launcher)。

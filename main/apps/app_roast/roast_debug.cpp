@@ -4,6 +4,8 @@
  *   key <name>     inject a key press: a..z 0..9 enter esc tab space bksp up down left right; prefix S- for shift
  *   type <text>    inject printable characters
  *   shot           dump the 240x135 screen canvas: "SHOT w h" + one hex line per row (RGB565, as stored) + "ENDSHOT"
+ *   hold <key> <ms>, quiet, ping, regs
+ *   ls <dir>, cat <file>, rm <file under /sdcard/roast/>, sdinfo, sdformat FORMAT-SD-CARD
  */
 #include "roast_debug.h"
 #include <hal/hal.h>
@@ -244,6 +246,16 @@ void DebugPollMain()
             fclose(f);
         }
         printf("\nCATEND\n");
+        fflush(stdout);
+    } else if (line.rfind("rm ", 0) == 0) {  // delete one file, only inside /sdcard/roast/
+        std::string p = line.substr(3);
+        if (p.rfind("/sdcard/roast/", 0) != 0 || p.find("..") != std::string::npos) {
+            printf("ERR rm: only files under /sdcard/roast/\n");
+        } else if (remove(p.c_str()) == 0) {
+            printf("OK rm %s\n", p.c_str());
+        } else {
+            printf("ERR rm %s\n", p.c_str());
+        }
         fflush(stdout);
     } else if (line == "sdinfo") {
         printf("SDINFO\n%sENDSDINFO\n", GetHAL().sdCardInspect().c_str());

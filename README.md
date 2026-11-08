@@ -1,51 +1,78 @@
 # Cardputer Roast
 
-A roasting controller for the **M5Stack Cardputer ADV** that drives an **E-Roast / E-Meter621 BLE** fluid-bed
-roaster (the machine controlled by the *myERoast* phone app) over Bluetooth LE.
+**English** | [中文](README_zh.md)
 
-It runs as an app under the community [Launcher](https://github.com/bmorcelli/Launcher): Launcher boots it, and
-Esc in Roast goes back to Launcher.
+Cardputer Roast turns an **M5Stack Cardputer ADV** into a pocket controller for the **E-Roast / E-Meter621 BLE**
+fluid-bed coffee roaster (the machine normally driven by the *myERoast* phone app). It talks to the roaster over
+Bluetooth LE, follows a roast curve with the roaster's own PID, and walks you through a roast on the 240×135
+screen: charge, drying, first crack, development, drop, cooling, and a summary that is saved to the SD card and
+opens in Artisan. It runs as an app under the community [Launcher](https://github.com/bmorcelli/Launcher).
 
-Roast uses the whole 240×135 screen. The design follows one rule: **colour = what it controls**. The key chip,
-the value on screen and the chart line of one function always share a colour: fan blue, heat orange, curve/PID
-violet, marks yellow/brown, drop and alarms red, "go" green. The bottom row always shows the keys that work right
-now; it turns into a full-width colour bar only when the roast needs a hand. The top-right corner shows the battery,
-the link (green dot) or a yellow **SIM** tag in simulator mode, a speaker when muted, and a red **SD** tag when no
-card is mounted.
+<p>
+<img src="docs/screenshots/prep.png" width="49%" alt="Prep page">
+<img src="docs/screenshots/roast.png" width="49%" alt="Roasting">
+</p>
 
 > **Safety.** This firmware switches a heater on and off. It is not affiliated with or endorsed by the roaster's
 > maker, and it was written from observed behaviour, not from vendor documentation. Never leave a roast
 > unattended, and keep the machine's own controls within reach.
 
-## Install
+## Features
+- **Curve following.** The roaster's PID follows a target curve, computed exactly as the phone app does
+  (built-in samples, your own curves, or Artisan/myERoast `.alog` files). No curve = heat by hand.
+- **Marks and development window.** Y / F / G mark the end of drying, first crack and its end. A phase bar runs
+  through the whole roast, and after first crack it outlines the drop window (time and temperature rise).
+- **Alerts and safety nets.** Colour bars for the drop window, drop-now temperature, development limit, heater
+  pinned or falling after first crack, low RoR and BLE loss. Automatic drop only at the safety temperature or long
+  after the curve has ended.
+- **Fan control with floors.** Fan ±1 % or ±0.1 %; going below 50 % and 40 % needs a deliberate long press.
+- **Manual heat.** P switches between PID and manual heat at any time; ← → step the heater.
+- **Curve editor.** The phone app's eight nodes (Start, Dry, FC start/end, SC start/end, Drop, Total), edited on
+  the device with a live curve beside the table, saved to the SD card.
+- **Logs.** Every roast is written as `.csv` (1 Hz), `.json` summary and `.alog` for Artisan.
+- **Simulator.** A built-in thermal model for practising without a machine; a yellow SIM tag shows when it is on.
+- **Colour-keyed UI.** Colour = what it controls: fan blue, heat orange, curve/PID violet, marks yellow/brown, drop
+  and alarms red, "go" green. The bottom row always shows the keys that work right now.
 
-1. Install Launcher on the Cardputer ADV, using M5Burner or the
+## Screenshots
+Rendered from the firmware's own drawing code by the desktop preview (`tools/preview`), 2× scale.
+
+| | |
+|---|---|
+| ![Connect](docs/screenshots/connect.png) Connect: scans for `E-Meter…BLE` | ![Prep](docs/screenshots/prep.png) Prep: curve → batch → fan → charge |
+| ![Curves](docs/screenshots/curves.png) Curve library | ![Editor](docs/screenshots/editor.png) Curve editor: nodes and the curve side by side |
+| ![Roasting](docs/screenshots/roast.png) Roasting: Maillard, first crack expected | ![After FC](docs/screenshots/roast-fc.png) After first crack: development window on the phase bar |
+| ![Drop now](docs/screenshots/drop-now.png) Drop-now temperature reached | ![Chart](docs/screenshots/chart.png) Chart: bean, target, RoR, heater |
+| ![Cooling](docs/screenshots/cooling.png) Cooling: progress to the cold temperature | ![Summary](docs/screenshots/summary.png) Summary, saved to SD |
+| ![Rules](docs/screenshots/rules.png) Rules and alerts | ![Keys](docs/screenshots/keys.png) Key map, grouped by colour |
+
+## Install (with Launcher)
+1. **Install Launcher** on the Cardputer ADV, with [M5Burner](https://docs.m5stack.com/en/download) or the
    [Launcher web flasher](https://bmorcelli.github.io/Launcher/).
-2. Download `cardputer-roast-<version>.bin`:
-   - releases are on the Releases page;
-   - every CI run also uploads it as an artifact.
-
-   This file is the bare app image that Launcher installs. It is not a merged full-flash image.
-3. Install it in one of two ways:
-   - **SD card:** copy the file to the SD card. In Launcher, open the SD browser, pick the file and install it.
-   - **USB serial:** stay in the Launcher menu and run:
+2. **Download `cardputer-roast-<version>.bin`** from the [Releases](../../releases) page (every CI run also keeps
+   it as an artifact). It is the bare app image that Launcher installs, not a full-flash image.
+3. **Install it from Launcher**, either way:
+   - **SD card:** copy the `.bin` to the SD card, open Launcher's SD browser, select the file and install it.
+   - **USB serial:** with Launcher in its menu, run
      ```sh
      pip install pyserial
      python3 tools/launcher_flash.py Roast cardputer-roast-<version>.bin
      ```
-4. Optional: to start Roast automatically after power-on, turn on Launcher's boot-to-app setting (CFG menu).
+4. **Optional:** turn on Launcher's boot-to-app setting (CFG) to start Roast at power-on. Esc Esc in Roast then
+   shows Launcher's boot screen for about 5 s and reopens Roast.
 
-   When this setting is on, Esc in Roast shows Launcher's boot screen for about 5 s, then reopens Roast.
+Insert a FAT32 SD card for curves and logs; without one, the last roast stays in memory until you leave the
+summary.
 
 ## Using it
-
 Turn the *myERoast* app off first: the roaster accepts only one BLE connection at a time.
 
 Roast scans for a device named `E-Meter…BLE` and connects on its own. To try it without a machine, press **D** on
-the connect screen, or switch *simulator* on in Rules (**O**). The simulator is a simple thermal model; it can only
-be switched while the machine is not running.
+the connect screen, or switch *simulator* on in Rules (**O**). The simulator can only be switched while the
+machine is not running.
 
-**H** shows the key map on every page, grouped by colour. **M** mutes (alarms still sound).
+**H** shows the key map on every page, grouped by colour. **M** mutes (alarms still sound). The top-right corner
+shows the battery, the link (green dot) or the SIM tag, a speaker when muted, and a red **SD** tag without a card.
 
 ### Prep
 The page walks through four steps: curve → batch → fan → charge.
@@ -69,11 +96,11 @@ The page walks through four steps: curve → batch → fan → charge.
 | Y / F / G | Mark drying end / first crack / end of first crack. Press the same key twice more to clear the mark. |
 | D D or Space Space | Drop. After the first press the bottom row asks for the second. |
 | ↑ ↓ | Fan ±1 % (Aa: ±0.1 %). |
-| P | Manual heat: PID off, heater held at its current output. ← → change it by ±5 % (Aa: ±1 %, hold to repeat). P again returns to the curve. |
+| P | Manual heat: PID off, heater held at its current output. ← → change it by ±5 % (Aa: ±1 %; holding repeats, at most 8 steps per hold). P again returns to the curve. |
 | Tab | Numbers / chart (bean black, target violet, RoR grey, heater orange area). |
 
-The phase bar under the cards runs through the whole roast: drying (sage) → Maillard (yellow, starts at Y) →
-development (brown, starts at F). After first crack it outlines the drop window. Exit is locked until the drop.
+The phase bar runs through the whole roast: drying (sage) → Maillard (yellow, starts at Y) → development (brown,
+starts at F). After first crack it outlines the drop window. Exit is locked until the drop.
 
 ### Cooling and summary
 - Cooling shows the fan, the cooling rate and how far the beans are from the cold temperature.
@@ -86,7 +113,6 @@ and the rise to drop, RoR at first crack and 30 s later, peak heater output and 
 
 ### Fan floors
 The roaster's own minimum fan register reads 50 %. A short press of ↓ stops at **50 %** and again at **40 %**.
-
 To go below a floor, sit on it and hold ↓ for at least 0.6 s. That moves you one step below the floor, and short
 presses then work again down to the next floor. The same rule applies to the idle preset and to the 0.1 % steps.
 
@@ -208,7 +234,7 @@ Deliberate differences:
 - Charging with a curve writes the first target (register 9) before starting the PID.
 - Turning PID off also writes the current heater value (register 11), so the output does not jump.
 - P re-enables PID mid-roast.
-- Heater ±5 is sent only in manual mode.
+- Heater steps are sent only in manual mode.
 - The curve end does not force a drop (see *auto-drop after end*).
 
 Not implemented:
@@ -250,9 +276,15 @@ The console accepts:
 - key presses and holds, and typed text;
 - full-screen (240×135) screenshots;
 - `quiet`, `ping` and `regs`;
-- SD listing, file dump and card info.
+- SD listing (`ls`), file dump (`cat`), file removal under `/sdcard/roast/` (`rm`) and card info (`sdinfo`).
 
-## Credits
-Built on the M5Stack [M5Cardputer-UserDemo](https://github.com/m5stack/M5Cardputer-UserDemo) (`CardputerADV`
-branch, MIT; see `LICENSE`), with M5GFX, M5Unified, mooncake and smooth_ui_toolkit. App packaging targets
-[bmorcelli/Launcher](https://github.com/bmorcelli/Launcher).
+## License
+[MIT](LICENSE). Built on the M5Stack [M5Cardputer-UserDemo](https://github.com/m5stack/M5Cardputer-UserDemo)
+(`CardputerADV` branch, MIT), whose notice is kept in `LICENSE`. Third-party parts keep their own licenses:
+- Space Grotesk font: SIL Open Font License 1.1 (`tools/fonts/OFL.txt`);
+- M5GFX, M5Unified, mooncake, mooncake_log and smooth_ui_toolkit, fetched by `fetch_repos.py`: see their
+  repositories;
+- the dark-roast preset table in `main/apps/app_roast/preset_dark.h` reproduces the myERoast app's built-in preset
+  for compatibility and is not covered by this project's license.
+
+App packaging targets [bmorcelli/Launcher](https://github.com/bmorcelli/Launcher).
