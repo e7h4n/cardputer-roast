@@ -36,21 +36,11 @@ public:
 
     /* --------------------------------- Display -------------------------------- */
     M5GFX& display                = M5.Display;
-    LGFX_Sprite canvas            = LGFX_Sprite(&M5.Display);
-    LGFX_Sprite canvasSystemBar   = LGFX_Sprite(&M5.Display);
-    LGFX_Sprite canvasKeyboardBar = LGFX_Sprite(&M5.Display);
+    LGFX_Sprite canvas            = LGFX_Sprite(&M5.Display);  // the whole 240x135 screen
 
-    inline void pushCanvasSystemBar()
-    {
-        canvasSystemBar.pushSprite(canvasKeyboardBar.width(), 0);
-    }
-    inline void pushCanvasKeyboardBar()
-    {
-        canvasKeyboardBar.pushSprite(0, 0);
-    }
     inline void pushCanvas()
     {
-        canvas.pushSprite(canvasKeyboardBar.width(), canvasSystemBar.height());
+        canvas.pushSprite(0, 0);
     }
 
     /* ---------------------------------- Audio --------------------------------- */

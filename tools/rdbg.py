@@ -4,7 +4,7 @@ usage: rdbg.py <cmd> [<cmd> ...]
   key <name>        press a key (a..z 0..9 enter esc tab space bksp up down left right; S-<name> = with Aa)
   hold <key> <ms>   hold a key down for <ms> milliseconds
   type <text>       type characters
-  shot <file>       save the app area (204x109) as PNG
+  shot <file>       save the screen (240x135) as PNG
   quiet             silence all beeps until the next reboot
   ping              print the device's PONG line (uptime, free heap)
   raw <line> <sec>  send a console line and print the output for <sec> seconds, e.g.

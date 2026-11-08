@@ -6,6 +6,9 @@ roaster (the machine controlled by the *myERoast* phone app) over Bluetooth LE.
 It runs as an app under the community [Launcher](https://github.com/bmorcelli/Launcher): Launcher boots it, and
 Esc in Roast goes back to Launcher.
 
+Roast uses the whole 240×135 screen; there is no system bar. The top-right corner shows the battery level, plus
+a yellow **SIM** tag whenever the built-in simulator is active instead of the roaster.
+
 > **Safety.** This firmware switches a heater on and off. It is not affiliated with or endorsed by the roaster's
 > maker, and it was written from observed behaviour, not from vendor documentation. Never leave a roast
 > unattended, and keep the machine's own controls within reach.
@@ -234,7 +237,7 @@ python3 tools/rdbg.py raw 'ls /sdcard/roast/logs' 2
 ```
 The console accepts:
 - key presses and holds, and typed text;
-- screenshots of the 204×109 app area;
+- full-screen (240×135) screenshots;
 - `quiet`, `ping` and `regs`;
 - SD listing, file dump and card info.
 

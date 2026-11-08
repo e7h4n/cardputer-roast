@@ -2,7 +2,6 @@ file(GLOB_RECURSE MY_SRCS
     "./hal/*.c"
     "./hal/*.cc"
     "./hal/*.cpp"
-    "./apps/app_launcher/*.cpp"
     "./apps/app_roast/*.cpp"
     "./apps/utils/*.c"
     "./apps/utils/*.cpp"

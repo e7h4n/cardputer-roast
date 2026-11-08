@@ -3,8 +3,6 @@
  * Rendering lives in app_roast_ui.cpp.
  */
 #include "app_roast.h"
-#include "assets/roast_big.h"
-#include "assets/roast_small.h"
 #include "roast_debug.h"
 #include <apps/utils/audio/audio.h>
 #include <apps/utils/common.h>
@@ -64,14 +62,10 @@ void RoastRules::save() const
 /* ---------------------------------- app ---------------------------------- */
 AppRoast::AppRoast()
 {
-    setAppInfo().name     = "Roast";
-    setAppInfo().userData = new AppIcon_t(image_data_roast_big, image_data_roast_small);
+    setAppInfo().name = "Roast";
 }
 
-AppRoast::~AppRoast()
-{
-    delete static_cast<AppIcon_t*>(getAppInfo().userData);
-}
+AppRoast::~AppRoast() {}
 
 void AppRoast::onOpen()
 {
@@ -170,6 +164,11 @@ void AppRoast::onRunning()
     }
 
     uint32_t now = GetHAL().millis();
+    if (_batMs == 0 || now - _batMs > 5000) {
+        int b   = M5.Power.getBatteryLevel();
+        _batPct = (b >= 0 && b <= 100) ? b : -1;
+        _batMs  = now;
+    }
     if (_dirty || now - _lastRender > 250) {
         render();
         _lastRender = now;

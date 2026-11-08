@@ -7,7 +7,6 @@
 #include <M5Unified.hpp>
 #include <mooncake_log.h>
 #include <mooncake.h>
-#include <apps/app_launcher/app_launcher.h>
 #include <apps/app_roast/app_roast.h>
 #include <apps/utils/audio/audio.h>
 #include <hal.h>
@@ -29,13 +28,10 @@ extern "C" void app_main(void)
     ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });
     ui_hal::on_get_tick([]() { return GetHAL().millis(); });
 
-    // Roast-only firmware for the community Launcher: boot straight into Roast.
-    // The mooncake "Launcher" here is only the system/keyboard bar shell.
-    auto launcher         = std::make_unique<Launcher>();
-    Launcher* launcherPtr = launcher.get();
-    GetMooncake().installApp(std::move(launcher));
+    // Roast-only firmware for the community Launcher: Roast owns the whole screen.
+    GetHAL().display.setBrightness(255);
     int roastId = GetMooncake().installApp(std::make_unique<AppRoast>());
-    launcherPtr->openAppDirect(roastId);
+    GetMooncake().openApp(roastId);
 
     // Main loop
     audio::set_keyboard_sfx_enable(true);

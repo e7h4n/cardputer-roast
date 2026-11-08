@@ -3,7 +3,7 @@
  * Active only while the app is open. Line commands on the USB Serial/JTAG port:
  *   key <name>     inject a key press: a..z 0..9 enter esc tab space bksp up down left right; prefix S- for shift
  *   type <text>    inject printable characters
- *   shot           dump the 204x109 canvas: "SHOT w h" + one hex line per row (RGB565, as stored) + "ENDSHOT"
+ *   shot           dump the 240x135 screen canvas: "SHOT w h" + one hex line per row (RGB565, as stored) + "ENDSHOT"
  */
 #include "roast_debug.h"
 #include <hal/hal.h>

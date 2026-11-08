@@ -70,9 +70,8 @@ void Hal::display_init()
 {
     mclog::tagInfo(_tag, "display init");
 
-    canvas.createSprite(204, 109);
-    canvasKeyboardBar.createSprite(display.width() - canvas.width(), display.height());
-    canvasSystemBar.createSprite(canvas.width(), display.height() - canvas.height());
+    // One full-screen canvas (240x135 RGB565, ~64 KB). Allocate it here, before BLE fragments the heap.
+    if (!canvas.createSprite(display.width(), display.height())) mclog::tagError(_tag, "canvas alloc failed");
 }
 
 /* -------------------------------------------------------------------------- */

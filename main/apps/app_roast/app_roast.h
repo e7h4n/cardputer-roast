@@ -102,6 +102,8 @@ private:
     std::string _toast;
     uint32_t _toastUntil = 0;
     uint32_t _toastColor = 0xFFFFFF;
+    int _batPct          = -1;  // 0..100, -1 = unknown
+    uint32_t _batMs      = 0;
     int _pendingKey      = 0;
     uint32_t _pendingUntil = 0;
     Input _input;
@@ -193,5 +195,6 @@ private:
     void renderInput();
     void renderBanner();
     void renderToast();
+    void renderStatus();
     bool bannerText(std::string& text, uint32_t& bg, uint32_t& fg);
 };
