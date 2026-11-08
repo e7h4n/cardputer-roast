@@ -238,7 +238,8 @@ python3 tools/rdbg.py raw 'ls /sdcard/roast/logs' 2
 ## 许可证
 [MIT](LICENSE)。本项目基于 M5Stack 的 [M5Cardputer-UserDemo](https://github.com/m5stack/M5Cardputer-UserDemo)（`CardputerADV` 分支，MIT 许可证），其版权声明保留在 `LICENSE` 中。第三方部分遵循各自的许可证：
 - Space Grotesk 字体：SIL Open Font License 1.1（`tools/fonts/OFL.txt`）；
-- 由 `fetch_repos.py` 拉取的 M5GFX、M5Unified、mooncake、mooncake_log、smooth_ui_toolkit：见各自的仓库；
-- `main/apps/app_roast/preset_dark.h` 中的深烘预设数据，是为了与手机 App 保持一致而复刻的 myERoast 内置预设，不在本项目许可证的覆盖范围内。
+- 由 `fetch_repos.py` 拉取的 M5GFX、M5Unified、mooncake、mooncake_log、smooth_ui_toolkit：见各自的仓库。
+
+本仓库的其余内容，包括 `main/apps/app_roast/preset_dark.h` 中的深烘预设数据，均以 MIT 许可证发布。
 
 app 打包面向 [bmorcelli/Launcher](https://github.com/bmorcelli/Launcher)。

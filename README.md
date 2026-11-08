@@ -283,8 +283,9 @@ The console accepts:
 (`CardputerADV` branch, MIT), whose notice is kept in `LICENSE`. Third-party parts keep their own licenses:
 - Space Grotesk font: SIL Open Font License 1.1 (`tools/fonts/OFL.txt`);
 - M5GFX, M5Unified, mooncake, mooncake_log and smooth_ui_toolkit, fetched by `fetch_repos.py`: see their
-  repositories;
-- the dark-roast preset table in `main/apps/app_roast/preset_dark.h` reproduces the myERoast app's built-in preset
-  for compatibility and is not covered by this project's license.
+  repositories.
+
+Everything else in this repository, including the dark-roast preset table in
+`main/apps/app_roast/preset_dark.h`, is released under the MIT license.
 
 App packaging targets [bmorcelli/Launcher](https://github.com/bmorcelli/Launcher).
