@@ -1,0 +1,183 @@
+/*
+ * SPDX-FileCopyrightText: 2025 M5Stack Technology CO LTD
+ *
+ * SPDX-License-Identifier: MIT
+ */
+#pragma once
+#include "keyboard/keyboard.h"
+#include "cap_lora868/cap_lora868.h"
+#include "utils/settings/settings.h"
+#include <M5Unified.hpp>
+#include <M5GFX.h>
+#include <memory>
+#include <atomic>
+#include <cstdint>
+#include <string>
+#include <vector>
+#include <sys/time.h>
+
+class Hal {
+public:
+    void init();
+    void update();
+
+    /* --------------------------------- System --------------------------------- */
+    void delay(std::uint32_t ms)
+    {
+        m5gfx::delay(ms);
+    }
+    std::uint32_t millis()
+    {
+        return m5gfx::millis();
+    }
+    void feedTheDog();
+    std::vector<uint8_t> getDeviceMac();
+    std::string getDeviceMacString();
+
+    /* --------------------------------- Display -------------------------------- */
+    M5GFX& display                = M5.Display;
+    LGFX_Sprite canvas            = LGFX_Sprite(&M5.Display);
+    LGFX_Sprite canvasSystemBar   = LGFX_Sprite(&M5.Display);
+    LGFX_Sprite canvasKeyboardBar = LGFX_Sprite(&M5.Display);
+
+    inline void pushCanvasSystemBar()
+    {
+        canvasSystemBar.pushSprite(canvasKeyboardBar.width(), 0);
+    }
+    inline void pushCanvasKeyboardBar()
+    {
+        canvasKeyboardBar.pushSprite(0, 0);
+    }
+    inline void pushCanvas()
+    {
+        canvas.pushSprite(canvasKeyboardBar.width(), canvasSystemBar.height());
+    }
+
+    /* ---------------------------------- Audio --------------------------------- */
+    m5::Speaker_Class& speaker = M5.Speaker;
+    m5::Mic_Class& mic         = M5.Mic;
+
+    /* ---------------------------------- Input --------------------------------- */
+    m5::Button_Class& homeButton = M5.BtnA;
+    Keyboard keyboard;
+
+    /* ---------------------------------- Power --------------------------------- */
+    inline uint8_t getBatLevel()
+    {
+        return M5.Power.getBatteryLevel();
+    }
+
+    /* ---------------------------------- WiFi ---------------------------------- */
+    using ScanResult_t = std::pair<int, std::string>;
+    void wifiInit();
+    void wifiDeinit();
+    void wifiScan(std::vector<ScanResult_t>& scanResult);
+    bool wifiConnect(const std::string& ssid, const std::string& password);
+    bool isWifiConnected() const
+    {
+        return _is_wifi_connected;
+    }
+    void wifiDisconnect();
+
+    /* ---------------------------------- Time ---------------------------------- */
+    bool isTimeSynced() const
+    {
+        // Keep the notification latched: the SNTP status getter clears COMPLETED.
+        return _is_time_synced.load();
+    }
+
+    /* --------------------------------- EspNow --------------------------------- */
+    void espNowInit();
+    void espNowDeinit();
+    void espNowSend(const std::string& data);
+    bool espNowAvailable();
+    const std::string& espNowGetReceivedData();
+    void espNowClearReceivedData();
+
+    /* ----------------------------------- IR ----------------------------------- */
+    void irInit();
+    void irSend(uint8_t addr, uint8_t cmd);
+
+    /* ----------------------------------- BLE ---------------------------------- */
+    void bleKeyboardInit();
+    bool bleKeyboardIsConnected() const;
+    bool bleKeyboardInited() const
+    {
+        return _is_ble_keyboard_inited;
+    }
+    // The Roast app runs its own NimBLE central; the BLE keyboard must not start while it owns the radio.
+    void setRoastBleActive(bool active)
+    {
+        _roast_ble_active = active;
+    }
+
+    /* ----------------------------------- USB ---------------------------------- */
+    void usbKeyboardInit();
+    bool usbKeyboardIsConnected() const;
+
+    /* -------------------------------- Settings -------------------------------- */
+    Settings& getSettings()
+    {
+        return *_settings;
+    }
+
+    /* ----------------------------------- IMU ---------------------------------- */
+    m5::IMU_Class& imu = M5.Imu;
+
+    /* --------------------------------- SD Card -------------------------------- */
+    struct SdCardProbeResult_t {
+        bool is_mounted = false;
+        std::string size;
+        std::string type;
+        std::string name;
+
+        bool operator==(const SdCardProbeResult_t& other) const
+        {
+            return is_mounted == other.is_mounted && size == other.size && type == other.type && name == other.name;
+        }
+    };
+
+    SdCardProbeResult_t sdCardProbe();
+    // Read-only description of the inserted card (filesystem type, size, root entries).
+    std::string sdCardInspect();
+    // Erase the card and create a single FAT32 partition (32 KB clusters), then mount it.
+    bool sdCardFormat(std::string& msg);
+    // Mount the card if needed, without writing a probe file.
+    bool sdCardMount()
+    {
+        if (!_is_sd_card_mounted) sd_card_init();
+        return _is_sd_card_mounted;
+    }
+
+    /* ----------------------------------- Cap ---------------------------------- */
+    CapLoRa868 capLora868;
+
+private:
+    std::atomic<bool> _is_time_synced{false};
+    Settings* _settings             = nullptr;
+    bool _is_wifi_inited            = false;
+    bool _is_wifi_connected         = false;
+    bool _is_esp_now_inited         = false;
+    bool _is_ir_inited              = false;
+    bool _is_ble_keyboard_inited    = false;
+    bool _roast_ble_active          = false;
+    bool _is_usb_keyboard_inited    = false;
+    bool _is_sd_card_mounted        = false;
+    int _ble_keyboard_event_slot_id = -1;
+    int _usb_keyboard_event_slot_id = -1;
+    std::unique_ptr<CapLoRa868> _cap_lora868;
+
+    void display_init();
+    void i2c_scan();
+    void keyboard_init();
+    void start_sntp();
+    void stop_sntp();
+    static void time_sync_notification_cb(struct timeval* tv);
+    void setting_init();
+    void spi_init();
+    void sd_card_init();
+    void handle_ble_keyboard_event(const Keyboard::KeyEvent_t& keyEvent);
+    void handle_usb_keyboard_event(const Keyboard::KeyEvent_t& keyEvent);
+};
+
+Hal& GetHAL();
