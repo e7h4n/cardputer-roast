@@ -380,10 +380,14 @@ void AppRoast::renderChart(int x, int y, int w, int h, bool withText)
     if (withText) {
         if (_session.active() && _phase != Phase::Idle) {
             std::string a = fmt1(_snap.has(4) ? _snap.bt() : _session.lastBT()) + "°  " + FormatMmSs(roastT());
+            std::string r = "RoR " + fmt1(_session.rorNow());
+            cv().fillRect(x, y, textW(a) + 12 + textW(r) + 6, 14, C_PANEL);  // keep mark lines off the readout
             text(x + 2, y + 1, a, C_BT);
-            text(x + 2 + textW(a) + 12, y + 1, "RoR " + fmt1(_session.rorNow()), C_ROR);
+            text(x + 2 + textW(a) + 12, y + 1, r, C_ROR);
         } else if (_hasCurve) {
-            text(x + 2, y + 1, clipTo(_curve.name, topLimit() - 4), C_TGT);
+            std::string n = clipTo(_curve.name, topLimit() - 4);
+            cv().fillRect(x, y, textW(n) + 6, 14, C_PANEL);
+            text(x + 2, y + 1, n, C_TGT);
         }
     }
 }
