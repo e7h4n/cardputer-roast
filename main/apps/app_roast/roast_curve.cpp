@@ -11,7 +11,10 @@
 
 namespace roast {
 
-static const char* kCurveDir = "/sdcard/roast/curves";
+#ifndef ROAST_SD_ROOT
+#define ROAST_SD_ROOT "/sdcard"
+#endif
+static const char* kCurveDir = ROAST_SD_ROOT "/roast/curves";
 
 const char* TagName(PointTag tag)
 {
@@ -541,7 +544,7 @@ static std::string safe_filename(const std::string& name)
 bool SaveCurveJson(Curve& c, std::string* err)
 {
     if (!EnsureDir(kCurveDir)) {
-        if (err) *err = "Cannot create /sdcard/roast/curves";
+        if (err) *err = std::string("Cannot create ") + kCurveDir;
         return false;
     }
     if (c.path.empty() || c.builtin || c.readOnly) {

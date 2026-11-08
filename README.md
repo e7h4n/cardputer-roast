@@ -6,8 +6,12 @@ roaster (the machine controlled by the *myERoast* phone app) over Bluetooth LE.
 It runs as an app under the community [Launcher](https://github.com/bmorcelli/Launcher): Launcher boots it, and
 Esc in Roast goes back to Launcher.
 
-Roast uses the whole 240×135 screen; there is no system bar. The top-right corner shows the battery level, plus
-a yellow **SIM** tag whenever the built-in simulator is active instead of the roaster.
+Roast uses the whole 240×135 screen. The design follows one rule: **colour = what it controls**. The key chip,
+the value on screen and the chart line of one function always share a colour: fan blue, heat orange, curve/PID
+violet, marks yellow/brown, drop and alarms red, "go" green. The bottom row always shows the keys that work right
+now; it turns into a full-width colour bar only when the roast needs a hand. The top-right corner shows the battery,
+the link (green dot) or a yellow **SIM** tag in simulator mode, a speaker when muted, and a red **SD** tag when no
+card is mounted.
 
 > **Safety.** This firmware switches a heater on and off. It is not affiliated with or endorsed by the roaster's
 > maker, and it was written from observed behaviour, not from vendor documentation. Never leave a roast
@@ -37,48 +41,48 @@ a yellow **SIM** tag whenever the built-in simulator is active instead of the ro
 
 Turn the *myERoast* app off first: the roaster accepts only one BLE connection at a time.
 
-Roast scans for a device named `E-Meter…BLE` and connects on its own. To try it without a machine, use the
-built-in simulator (a simple thermal model): press **D** on the connect screen, or **D D** in prep. **R** goes back
-to the real roaster.
+Roast scans for a device named `E-Meter…BLE` and connects on its own. To try it without a machine, press **D** on
+the connect screen, or switch *simulator* on in Rules (**O**). The simulator is a simple thermal model; it can only
+be switched while the machine is not running.
+
+**H** shows the key map on every page, grouped by colour. **M** mutes (alarms still sound).
 
 ### Prep
+The page walks through four steps: curve → batch → fan → charge.
+
 | Key | Action |
 |---|---|
+| C | Curve library. "No curve" (heat by hand) is the first entry; Enter uses, E edits, N starts a new curve. |
+| E | Edit the selected curve (or start a new one). |
+| W / B | Batch sheet: green weight and bean name in one place (Tab switches field). |
+| O | Rules, alerts and simulator. |
 | S | Fan on, no heat. Use it to find a fan setting with cold air before adding beans. |
-| ↑ ↓ (`;` `.`) | Fan ±1 % (with Aa held: ±0.1 %). While idle, this changes only the start-fan preset. |
-| Enter | Charge: starts the timer and the roaster's PID, which follows the curve. |
-| C / E | Pick a curve / edit a curve. |
-| W / B | Green weight (g) / bean name. |
-| O / H | Rules and alerts / help. |
-| Tab | Curve chart. |
-| M | Mute. |
+| ↑ ↓ (`;` `.`) | Fan ±1 % (Aa held: ±0.1 %). While idle this changes only the start-fan preset. |
+| Enter | Charge: starts the timer and the roaster's PID, which follows the curve. Needs the fan on. |
 | X X | Stop the fan. |
-| Esc | Back to Launcher. Blocked while the fan is running. |
+| Tab | Curve preview. |
+| Esc Esc | Back to Launcher. Blocked while the fan is running. |
 
 ### Roasting
 | Key | Action |
 |---|---|
 | Y / F / G | Mark drying end / first crack / end of first crack. Press the same key twice more to clear the mark. |
-| D D or Space Space | Drop. |
-| ↑ ↓ | Fan ±1 %. |
-| P | Manual heat: PID off, heater held at its current output. ← → then change it by ±5 %. P again returns to the curve. |
-| Tab | Toggle the numbers view and the chart. |
+| D D or Space Space | Drop. After the first press the bottom row asks for the second. |
+| ↑ ↓ | Fan ±1 % (Aa: ±0.1 %). |
+| P | Manual heat: PID off, heater held at its current output. ← → change it by ±5 % (Aa: ±1 %, hold to repeat). P again returns to the curve. |
+| Tab | Numbers / chart (bean black, target violet, RoR grey, heater orange area). |
 
-Exit is locked until the beans are dropped.
+The phase bar under the cards runs through the whole roast: drying (sage) → Maillard (yellow, starts at Y) →
+development (brown, starts at F). After first crack it outlines the drop window. Exit is locked until the drop.
 
 ### Cooling and summary
-- **X X** stops the machine. The screen tells you once the bean temperature (BT) is below the cold temperature.
-- **W** sets the roasted weight, and the summary then shows weight loss.
-- **N** adds a note.
-- **Enter** goes back to prep.
+- Cooling shows the fan, the cooling rate and how far the beans are from the cold temperature.
+- **X X** stops the fan and opens the summary. **Enter** finishes the log and leaves the fan running; the summary
+  then says "fan still on" and **X X** still stops it there (and on Prep afterwards).
+- **W** sets the roasted weight; **N** adds a note; **Enter** goes back to Prep.
 
-The summary shows:
-- drying, first-crack and drop times and temperatures;
-- development time and percentage;
-- temperature rise from first crack to drop;
-- RoR at first crack and 30 s later;
-- peak heater output;
-- curve-following error.
+The summary shows total time, development percentage and weight loss, the whole roast on the phase bar, first crack
+and the rise to drop, RoR at first crack and 30 s later, peak heater output and curve-following error.
 
 ### Fan floors
 The roaster's own minimum fan register reads 50 %. A short press of ↓ stops at **50 %** and again at **40 %**.
@@ -86,8 +90,9 @@ The roaster's own minimum fan register reads 50 %. A short press of ↓ stops at
 To go below a floor, sit on it and hold ↓ for at least 0.6 s. That moves you one step below the floor, and short
 presses then work again down to the next floor. The same rule applies to the idle preset and to the 0.1 % steps.
 
-### Alerts and automatic actions
-Rules can be changed with **O** in prep and are stored in NVS.
+### Rules, alerts and automatic actions
+**O** opens the rules, grouped by purpose. Enter edits a value: ← → step it, digits type it, the allowed range is
+shown underneath, and range rules (window, rise) take the lower then the upper end. Values are stored in NVS.
 
 | Setting | Default |
 |---|---|
@@ -97,42 +102,33 @@ Rules can be changed with **O** in prep and are stored in NVS.
 | Safety auto-drop temperature | 225 °C |
 | Auto-drop after the curve ends | 120 s |
 | Low-RoR alert | below 5 |
-| Cold temperature | 40 °C |
-| Start fan | 53 % |
 | Heat-drop-after-FC alert | 5 % |
+| Start fan | 53 % |
+| Cold temperature | 40 °C |
 | Curve offset | 0 °C |
 
-The drop banner works like this:
-- It turns green inside the drop window.
-- It turns red, and keeps beeping, past the development limit or at the drop-now temperature.
+The bottom bar turns green inside the drop window, red (and keeps beeping) past the development limit or at the
+drop-now temperature, and yellow for a heater pinned at 95 % or more for 20 s, heater output falling after first
+crack, a rise reached before the window, or low RoR 30 s after first crack.
 
-There are separate alerts for:
-- a heater pinned at 95 % or more for 20 s;
-- heater output falling after first crack;
-- low RoR 30 s after first crack;
-- loss of the BLE link.
-
-The BLE-loss alarm sounds even when muted, because the roaster keeps heating to the last target. Roast then
-reconnects on its own.
+On BLE loss the reading greys out and the bar turns red. The alarm sounds even when muted, because the roaster
+keeps heating to the last target. Roast then reconnects on its own.
 
 Roast drops by itself in only two cases, as safety nets: BT at or above the safety temperature, or the curve
 having ended more than *auto-drop after end* seconds ago. Set that value to 0 to match the phone app, which drops
 when the curve ends.
 
 ### Curve editor
-The editor has the same eight nodes as the phone app:
+The editor shows the same eight nodes as the phone app (Start, Dry, FC start, FC end, SC start, SC end, Drop,
+Total) as a table, with the curve next to it and the selected node highlighted.
 
-> Start, Dry, FC start, FC end, SC start, SC end, Drop, Total
-
-Each row has three columns: enabled, time and temperature.
-- **Enabled:** Enter or Space toggles a node. Drop and Total are always on. A node that is switched on for the
-  first time starts halfway between its enabled neighbours.
-- **Time:** type minutes, press Enter, type seconds, press Enter. A time must lie between the enabled neighbours,
-  Drop must not be later than Total, and Total is at most 30:00.
-- **Temperature:** type a value and press Enter. A grey value has not been edited: that node only pins the curve
-  and does not reshape it, as in the phone app. Backspace returns a value to the preset.
-- **Other keys:** S saves to `roast/curves/` on the SD card, N renames the curve, B sets the batch size, and Tab
-  previews the curve.
+- **Space** toggles a node. Drop and Total are always on. A node switched on for the first time starts halfway
+  between its enabled neighbours.
+- **Enter** (or a digit) edits the row: minutes, Enter, seconds, Enter, temperature, Enter. Tab skips the time.
+  A time must lie between the enabled neighbours, Drop must not be later than Total, and Total is at most 30:00.
+- A grey temperature has not been edited: that node only pins the curve and does not reshape it, as in the phone
+  app. Backspace returns a temperature to the preset.
+- **S** saves to `roast/curves/` on the SD card, **N** renames, **B** sets the batch size, **Tab** previews.
 
 New curves start from the phone app's dark-roast preset, and the curve shape is computed the same way the phone
 app computes it (see [Parity](#parity-with-the-phone-app)).
@@ -227,6 +223,21 @@ idf.py build                  # -> build/cardputer-roast.bin (the Launcher app i
 ```
 CI does the same in the `espressif/idf:v5.4.2` container. Pushing a `v*` tag publishes a release with the `.bin`
 attached.
+
+### Desktop preview
+The UI can be checked without the device. `tools/preview/` compiles the real Roast code (pages, keys, curves,
+logs and the simulator) against a stand-in HAL and a fake clock, plays a scripted roast and writes every page as
+a 240×135 PNG:
+```sh
+export IDF_PATH=~/esp/esp-idf-v5.4.2      # for cJSON
+tools/preview/build.sh && build_preview/preview build_preview/shots
+python3 tools/preview/sheet.py build_preview/shots sheet.png   # optional contact sheet (Pillow)
+```
+CI uploads the same screenshots as the `ui-preview` artifact.
+
+### Fonts
+The UI uses Space Grotesk (SIL OFL 1.1, `tools/fonts/OFL.txt`) as anti-aliased VLW fonts compiled into the
+firmware. `python3 tools/fonts/make_vlw.py` regenerates `main/apps/app_roast/fonts/roast_fonts_data.h` (Pillow).
 
 ## USB serial debug console
 The app listens on the USB serial port. `tools/rdbg.py` drives it:

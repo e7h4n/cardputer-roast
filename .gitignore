@@ -6,3 +6,4 @@ sdkconfig.old
 dist/
 __pycache__/
 .DS_Store
+build_preview/

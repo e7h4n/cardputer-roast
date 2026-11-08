@@ -39,6 +39,19 @@ jobs:
           cat dist/SHA256SUMS
           echo "ver=${ver}" >> "$GITHUB_OUTPUT"
 
+      - name: UI preview (desktop build of the real UI code)
+        shell: bash
+        run: |
+          command -v g++ >/dev/null || (apt-get update -qq && apt-get install -y -qq g++ >/dev/null)
+          tools/preview/build.sh
+          build_preview/preview build_preview/shots
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ui-preview-${{ steps.pkg.outputs.ver }}
+          path: build_preview/shots/
+          if-no-files-found: error
+
       - uses: actions/upload-artifact@v7
         with:
           name: cardputer-roast-${{ steps.pkg.outputs.ver }}

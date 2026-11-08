@@ -10,7 +10,10 @@
 
 namespace roast {
 
-static const char* kLogDir = "/sdcard/roast/logs";
+#ifndef ROAST_SD_ROOT
+#define ROAST_SD_ROOT "/sdcard"
+#endif
+static const char* kLogDir = ROAST_SD_ROOT "/roast/logs";
 static const size_t kMaxSamples = 1200;  // 20 minutes at 1 Hz
 
 const char* MarkName(Mark m)

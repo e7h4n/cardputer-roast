@@ -5,8 +5,6 @@
 #include "app_roast.h"
 #include "roast_debug.h"
 #include <apps/utils/audio/audio.h>
-#include <apps/utils/common.h>
-#include <apps/utils/theme.h>
 #include <hal/utils/settings/settings.h>
 #include <mooncake_log.h>
 #include <esp_system.h>
@@ -19,6 +17,7 @@
 
 using namespace mooncake;
 using namespace roast;
+using namespace roast::ui;
 
 static const char* TAG = "Roast";
 
@@ -70,7 +69,7 @@ AppRoast::~AppRoast() {}
 void AppRoast::onOpen()
 {
     mclog::tagInfo(TAG, "on open");
-    GetHAL().canvas.setBaseColor(THEME_COLOR_BG);
+    GetHAL().canvas.setBaseColor(ui::BG);
     GetHAL().canvas.setTextScroll(false);
 
     _rules.load();
@@ -92,10 +91,14 @@ void AppRoast::onOpen()
     _keySlot  = GetHAL().keyboard.onKeyEvent.connect([this](const Keyboard::KeyEvent_t& e) {
         if (e.isModifier) return;
         if (e.state) {
+            if (e.keyCode != KEY_COMMA && e.keyCode != KEY_LEFT && e.keyCode != KEY_SLASH && e.keyCode != KEY_RIGHT)
+                _heatHeld = 0;  // any other key ends a heater repeat
             _keys.push_back(e);
         } else if (e.keyCode == KEY_DOT || e.keyCode == KEY_DOWN) {
             _downHeld  = false;
             _barrierAt = -1;
+        } else if (e.keyCode == KEY_COMMA || e.keyCode == KEY_LEFT || e.keyCode == KEY_SLASH || e.keyCode == KEY_RIGHT) {
+            _heatHeld = 0;
         }
     });
     _blockedByKeyboardApp = GetHAL().bleKeyboardInited();
@@ -123,7 +126,7 @@ void AppRoast::onClose()
     _keys.clear();
     // Back to the community Launcher. Its bootloader starts the Launcher only after a power-on or a deep-sleep
     // wake-up (a plain esp_restart() boots this app again), so take a 0.2 s deep-sleep nap.
-    GetHAL().display.fillScreen(TFT_BLACK);
+    GetHAL().display.fillScreen(0);
     GetHAL().delay(100);
     esp_sleep_enable_timer_wakeup(200 * 1000);
     esp_deep_sleep_start();
@@ -139,7 +142,7 @@ void AppRoast::startLink(bool sim)
     GetHAL().setRoastBleActive(!sim);
     _link.reset(sim ? CreateSimLink() : CreateBleLink());
     g_activeLink = _link.get();
-    if (!_link->begin()) toast("BLE init failed", 0xFF5252);
+    if (!_link->begin()) toast("BLE init failed", ui::DROP);
     _linkState = _link->state();
 }
 
@@ -148,13 +151,26 @@ void AppRoast::onRunning()
     pollLink();
     handleKeys();
     pollFanBarrier();
+    // ←/→ held in manual mode: repeat the heater step every 150 ms after 450 ms. A hold repeats at most 8 times,
+    // so a lost key-release event can never run the heater up on its own.
+    if (_heatHeld && _manual && _phase == Phase::Roasting) {
+        uint32_t now = GetHAL().millis();
+        if (now - _heatHeldMs > 450 && now - _heatRepMs > 150) {
+            adjustHeat(_heatHeld * (_heatHeldShift ? 1.0f : 5.0f));
+            _heatRepMs = now;
+            _dirty     = true;
+            if (++_heatReps >= 8) _heatHeld = 0;
+        }
+    } else {
+        _heatHeld = 0;
+    }
     pumpBeep();
     if (_phase == Phase::Roasting || _phase == Phase::Cooling) tickRoast();
 
     // Leaving the app is only allowed when the machine is not heating.
     if (GetHAL().homeButton.wasClicked()) {
         if (_phase == Phase::Roasting) {
-            toast("Roasting: drop before exit", 0xFF5252);
+            toast("Roasting: drop before exit", ui::DROP);
             beep(Tone::Warn);
         } else {
             audio::play_random_tone();
@@ -185,10 +201,10 @@ void AppRoast::pollLink()
     if (_linkState != _prevLinkState) {
         if (_linkState == LinkState::Ready) {
             if (_screen == Screen::Connect) _screen = Screen::Prep;
-            if (_prevLinkState == LinkState::Lost) toast("Reconnected", 0x99FF00);
+            if (_prevLinkState == LinkState::Lost) toast("Reconnected", ui::GO);
             beep(Tone::Good);
         } else if (_linkState == LinkState::Lost) {
-            toast("BLE lost, reconnecting", 0xFF5252);
+            toast("BLE lost, reconnecting", ui::DROP);
         }
         _prevLinkState = _linkState;
         _dirty         = true;
@@ -242,26 +258,27 @@ void AppRoast::selectCurve(int idx)
 void AppRoast::startFan()
 {
     if (!linkReady()) {
-        toast("Roaster not connected", 0xFF5252);
+        toast("Roaster not connected", ui::DROP);
         return;
     }
     uint16_t fan = (uint16_t)lroundf(_rules.startFan * 10);
     _link->command({{12, fan}, {13, 1}});
-    _fanSet   = _rules.startFan;
-    _fanSetMs = GetHAL().millis();
-    _phase    = Phase::FanOn;
-    toast("Fan on (no heat): add beans", 0x99FF00, 3500);
+    _fanSet     = _rules.startFan;
+    _fanSetMs   = GetHAL().millis();
+    _phase      = Phase::FanOn;
+    _fanRunning = true;
+    toast("Fan on (no heat): add beans", ui::GO, 3500);
     beep(Tone::Info);
 }
 
 void AppRoast::charge()
 {
     if (!linkReady()) {
-        toast("Roaster not connected", 0xFF5252);
+        toast("Roaster not connected", ui::DROP);
         return;
     }
     if (_phase != Phase::FanOn) {
-        toast("Press S (fan) before charging", 0xFFD54F);
+        toast("Press S (fan) before charging", ui::WARN);
         return;
     }
     if (_snap.has(4) && _snap.bt() >= _rules.coldBT &&
@@ -297,7 +314,7 @@ void AppRoast::charge()
     }
     _phase  = Phase::Roasting;
     _screen = Screen::Roast;
-    toast(_hasCurve ? "Charged: PID follows curve" : "Charged: manual heat (←→)", 0x99FF00);
+    toast(_hasCurve ? "Charged: PID follows curve" : "Charged: manual heat (←→)", ui::GO);
     beep(Tone::Good);
 }
 
@@ -320,7 +337,8 @@ void AppRoast::stopMachine()
 {
     if (_link && linkReady()) _link->command({{14, 1}, {15, 0}});
     if (_session.active()) _session.addAction(roastT(), "stop");
-    _phase = Phase::Done;
+    _fanRunning = false;
+    _phase      = Phase::Done;
 }
 
 void AppRoast::adjustFan(float delta)
@@ -331,7 +349,7 @@ void AppRoast::adjustFan(float delta)
         char b[48];
         snprintf(b, sizeof(b), "Start fan preset %.1f%%", nv);
         _rules.startFan = nv;
-        toast(b, 0x4FC3F7, 1200);
+        toast(b, ui::FAN, 1200);
         return;
     }
     if (!linkReady()) return;
@@ -341,12 +359,12 @@ void AppRoast::adjustFan(float delta)
     nv       = std::max(0.0f, std::min(100.0f, nv));
     _link->command({{12, (uint16_t)lroundf(nv * 10)}});
     char b[48];
-    snprintf(b, sizeof(b), "fan %.1f->%.1f%%", base, nv);
+    snprintf(b, sizeof(b), "fan %.1f→%.1f%%", base, nv);
     if (_phase == Phase::Roasting || _phase == Phase::Cooling) _session.addAction(roastT(), b);
     if (_phase == Phase::FanOn || _phase == Phase::Idle) _rules.startFan = nv;
     _fanSet   = nv;
     _fanSetMs = GetHAL().millis();
-    toast(b, 0x4FC3F7, 1200);
+    toast(b, ui::FAN, 1200);
 }
 
 // ↓ with a floor at 50 % and 40 %: a short press stops at the floor, a long press (≥0.6 s) at the floor crosses it.
@@ -364,7 +382,7 @@ void AppRoast::fanDown(float step)
             _barrierStep = step;
             char b[48];
             snprintf(b, sizeof(b), "%.0f%% floor: hold ↓ to go lower", f);
-            toast(b, 0xFFD54F, 1500);
+            toast(b, ui::WARN, 1500);
             return;
         }
         if (cur > f && cur - step < f) {  // a short press never crosses a floor
@@ -384,7 +402,7 @@ void AppRoast::pollFanBarrier()
     adjustFan(-_barrierStep);  // crosses the floor by one step
     char b[48];
     snprintf(b, sizeof(b), "Below the %.0f%% floor", f);
-    toast(b, 0xFF9A3C, 1500);
+    toast(b, ui::HEAT, 1500);
     beep(Tone::Warn);
 }
 
@@ -392,23 +410,23 @@ void AppRoast::adjustHeat(float delta)
 {
     if (!linkReady() || _phase != Phase::Roasting) return;
     if (!_manual) {
-        toast("PID on curve: P for manual heat", 0xFFD54F);
+        toast("PID on curve: P for manual heat", ui::WARN);
         return;
     }
     float nv = std::max(0.0f, std::min(100.0f, _heatSet + delta));
     _link->command({{11, (uint16_t)lroundf(nv * 10)}});
     char b[40];
-    snprintf(b, sizeof(b), "heat %.0f->%.0f%%", _heatSet, nv);
+    snprintf(b, sizeof(b), "heat %.0f→%.0f%%", _heatSet, nv);
     _session.addAction(roastT(), b);
     _heatSet = nv;
-    toast(b, 0xFF9A3C, 1200);
+    toast(b, ui::HEAT, 1200);
 }
 
 void AppRoast::toggleManual()
 {
     if (!linkReady() || _phase != Phase::Roasting) return;
     if (!_hasCurve) {
-        toast("No curve: heat is manual", 0xFFD54F);
+        toast("No curve: heat is manual", ui::WARN);
         return;
     }
     int t = roastT();
@@ -420,13 +438,13 @@ void AppRoast::toggleManual()
         char b[48];
         snprintf(b, sizeof(b), "manual heat %.0f%%", _heatSet);
         _session.addAction(t, b);
-        toast(std::string(b) + "  ←→ adjust", 0xFF9A3C, 3000);
+        toast(std::string(b) + "  ←→ adjust", ui::HEAT, 3000);
     } else {
         uint16_t tgt = (uint16_t)lroundf(curveTargetAt(t) * 10);
         _link->command({{9, tgt}, {15, 1}});
         _manual = false;
         _session.addAction(t, "PID on curve");
-        toast("PID on curve", 0x99FF00);
+        toast("PID on curve", ui::GO);
     }
     beep(Tone::Info);
 }
@@ -439,18 +457,18 @@ void AppRoast::toggleMark(Mark m)
     if (_session.markT(m) >= 0) {
         if (!confirm(2000 + (int)m, std::string("Again to clear ") + MarkName(m))) return;
         _session.clearMark(m);
-        toast(std::string("Cleared ") + MarkName(m), 0xFFD54F);
+        toast(std::string("Cleared ") + MarkName(m), ui::WARN);
         if (m == Mark::FCs) _heatDropWarned = _rorWarned = _windowBeeped = false;
         return;
     }
     _session.setMark(m, t, bt);
     char b[48];
-    snprintf(b, sizeof(b), "%s %s %.1f°C", MarkName(m), FormatMmSs(t).c_str(), bt);
-    toast(b, 0x99FF00);
+    snprintf(b, sizeof(b), "%s %s · %.1f°", MarkName(m), FormatMmSs(t).c_str(), bt);
+    toast(b, m == Mark::Dry ? ui::DRY : (m == Mark::FCs ? ui::FC : ui::FCE));
     beep(Tone::Info);
 }
 
-bool AppRoast::confirm(int key, const std::string& msg)
+bool AppRoast::confirm(int key, const std::string& msg, bool quiet)
 {
     uint32_t now = GetHAL().millis();
     if (_pendingKey == key && now < _pendingUntil) {
@@ -459,7 +477,7 @@ bool AppRoast::confirm(int key, const std::string& msg)
     }
     _pendingKey   = key;
     _pendingUntil = now + 2000;
-    toast(msg, 0xFFD54F, 2000);
+    if (!quiet) toast(msg, ui::WARN, 2000);
     beep(Tone::Key);
     return false;
 }
@@ -586,7 +604,7 @@ void AppRoast::finishRoast()
 {
     _session.end();
     _chargeMs = 0;
-    _phase    = Phase::Idle;
+    _phase    = _fanRunning ? Phase::FanOn : Phase::Idle;
     _screen   = Screen::Prep;
     _manual   = false;
     _view     = 0;
@@ -632,19 +650,21 @@ void AppRoast::onKey(const Keyboard::KeyEvent_t& e)
         keyInput(e, e.keyCode);
         return;
     }
-    if (_screen == Screen::Editor) {
-        keyEditor(e, norm_code(e));
+    if (_batch.active) {
+        keyBatch(e);
         return;
     }
     int code = norm_code(e);
-    if (code == KEY_M && _screen != Screen::Curves) {
-        _muted = !_muted;
-        toast(_muted ? "Muted (BLE alarm stays on)" : "Sound on");
-        return;
-    }
-    if (code == KEY_H && _screen != Screen::Help && _screen != Screen::Connect) {
+    // typing a value in the editor or the rules list: every key belongs to that field
+    bool typing = (_screen == Screen::Editor && _edStage != 0) || (_screen == Screen::Settings && _setEditing);
+    if (!typing && code == KEY_H && _screen != Screen::Help) {
         _backScreen = _screen;
         _screen     = Screen::Help;
+        return;
+    }
+    if (!typing && code == KEY_M) {
+        _muted = !_muted;
+        toast(_muted ? "Muted (alarms still sound)" : "Sound on", FAINT);
         return;
     }
     switch (_screen) {
@@ -666,13 +686,14 @@ void AppRoast::onKey(const Keyboard::KeyEvent_t& e)
         case Screen::Curves:
             keyCurves(code);
             break;
+        case Screen::Editor:
+            keyEditor(e, code);
+            break;
         case Screen::Settings:
-            keySettings(code);
+            keySettings(e, code);
             break;
         case Screen::Help:
             if (code == KEY_ESC || code == KEY_ENTER || code == KEY_H) _screen = _backScreen;
-            break;
-        default:
             break;
     }
 }
@@ -680,13 +701,12 @@ void AppRoast::onKey(const Keyboard::KeyEvent_t& e)
 bool AppRoast::keyConnect(int code)
 {
     if (code == KEY_D) {
-        startLink(true);
-        toast("Simulator: no roaster", 0xFFD54F, 3000);
+        setSimulator(true);
         return true;
     }
     if (code == KEY_ENTER || code == KEY_R) {
         if (_blockedByKeyboardApp) {
-            toast("BLE busy: restart the device", 0xFF5252, 3000);
+            toast("BLE busy: restart the device", DROP, 3000);
             return true;
         }
         startLink(false);
@@ -699,12 +719,78 @@ bool AppRoast::keyConnect(int code)
     return false;
 }
 
+// Simulator on/off. Only from Connect and Rules, and never while the machine runs: on the Prep page D D used to
+// mean "simulator" while during a roast it means "drop", one gesture with two meanings.
+void AppRoast::setSimulator(bool on)
+{
+    if (_fanRunning || _phase != Phase::Idle) {
+        toast("Stop the machine first", WARN, 2500);
+        return;
+    }
+    if (on) {
+        startLink(true);
+        if (_screen == Screen::Connect) _screen = Screen::Prep;
+        toast("Simulator: no roaster", SIM, 3000);
+    } else {
+        if (_blockedByKeyboardApp) {
+            toast("BLE busy: restart the device", DROP, 3000);
+            return;
+        }
+        startLink(false);
+        _screen = Screen::Connect;
+    }
+}
+
+void AppRoast::openBatch(int field)
+{
+    _batch.active = true;
+    _batch.field  = field;
+    _batch.weight = _rules.greenG > 0 ? std::to_string((int)lroundf(_rules.greenG)) : "";
+    _batch.bean   = _bean;
+}
+
+void AppRoast::keyBatch(const Keyboard::KeyEvent_t& e)
+{
+    int code = e.keyCode;
+    if (code == KEY_ESC || (code == KEY_GRAVE && _batch.field == 0)) {
+        _batch.active = false;
+        return;
+    }
+    if (code == KEY_TAB || code == KEY_UP || code == KEY_DOWN) {
+        _batch.field ^= 1;
+        return;
+    }
+    if (code == KEY_ENTER) {
+        float g = strtof(_batch.weight.c_str(), nullptr);
+        if (g > 0 && g < 2000) _rules.greenG = g;
+        _bean         = _batch.bean;
+        _batch.active = false;
+        _rules.save();
+        Settings s("roast", true);
+        s.SetString("bean", _bean);
+        toast("Batch " + std::to_string((int)lroundf(_rules.greenG)) + " g" + (_bean.empty() ? "" : " · " + _bean), INK);
+        return;
+    }
+    std::string& buf = _batch.field == 0 ? _batch.weight : _batch.bean;
+    if (code == KEY_BACKSPACE) {
+        if (!buf.empty()) buf.pop_back();
+        return;
+    }
+    if (!e.keyName || strlen(e.keyName) != 1 || buf.size() >= 24) return;
+    char c = e.keyName[0];
+    if (_batch.field == 0) {
+        if (isdigit((unsigned char)c) || c == '.') buf += c;
+    } else if (c >= 32 && c < 127) {
+        buf += c;
+    }
+}
+
 bool AppRoast::keyPrep(int code, bool shift)
 {
     switch (code) {
         case KEY_S:
             if (_phase == Phase::FanOn) {
-                toast("Fan on: Enter charge, XX stop", 0xFFD54F);
+                toast("Fan is on: Enter to charge", FAN);
             } else {
                 startFan();
             }
@@ -713,10 +799,10 @@ bool AppRoast::keyPrep(int code, bool shift)
             charge();
             return true;
         case KEY_X:
-            if (_phase == Phase::FanOn && confirm(KEY_X, "X again to stop the fan")) {
+            if (_fanRunning && confirm(KEY_X, "", true)) {
                 stopMachine();
                 _phase = Phase::Idle;
-                toast("Stopped");
+                toast("Fan stopped", INK);
             }
             return true;
         case KEY_UP:
@@ -725,14 +811,15 @@ bool AppRoast::keyPrep(int code, bool shift)
         case KEY_DOWN:
             fanDown(shift ? 0.1f : 1.0f);
             return true;
-        case KEY_C:
+        case KEY_C: {
             reloadCurves();
             _listSel = 0;
             for (size_t i = 0; i < _curves.size(); i++)
-                if (_hasCurve && _curves[i].name == _curve.name) _listSel = (int)i;
-            _listTop = std::max(0, _listSel - 2);
+                if (_hasCurve && _curves[i].name == _curve.name) _listSel = (int)i + 1;
+            _listTop = std::max(0, std::min(_listSel - 1, (int)_curves.size() + 1 - 3));
             _screen  = Screen::Curves;
             return true;
+        }
         case KEY_E:
             if (!_hasCurve) {  // new curve = the phone app's dark-roast preset marks, nothing edited yet
                 _curve        = Curve();
@@ -745,48 +832,34 @@ bool AppRoast::keyPrep(int code, bool shift)
                 _hasCurve = true;
             }
             if (_curve.readOnly) {
-                toast(".alog curves are read-only", 0xFFD54F);
+                toast(".alog curves are read-only", WARN);
                 return true;
             }
             edLoad();
+            _view   = 0;
             _screen = Screen::Editor;
             return true;
         case KEY_W:
-            openInput("Green weight g", "", true, "e.g. 200", [this](const std::string& v) {
-                float g = strtof(v.c_str(), nullptr);
-                if (g > 0 && g < 2000) _rules.greenG = g;
-            });
+            openBatch(0);
             return true;
         case KEY_B:
-            openInput("Bean name", _bean, false, "Stored in the log", [this](const std::string& v) { _bean = v; });
+            openBatch(1);
             return true;
         case KEY_O:
-            _setSel = 0;
-            _screen = Screen::Settings;
+            _setSel     = 0;
+            _setEditing = false;
+            _screen     = Screen::Settings;
             return true;
         case KEY_TAB:
-            _view ^= 1;
-            return true;
-        case KEY_D:  // practise without the machine
-            if (_phase == Phase::Idle && _link && !_link->isSimulated() && confirm(KEY_D, "D again: use simulator")) {
-                startLink(true);
-                toast("Simulator: no roaster", 0xFFD54F, 3000);
-            }
-            return true;
-        case KEY_R:
-            if (_phase == Phase::Idle && _link && _link->isSimulated()) {
-                if (_blockedByKeyboardApp) {
-                    toast("BLE busy: restart the device", 0xFF5252, 3000);
-                } else {
-                    startLink(false);
-                    _screen = Screen::Connect;
-                }
-            }
+            if (_hasCurve)
+                _view ^= 1;
+            else
+                toast("No curve to preview", FAINT);
             return true;
         case KEY_ESC:
             if (_phase == Phase::FanOn) {
-                toast("Fan is on: XX to stop it first", 0xFFD54F, 3000);
-            } else {
+                toast("Fan is on: X X to stop it first", WARN, 3000);
+            } else if (confirm(KEY_ESC, "Esc again to exit")) {
                 close();
             }
             return true;
@@ -809,7 +882,7 @@ bool AppRoast::keyRoast(int code, bool shift)
             return true;
         case KEY_D:
         case KEY_SPACE:
-            if (confirm(KEY_D, "Again to DROP")) drop("");
+            if (confirm(KEY_D, "", true)) drop("");
             return true;
         case KEY_UP:
             adjustFan(shift ? 0.1f : 1.0f);
@@ -818,16 +891,23 @@ bool AppRoast::keyRoast(int code, bool shift)
             fanDown(shift ? 0.1f : 1.0f);
             return true;
         case KEY_LEFT:
-            adjustHeat(-5);
+        case KEY_RIGHT: {
+            int dir = code == KEY_LEFT ? -1 : 1;
+            adjustHeat(dir * (shift ? 1.0f : 5.0f));
+            _heatHeld      = dir;
+            _heatHeldShift = shift;
+            _heatReps      = 0;
+            _heatHeldMs = _heatRepMs = GetHAL().millis();
             return true;
-        case KEY_RIGHT:
-            adjustHeat(5);
-            return true;
+        }
         case KEY_P:
             toggleManual();
             return true;
         case KEY_TAB:
             _view ^= 1;
+            return true;
+        case KEY_ESC:
+            toast("Roasting: drop before exit", WARN);
             return true;
         default:
             return false;
@@ -836,24 +916,25 @@ bool AppRoast::keyRoast(int code, bool shift)
 
 bool AppRoast::keyCool(int code)
 {
+    bool shift = g_debugShift || (GetHAL().keyboard.getModifierMask() & KEY_MOD_LSHIFT);
     switch (code) {
         case KEY_X:
-            if (confirm(KEY_X, "X again to stop")) {
+            if (confirm(KEY_X, "", true)) {
                 stopMachine();
                 enterSummary();
             }
             return true;
-        case KEY_ENTER:
-            if (confirm(KEY_ENTER, "Fan on: Enter again ends log")) enterSummary();
+        case KEY_ENTER:  // finish the log; the fan keeps running and can still be stopped from the summary
+            enterSummary();
             return true;
         case KEY_UP:
-            adjustFan(1.0f);
+            adjustFan(shift ? 0.1f : 1.0f);
             return true;
         case KEY_DOWN:
-            fanDown(1.0f);
+            fanDown(shift ? 0.1f : 1.0f);
             return true;
         case KEY_W:
-            openInput("Roasted weight g", "", true, "Can be entered later", [this](const std::string& v) {
+            openInput("Roasted weight", "", true, "grams, can also be entered later", [this](const std::string& v) {
                 float g = strtof(v.c_str(), nullptr);
                 if (g > 0) _session.setRoastedWeight(g);
             });
@@ -869,8 +950,15 @@ bool AppRoast::keyCool(int code)
 bool AppRoast::keySummary(int code)
 {
     switch (code) {
+        case KEY_X:
+            if (_fanRunning && confirm(KEY_X, "", true)) {
+                stopMachine();
+                _phase = Phase::Done;
+                toast("Fan stopped", INK);
+            }
+            return true;
         case KEY_W:
-            openInput("Roasted weight g", "", true, "", [this](const std::string& v) {
+            openInput("Roasted weight", "", true, "grams", [this](const std::string& v) {
                 float g = strtof(v.c_str(), nullptr);
                 if (g > 0) {
                     _session.setRoastedWeight(g);
@@ -880,7 +968,7 @@ bool AppRoast::keySummary(int code)
             });
             return true;
         case KEY_N:
-            openInput("Note", "", false, "Stored in the log", [this](const std::string& v) {
+            openInput("Note", "", false, "stored in the log", [this](const std::string& v) {
                 _session.setNote(v);
                 std::string err;
                 _saveMsg = _session.finalize(&err) ? "Updated: roast/logs/" + _session.logId() : err;
@@ -900,7 +988,7 @@ bool AppRoast::keySummary(int code)
 
 bool AppRoast::keyCurves(int code)
 {
-    int n = (int)_curves.size();
+    int n = (int)_curves.size() + 1;  // row 0 = "No curve"
     switch (code) {
         case KEY_UP:
             if (_listSel > 0) _listSel--;
@@ -909,24 +997,46 @@ bool AppRoast::keyCurves(int code)
             if (_listSel < n - 1) _listSel++;
             break;
         case KEY_ENTER:
-            selectCurve(_listSel);
-            toast("Curve: " + _curve.name, 0x99FF00);
-            _screen = Screen::Prep;
-            return true;
-        case KEY_N:  // no curve: manual heater
-            _hasCurve = false;
-            _curve    = Curve();
-            toast("No curve: manual heat", 0xFFD54F);
+            if (_listSel == 0) {
+                _hasCurve = false;
+                _noCurve  = true;
+                _curve    = Curve();
+                toast("No curve: heat by hand", HEAT);
+            } else {
+                selectCurve(_listSel - 1);
+                _noCurve = false;
+                toast("Curve: " + _curve.name, CURVE);
+            }
+            _view   = 0;
             _screen = Screen::Prep;
             return true;
         case KEY_E:
-            if (n > 0 && !_curves[_listSel].readOnly) {
-                selectCurve(_listSel);
-                edLoad();
-                _screen = Screen::Editor;
+            if (_listSel == 0) {
+                toast("Nothing to edit: N for a new curve", FAINT);
+            } else if (_curves[_listSel - 1].readOnly) {
+                toast(".alog curves are read-only", WARN);
             } else {
-                toast(".alog curves are read-only", 0xFFD54F);
+                selectCurve(_listSel - 1);
+                _noCurve = false;
+                edLoad();
+                _view   = 0;
+                _screen = Screen::Editor;
             }
+            return true;
+        case KEY_N:  // new curve from the phone app's dark-roast preset
+            _curve        = Curve();
+            _curve.name   = "new";
+            _curve.totalT = 880;
+            _curve.pts    = {{301, NAN, PointTag::Dry}, {480, NAN, PointTag::FCs}, {556, NAN, PointTag::FCe},
+                             {644, NAN, PointTag::SCs}, {880, NAN, PointTag::Drop}};
+            _curve.offset = _rules.curveOffset;
+            _curve.build();
+            _hasCurve = true;
+            _noCurve  = false;
+            edLoad();
+            _edDirty = true;
+            _view    = 0;
+            _screen  = Screen::Editor;
             return true;
         case KEY_ESC:
             _screen = Screen::Prep;
@@ -935,7 +1045,7 @@ bool AppRoast::keyCurves(int code)
             return false;
     }
     if (_listSel < _listTop) _listTop = _listSel;
-    if (_listSel > _listTop + 3) _listTop = _listSel - 3;
+    if (_listSel > _listTop + 2) _listTop = _listSel - 2;
     return true;
 }
 
@@ -1025,7 +1135,11 @@ bool AppRoast::keyEditor(const Keyboard::KeyEvent_t& e, int code)
     };
     char d;
     EdRow& r = _ed[_edRow];
-    // ---- editing a value ----
+    if (_view == 1) {  // preview: Tab/Esc back to the table, S still saves
+        if (code == KEY_TAB || code == KEY_ESC) _view = 0;
+        if (code != KEY_S) return true;
+    }
+    // ---- typing a value: minutes -> seconds -> temperature
     if (_edStage != 0) {
         if (code == KEY_ESC) {
             _edStage = 0;
@@ -1043,64 +1157,100 @@ bool AppRoast::keyEditor(const Keyboard::KeyEvent_t& e, int code)
             if (_edBuf.size() < (_edStage == 3 ? 5u : 2u)) _edBuf += d;
             return true;
         }
-        if (code == KEY_ENTER || code == KEY_RIGHT || code == KEY_TAB) {
-            if (_edStage == 1) {  // minutes done -> seconds
-                _edMin   = _edBuf.empty() ? std::to_string(r.t / 60) : _edBuf;
-                _edBuf   = "";
-                _edStage = 2;
+        if (code != KEY_ENTER && code != KEY_RIGHT && code != KEY_TAB) return true;
+        if (_edStage == 1) {
+            if (code == KEY_TAB && _edRow != 7) {  // keep the time, go straight to the temperature
+                _edStage = 3;
+                _edBuf.clear();
                 return true;
             }
-            if (_edStage == 2) {
-                int m = atoi(_edMin.c_str());
-                int sec = _edBuf.empty() ? r.t % 60 : atoi(_edBuf.c_str());
+            _edMin   = _edBuf.empty() ? std::to_string(std::max(0, r.t) / 60) : _edBuf;
+            _edBuf.clear();
+            _edStage = 2;
+            return true;
+        }
+        if (_edStage == 2) {
+            int m   = atoi(_edMin.c_str());
+            int sec = _edBuf.empty() ? std::max(0, r.t) % 60 : atoi(_edBuf.c_str());
+            if (sec > 59) {
+                toast("Seconds must be 0-59", DROP);
                 _edStage = 0;
-                if (sec > 59) {
-                    toast("Seconds must be 0-59", 0xFF5252);
-                    return true;
-                }
-                int t = m * 60 + sec;
+                return true;
+            }
+            int t = m * 60 + sec;
+            if (t != r.t) {
                 std::string why;
                 if (!edCheckTime(_edRow, t, why)) {
-                    toast(why, 0xFF5252, 2500);
+                    toast(why, DROP, 2500);
+                    _edStage = 0;
                     return true;
                 }
                 r.t = t;
                 if (_edRow == 6 && _ed[7].t < t) _ed[7].t = t;
                 edApply();
-                if (_edRow != 7) _edCol = 2;  // then the temperature
-                return true;
             }
-            if (_edStage == 3) {
+            if (_edRow == 7) {
                 _edStage = 0;
-                if (_edBuf.empty()) return true;
-                float c = strtof(_edBuf.c_str(), nullptr);
-                if (c < 0 || c > 300) {
-                    toast("Temperature 0-300°C", 0xFF5252);
-                    return true;
-                }
-                r.c = std::round(c * 10) / 10.0f;
-                edApply();
+            } else {
+                _edStage = 3;
+                _edBuf.clear();
+            }
+            return true;
+        }
+        if (_edStage == 3) {
+            _edStage = 0;
+            if (_edBuf.empty()) return true;
+            float c = strtof(_edBuf.c_str(), nullptr);
+            if (c < 0 || c > 300) {
+                toast("Temperature 0-300°C", DROP);
                 return true;
             }
+            r.c = std::round(c * 10) / 10.0f;
+            edApply();
         }
         return true;
     }
-    // ---- browsing ----
-    auto startTime = [&](const std::string& first) {
-        if (_edRow == 0 || !r.on) return;
-        _edStage = 1;
+    // ---- browsing
+    auto toggle = [&]() -> bool {  // returns true when the node is (now) on
+        if (_edRow == 6 || _edRow == 7) {
+            toast("Drop and Total are always on", WARN);
+            return true;
+        }
+        if (!r.on && _edRow > 0 && r.t < 0) {  // first enable: middle of the free gap
+            int lo = 0, hi = _ed[7].t;
+            for (int i = _edRow - 1; i >= 1; i--)
+                if (_ed[i].on) {
+                    lo = _ed[i].t;
+                    break;
+                }
+            for (int i = _edRow + 1; i <= 6; i++)
+                if (_ed[i].on) {
+                    hi = _ed[i].t;
+                    break;
+                }
+            r.t = (lo + hi) / 2;
+        }
+        if (!r.on && _edRow > 0) {
+            std::string why;
+            if (!edCheckTime(_edRow, r.t, why)) {
+                toast(std::string("Fix the time: ") + why, DROP, 2500);
+                r.on     = true;  // enable so the time can be fixed right away
+                _edStage = 1;
+                _edBuf.clear();
+                return true;
+            }
+        }
+        if (_edRow == 0 && !r.on && std::isnan(r.c)) r.c = _curve.at(0);
+        r.on = !r.on;
+        edApply();
+        return r.on;
+    };
+    auto startEdit = [&](const std::string& first) {
+        if (!r.on && !toggle()) return;
+        if (_edStage != 0) return;  // toggle() already opened the time field
+        _edStage = _edRow == 0 ? 3 : 1;
         _edBuf   = first;
     };
-    auto startTemp = [&](const std::string& first) {
-        if (_edRow == 7 || !r.on) return;
-        _edStage = 3;
-        _edBuf   = first;
-    };
-    if (digit(d)) {
-        if (_edCol == 1) startTime(std::string(1, d));
-        if (_edCol == 2) startTemp(std::string(1, d));
-        return true;
-    }
     switch (code) {
         case KEY_UP:
             if (_edRow > 0) _edRow--;
@@ -1108,57 +1258,17 @@ bool AppRoast::keyEditor(const Keyboard::KeyEvent_t& e, int code)
         case KEY_DOWN:
             if (_edRow < kEdRows - 1) _edRow++;
             break;
-        case KEY_LEFT:
-            if (_edCol > 0) _edCol--;
-            break;
-        case KEY_RIGHT:
-            if (_edCol < 2) _edCol++;
-            break;
         case KEY_SPACE:
+            toggle();
+            break;
         case KEY_ENTER:
-            if (_edCol == 0 || code == KEY_SPACE) {
-                if (_edRow == 6 || _edRow == 7) {
-                    toast("Drop and Total are always on", 0xFFD54F);
-                    break;
-                }
-                if (!r.on && _edRow > 0 && r.t < 0) {  // first enable: middle of the free gap
-                    int lo = 0, hi = _ed[7].t;
-                    for (int i = _edRow - 1; i >= 1; i--)
-                        if (_ed[i].on) {
-                            lo = _ed[i].t;
-                            break;
-                        }
-                    for (int i = _edRow + 1; i <= 6; i++)
-                        if (_ed[i].on) {
-                            hi = _ed[i].t;
-                            break;
-                        }
-                    r.t = (lo + hi) / 2;
-                }
-                if (!r.on && _edRow > 0) {
-                    std::string why;
-                    if (!edCheckTime(_edRow, r.t, why)) {
-                        toast(std::string("Fix the time: ") + why, 0xFF5252, 2500);
-                        r.on = true;  // enable so the time can be fixed right away
-                        _edCol = 1;
-                        startTime("");
-                        break;
-                    }
-                }
-                if (_edRow == 0 && !r.on && std::isnan(r.c)) r.c = _curve.at(0);
-                r.on = !r.on;
-                edApply();
-            } else if (_edCol == 1) {
-                startTime("");
-            } else {
-                startTemp("");
-            }
+            startEdit("");
             break;
         case KEY_BACKSPACE:  // temperature back to "not edited" (follows the preset)
-            if (_edCol == 2 && r.on && _edRow > 0 && _edRow < 7) {
+            if (r.on && _edRow > 0 && _edRow < 7) {
                 r.c = NAN;
                 edApply();
-                toast("Temperature follows the preset", 0x4FC3F7);
+                toast("Temperature follows the preset", CURVE);
             }
             break;
         case KEY_N:
@@ -1171,16 +1281,18 @@ bool AppRoast::keyEditor(const Keyboard::KeyEvent_t& e, int code)
             });
             break;
         case KEY_B:
-            openInput("Batch size g", std::to_string(_curve.batchG), true, "", [this](const std::string& v) {
-                _curve.batchG = atoi(v.c_str());
-                _edDirty      = true;
-            });
+            openInput("Batch size", std::to_string(_curve.batchG), true, "grams this curve is made for",
+                      [this](const std::string& v) {
+                          _curve.batchG = atoi(v.c_str());
+                          _edDirty      = true;
+                      });
             break;
         case KEY_S: {
             if (!_sdOk) _sdOk = GetHAL().sdCardMount();
             if (!_sdOk) {
-                toast("No SD: curve kept until reboot", 0xFFD54F, 3000);
+                toast("No SD: curve kept until reboot", WARN, 3000);
                 _hasCurve = _curve.valid();
+                _view     = 0;
                 _screen   = Screen::Prep;
                 break;
             }
@@ -1191,15 +1303,17 @@ bool AppRoast::keyEditor(const Keyboard::KeyEvent_t& e, int code)
                 for (size_t i = 0; i < _curves.size(); i++)
                     if (_curves[i].path == _curve.path) selectCurve((int)i);
                 _edDirty = false;
-                toast("Saved and selected", 0x99FF00);
+                _noCurve = false;
+                toast("Saved and selected", GO);
+                _view   = 0;
                 _screen = Screen::Prep;
             } else {
-                toast(err, 0xFF5252, 3000);
+                toast(err, DROP, 3000);
             }
             break;
         }
         case KEY_TAB:
-            _view ^= 1;
+            _view = 1;
             break;
         case KEY_ESC:
             if (_edDirty && !confirm(KEY_ESC, "Unsaved: Esc again to use as is")) break;
@@ -1208,64 +1322,161 @@ bool AppRoast::keyEditor(const Keyboard::KeyEvent_t& e, int code)
             _view     = 0;
             break;
         default:
+            if (digit(d)) startEdit(std::string(1, d));
             break;
     }
     return true;
 }
 
-bool AppRoast::keySettings(int code)
+std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
 {
-    struct Item {
-        const char* name;
-        float* f;
-        int* i;
-        float lo, hi;
+    std::vector<RuleRow> v;
+    auto group = [&](const char* g, uint32_t c) {
+        RuleRow r;
+        r.group      = g;
+        r.groupColor = c;
+        v.push_back(r);
     };
-    Item items[] = {
-        {"Dev min (s)", nullptr, &_rules.devMin, 20, 300},     {"Dev max (s)", nullptr, &_rules.devMax, 20, 400},
-        {"FC rise min °C", &_rules.dtMin, nullptr, 0, 30},    {"FC rise max °C", &_rules.dtMax, nullptr, 0, 30},
-        {"Drop-now temp", &_rules.maxDropBT, nullptr, 150, 250}, {"Safety drop temp", &_rules.safetyBT, nullptr, 150, 260},
-        {"Auto-drop after end s", nullptr, &_rules.afterEnd, 0, 900}, {"RoR low alert", &_rules.rorLow, nullptr, 0, 30},
-        {"Cold temp", &_rules.coldBT, nullptr, 20, 80},        {"Start fan %", &_rules.startFan, nullptr, 20, 100},
-        {"FC heat-drop alert %", &_rules.heatDrop, nullptr, 1, 50},
-        {"Curve offset °C", &_rules.curveOffset, nullptr, -30, 30},
+    auto rowF = [&](const char* l, float* a, float* b, float lo, float hi, float step, const char* unit) {
+        RuleRow r;
+        r.label = l;
+        r.f[0]  = a;
+        r.f[1]  = b;
+        r.lo    = lo;
+        r.hi    = hi;
+        r.step  = step;
+        r.unit  = unit;
+        v.push_back(r);
     };
-    int n = sizeof(items) / sizeof(items[0]);
-    switch (code) {
-        case KEY_UP:
-            if (_setSel > 0) _setSel--;
-            return true;
-        case KEY_DOWN:
-            if (_setSel < n - 1) _setSel++;
-            return true;
-        case KEY_ENTER: {
-            Item it = items[_setSel];
-            char b[16];
-            if (it.f)
-                snprintf(b, sizeof(b), "%.1f", *it.f);
-            else
-                snprintf(b, sizeof(b), "%d", *it.i);
-            openInput(it.name, b, true, "", [this, it](const std::string& v) {
-                float x = strtof(v.c_str(), nullptr);
-                if (x < it.lo || x > it.hi) {
-                    toast("Out of range", 0xFF5252);
-                    return;
+    auto rowI = [&](const char* l, int* a, int* b, float lo, float hi, float step, const char* unit) {
+        RuleRow r;
+        r.label = l;
+        r.i[0]  = a;
+        r.i[1]  = b;
+        r.lo    = lo;
+        r.hi    = hi;
+        r.step  = step;
+        r.unit  = unit;
+        v.push_back(r);
+    };
+    group("DROP WINDOW", GO);
+    rowI("dev after FC", &_rules.devMin, &_rules.devMax, 20, 400, 1, " s");
+    rowF("rise after FC", &_rules.dtMin, &_rules.dtMax, 0, 30, 0.5f, "°");
+    rowF("drop now at", &_rules.maxDropBT, nullptr, 150, 250, 1, "°");
+    group("SAFETY", DROP);
+    rowF("auto-drop at", &_rules.safetyBT, nullptr, 150, 260, 1, "°");
+    rowI("after curve end", &_rules.afterEnd, nullptr, 0, 900, 10, " s");
+    group("ALERTS", WARN);
+    rowF("low RoR below", &_rules.rorLow, nullptr, 0, 30, 0.5f, "");
+    rowF("heat drop after FC", &_rules.heatDrop, nullptr, 1, 50, 1, "%");
+    group("MACHINE", FAN);
+    rowF("start fan", &_rules.startFan, nullptr, 20, 100, 1, "%");
+    rowF("cold below", &_rules.coldBT, nullptr, 20, 80, 1, "°");
+    rowF("curve offset", &_rules.curveOffset, nullptr, -30, 30, 0.5f, "°");
+    group("MODE", SIM);
+    RuleRow sim;
+    sim.label     = "simulator";
+    sim.simToggle = true;
+    v.push_back(sim);
+    return v;
+}
+
+bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
+{
+    auto rows = ruleRows();
+    std::vector<int> sel;
+    for (int i = 0; i < (int)rows.size(); i++)
+        if (rows[i].label) sel.push_back(i);
+    int n   = (int)sel.size();
+    _setSel = std::max(0, std::min(n - 1, _setSel));
+    RuleRow r  = rows[sel[_setSel]];
+    bool range = r.f[1] || r.i[1];
+    auto cur   = [&](int k) { return r.f[k] ? *r.f[k] : (float)*r.i[k]; };
+    if (!_setEditing) {
+        switch (code) {
+            case KEY_UP:
+                if (_setSel > 0) _setSel--;
+                return true;
+            case KEY_DOWN:
+                if (_setSel < n - 1) _setSel++;
+                return true;
+            case KEY_ENTER:
+                if (r.simToggle) {
+                    setSimulator(!(_link && _link->isSimulated()));
+                    return true;
                 }
-                if (it.f)
-                    *it.f = x;
-                else
-                    *it.i = (int)lroundf(x);
-                _curve.offset = _rules.curveOffset;
+                _setEditing = true;
+                _setStage   = 0;
+                _setBuf.clear();
+                _setVal[0] = cur(0);
+                _setVal[1] = range ? cur(1) : 0;
+                return true;
+            case KEY_ESC:
                 _rules.save();
-            });
+                _screen = Screen::Prep;
+                return true;
+            default:
+                return false;
+        }
+    }
+    float& v = _setVal[_setStage];
+    // typing: digits, '.' and '-' come from the raw key (',' '.' ';' '/' double as arrows elsewhere)
+    if (e.keyName && strlen(e.keyName) == 1) {
+        char c = e.keyName[0];
+        if ((isdigit((unsigned char)c) || (c == '.' && _setBuf.find('.') == std::string::npos) ||
+             (c == '-' && _setBuf.empty() && r.lo < 0)) &&
+            _setBuf.size() < 6) {
+            _setBuf += c;
             return true;
         }
-        case KEY_ESC:
-            _rules.save();
-            _screen = Screen::Prep;
+    }
+    switch (code) {
+        case KEY_LEFT:
+        case KEY_RIGHT: {
+            _setBuf.clear();
+            float nv = v + (code == KEY_RIGHT ? r.step : -r.step);
+            nv       = std::round(nv / r.step) * r.step;
+            v        = std::max(r.lo, std::min(r.hi, nv));
             return true;
+        }
+        case KEY_BACKSPACE:
+            if (!_setBuf.empty()) _setBuf.pop_back();
+            return true;
+        case KEY_ESC:
+            _setEditing = false;
+            _setBuf.clear();
+            return true;
+        case KEY_ENTER: {
+            if (!_setBuf.empty()) {
+                float x = strtof(_setBuf.c_str(), nullptr);
+                _setBuf.clear();
+                if (x < r.lo || x > r.hi) {
+                    char b[48];
+                    snprintf(b, sizeof(b), "Out of range: %g to %g", r.lo, r.hi);
+                    toast(b, DROP, 2500);
+                    return true;
+                }
+                v = x;
+            }
+            if (range && _setStage == 0) {
+                _setStage = 1;
+                if (_setVal[1] < _setVal[0]) _setVal[1] = _setVal[0];
+                return true;
+            }
+            if (range && _setVal[1] < _setVal[0]) std::swap(_setVal[0], _setVal[1]);
+            for (int k = 0; k < (range ? 2 : 1); k++) {
+                if (r.f[k])
+                    *r.f[k] = _setVal[k];
+                else
+                    *r.i[k] = (int)lroundf(_setVal[k]);
+            }
+            _curve.offset = _rules.curveOffset;
+            _rules.save();
+            _setEditing = false;
+            return true;
+        }
         default:
-            return false;
+            return true;
     }
 }
 

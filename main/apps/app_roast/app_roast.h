@@ -12,6 +12,7 @@
 #include "roast_link.h"
 #include "roast_curve.h"
 #include "roast_session.h"
+#include "roast_theme.h"
 
 struct RoastRules {
     int devMin       = 75;    // s after first crack: drop window opens
@@ -53,6 +54,24 @@ private:
         std::string buf;
         std::function<void(const std::string&)> done;
     };
+    // W/B: one sheet for the batch (green weight + bean name)
+    struct BatchSheet {
+        bool active = false;
+        int field   = 0;  // 0 weight, 1 bean
+        std::string weight, bean;
+    };
+    // O: rules list. Rows are built on demand so they always point at the live values.
+    struct RuleRow {
+        const char* label = nullptr;  // nullptr: group header
+        const char* group = nullptr;
+        uint32_t groupColor = 0;
+        float* f[2]  = {nullptr, nullptr};  // float value(s); second = upper end of a range
+        int* i[2]    = {nullptr, nullptr};  // int value(s)
+        float lo = 0, hi = 0, step = 1;
+        const char* unit = "";
+        bool simToggle = false;
+    };
+    std::vector<RuleRow> ruleRows();
 
     // ---- core
     std::unique_ptr<roast::RoasterLink> _link;
@@ -73,6 +92,8 @@ private:
     int _view          = 0;  // 0 numbers, 1 chart
     bool _muted        = false;
     bool _blockedByKeyboardApp = false;
+    bool _fanRunning   = false;  // machine fan on (S/charge) until X X stop, independent of the log
+    bool _noCurve      = false;  // "No curve" picked explicitly: manual heat
 
     // ---- roast timing / control
     uint32_t _chargeMs   = 0;
@@ -107,6 +128,17 @@ private:
     int _pendingKey      = 0;
     uint32_t _pendingUntil = 0;
     Input _input;
+    BatchSheet _batch;
+    bool _setEditing = false;
+    int _setStage    = 0;      // range rows: 0 lower end, 1 upper end
+    std::string _setBuf;       // digits typed while editing
+    float _setVal[2] = {0, 0};
+    // ←/→ held in manual mode repeats the heater step
+    int _heatHeld        = 0;
+    uint32_t _heatHeldMs = 0;
+    uint32_t _heatRepMs  = 0;
+    bool _heatHeldShift  = false;
+    int _heatReps        = 0;
     int _listSel = 0, _listTop = 0;
     int _setSel  = 0;
     // curve editor: fixed nodes like the phone editor (Start, Dry, FC start, FC end, SC start, SC end, Drop, Total)
@@ -146,9 +178,13 @@ private:
     bool keySummary(int code);
     bool keyCurves(int code);
     bool keyEditor(const Keyboard::KeyEvent_t& e, int code);
-    bool keySettings(int code);
+    bool keySettings(const Keyboard::KeyEvent_t& e, int code);
     void keyInput(const Keyboard::KeyEvent_t& e, int code);
-    bool confirm(int key, const std::string& msg);
+    void keyBatch(const Keyboard::KeyEvent_t& e);
+    void openBatch(int field);
+    void setSimulator(bool on);
+    bool confirm(int key, const std::string& msg, bool quiet = false);
+    bool confirmPending(int key) const;
 
     void selectCurve(int idx);
     void reloadCurves();
@@ -196,5 +232,8 @@ private:
     void renderBanner();
     void renderToast();
     void renderStatus();
+    void renderBatch();
+    void renderKeysBar();
+    bool renderAlertBar();
     bool bannerText(std::string& text, uint32_t& bg, uint32_t& fg);
 };
