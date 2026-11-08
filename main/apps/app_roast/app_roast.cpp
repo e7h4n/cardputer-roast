@@ -251,7 +251,7 @@ void AppRoast::startFan()
     _fanSet   = _rules.startFan;
     _fanSetMs = GetHAL().millis();
     _phase    = Phase::FanOn;
-    toast("Fan on, no heat. Tune fan, add beans", 0x99FF00, 3500);
+    toast("Fan on (no heat): add beans", 0x99FF00, 3500);
     beep(Tone::Info);
 }
 
@@ -705,7 +705,7 @@ bool AppRoast::keyPrep(int code, bool shift)
     switch (code) {
         case KEY_S:
             if (_phase == Phase::FanOn) {
-                toast("Fan is on: Enter charge, XX stop", 0xFFD54F);
+                toast("Fan on: Enter charge, XX stop", 0xFFD54F);
             } else {
                 startFan();
             }
@@ -769,7 +769,7 @@ bool AppRoast::keyPrep(int code, bool shift)
             _view ^= 1;
             return true;
         case KEY_D:  // practise without the machine
-            if (_phase == Phase::Idle && _link && !_link->isSimulated() && confirm(KEY_D, "D again: simulator (disconnects)")) {
+            if (_phase == Phase::Idle && _link && !_link->isSimulated() && confirm(KEY_D, "D again: use simulator")) {
                 startLink(true);
                 toast("Simulator: no roaster", 0xFFD54F, 3000);
             }
@@ -845,7 +845,7 @@ bool AppRoast::keyCool(int code)
             }
             return true;
         case KEY_ENTER:
-            if (confirm(KEY_ENTER, "Fan still on: Enter again ends log")) enterSummary();
+            if (confirm(KEY_ENTER, "Fan on: Enter again ends log")) enterSummary();
             return true;
         case KEY_UP:
             adjustFan(1.0f);
@@ -1180,7 +1180,7 @@ bool AppRoast::keyEditor(const Keyboard::KeyEvent_t& e, int code)
         case KEY_S: {
             if (!_sdOk) _sdOk = GetHAL().sdCardMount();
             if (!_sdOk) {
-                toast("No SD card: curve kept until reboot", 0xFFD54F, 3000);
+                toast("No SD: curve kept until reboot", 0xFFD54F, 3000);
                 _hasCurve = _curve.valid();
                 _screen   = Screen::Prep;
                 break;

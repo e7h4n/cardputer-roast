@@ -471,7 +471,7 @@ void AppRoast::renderSummary()
     snprintf(b, sizeof(b), "FC->drop %s°C  RoR %s->%s", signed1(m.deltaFC).c_str(), fmt1(m.rorAtFC).c_str(),
              fmt1(m.rorFC30).c_str());
     text(2, 53, b, C_TEXT);
-    snprintf(b, sizeof(b), "Max heat %s%%  sat %ds  err %s", fmt0(m.maxHeat).c_str(), m.heatSatSec,
+    snprintf(b, sizeof(b), "Max heat %s%% sat %ds err %s", fmt0(m.maxHeat).c_str(), m.heatSatSec,
              fmt1(m.meanAbsErr).c_str());
     text(2, 66, b, C_DIM);
     text(2, 80, _saveMsg, (_saveMsg.rfind("Saved", 0) == 0 || _saveMsg.rfind("Updated", 0) == 0) ? C_GREEN : C_RED);
