@@ -264,7 +264,7 @@ void DebugPollMain()
         AudioStats st = rec::Stats();
         printf("REC state=%s samples=%u secs=%.1f peak_dbfs=%.1f recent_dbfs=%.1f clipped=%u gaps=%u buffer_ms=%u "
                "slot=%d gain=%d failed=%d heap=%u largest=%u\n",
-               !st.active ? "off" : (st.paused ? "paused" : "running"), (unsigned)st.samples,
+               st.active ? "running" : "off", (unsigned)st.samples,
                (double)st.samples / st.sampleRate, PeakDbfs(st.peak), PeakDbfs(st.recentPeak), (unsigned)st.clipped,
                (unsigned)st.gapCount, (unsigned)st.bufferMs, st.slot, st.gainDb, st.failed ? 1 : 0,
                (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),

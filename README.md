@@ -23,8 +23,8 @@ opens in Artisan. It runs as an app under the community [Launcher](https://githu
 - **Marks and development window.** Y / F / G mark the end of drying, first crack and its end. A phase bar runs
   through the whole roast, and after first crack it outlines the drop window (time and temperature rise).
 - **Alerts and safety nets.** Colour bars for the drop window, drop-now temperature, development limit, heater
-  pinned or falling after first crack, low RoR and BLE loss. Automatic drop only at the safety temperature or long
-  after the curve has ended.
+  pinned or falling after first crack, low RoR and BLE loss. The roast itself is silent: alerts are on screen only.
+  Automatic drop only at the safety temperature or long after the curve has ended.
 - **Fan control with floors.** Fan ±1 % or ±0.1 %; going below 50 % and 40 % needs a deliberate long press.
 - **Manual heat.** P switches between PID and manual heat at any time; ← → step the heater.
 - **Curve editor.** The phone app's eight nodes (Start, Dry, FC start/end, SC start/end, Drop, Total), edited on
@@ -74,7 +74,8 @@ Roast scans for a device named `E-Meter…BLE` and connects on its own. To try i
 the connect screen, or switch *simulator* on in Rules (**O**). The simulator can only be switched while the
 machine is not running.
 
-**H** shows the key map on every page, grouped by colour. **M** mutes (alarms still sound). The top-right corner
+**H** shows the key map on every page, grouped by colour. **M** mutes key clicks and chimes. From charge until the
+log ends the speaker is always off (see [Recording](#recording)). The top-right corner
 shows the battery, the link (green dot) or the SIM tag, a speaker when muted, and a red **SD** tag without a card.
 
 ### Prep
@@ -123,11 +124,13 @@ default). Format: WAV, 32 kHz, 16-bit, mono, about 3.8 MB per minute; a 15-minut
 60 MB. 32 kHz covers 0–16 kHz, which includes the 2–16 kHz band used in first-crack detection, and leaves enough
 memory for the SD write buffer next to BLE.
 
-The microphone and the speaker share one codec and its clocks, so they cannot work at the same time. While
-recording, key clicks and confirmation chimes are silent; warnings, alarms and the drop-window chime still play.
-For each of those tones capture pauses for a fraction of a second and the gap is filled with silence, so the file
-stays on the roast clock: second N of the WAV is second N after the recording started. The JSON lists every inserted
-silence.
+The speaker is off for the whole roast, from charge until the log ends, whether or not it is recorded: no key
+clicks, chimes, warnings or alarms. Every alert is a colour bar on screen. (The microphone and the speaker share one
+codec and its clocks and cannot work at the same time; a silent roast also keeps beeps out of the recording.)
+
+The file stays on the roast clock: second N of the WAV is second N after the recording started. If the SD card
+stalls for longer than the write buffer, the lost samples are replaced by the same number of zeros, and the JSON
+lists each such gap.
 
 *Mic gain* (0–30 dB in 3 dB steps, default 18 dB) is the codec's analog gain. The default is an estimate; if the
 summary says "clipped", lower it.
@@ -156,12 +159,12 @@ shown underneath, and range rules (window, rise) take the lower then the upper e
 | Record roast | on |
 | Mic gain | 18 dB |
 
-The bottom bar turns green inside the drop window, red (and keeps beeping) past the development limit or at the
+The bottom bar turns green inside the drop window, red past the development limit or at the
 drop-now temperature, and yellow for a heater pinned at 95 % or more for 20 s, heater output falling after first
 crack, a rise reached before the window, or low RoR 30 s after first crack.
 
-On BLE loss the reading greys out and the bar turns red. The alarm sounds even when muted, because the roaster
-keeps heating to the last target. Roast then reconnects on its own.
+On BLE loss the reading greys out and the bar turns red: the roaster keeps heating to the last target, so watch
+for it. Roast then reconnects on its own.
 
 Roast drops by itself in only two cases, as safety nets: BT at or above the safety temperature, or the curve
 having ended more than *auto-drop after end* seconds ago. Set that value to 0 to match the phone app, which drops
@@ -220,11 +223,11 @@ The summary JSON has an `audio` object when the roast was recorded:
   "start_ms_after_charge": 4, "duration_s": 812.37, "peak_dbfs": -7.9, "clipped_samples": 0, "buffer_ms": 896,
   "i2s_slot": "right",
   "events_ms": {"charge": 0, "dry": 284996, "fc_start": 471512, "fc_end": 529870, "drop": 569004},
-  "silence": [{"at_ms": 512304, "ms": 431, "why": "tone"}]
+  "silence": []
 }
 ```
-`events_ms` are positions in the WAV file. `silence` lists the gaps filled with zeros: `tone` while a warning played,
-`overrun` when the SD card stalled for longer than the buffer (`buffer_ms`).
+`events_ms` are positions in the WAV file. `silence` lists gaps filled with zeros (`{"at_ms", "ms"}`) where the SD
+card stalled for longer than the buffer (`buffer_ms`); normally it is empty.
 
 ## Protocol notes (E-Meter621 BLE)
 - **GATT:** service `FFF0`.

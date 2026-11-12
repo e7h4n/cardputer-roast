@@ -14,8 +14,8 @@ float PeakDbfs(int peak)
 
 namespace rec {
 namespace {
-bool s_active = false, s_paused = false;
-uint32_t s_t0 = 0, s_pauseAt = 0, s_sent = 0;
+bool s_active = false;
+uint32_t s_t0 = 0;
 int s_gain    = 0;
 std::vector<AudioGap> s_gaps;
 }  // namespace
@@ -24,36 +24,16 @@ bool Start(const std::string& path, int gainDb, std::string*)
 {
     if (FILE* f = fopen(path.c_str(), "wb")) fclose(f);
     s_active = true;
-    s_paused = false;
     s_t0     = GetHAL().millis();
     s_gain   = gainDb;
     s_gaps.clear();
     return true;
 }
 
-uint32_t Pause()
-{
-    if (!s_paused) s_pauseAt = GetHAL().millis();
-    s_paused = true;
-    return ++s_sent;
-}
-
-bool Paused(uint32_t)
-{
-    return true;
-}
-
-void Resume()
-{
-    if (s_paused) s_gaps.push_back({s_pauseAt - s_t0, GetHAL().millis() - s_pauseAt, GapWhy::Tone});
-    s_paused = false;
-}
-
 AudioStats Stats()
 {
     AudioStats s;
     s.active     = s_active;
-    s.paused     = s_paused;
     s.samples    = s_active ? (GetHAL().millis() - s_t0) * (kSampleRate / 1000) : 0;
     s.peak       = 9200;  // about -11 dBFS
     s.recentPeak = 6000;

@@ -3,13 +3,12 @@
  * the roast log, from charge until the log ends. 32 kHz, 16-bit, mono PCM.
  *
  * The microphone and the speaker share the codec and its bit/word clocks (G41/G43), so they cannot run at the same
- * time. While recording, the app only plays the tones that matter (warnings, alarms, the drop window): Pause()
- * stops capture and frees the clocks, the tone plays, and Resume() restarts capture and pads the gap with silence.
- * Overruns (the SD card stalling for longer than the buffer) are padded the same way. The WAV timeline therefore
- * stays locked to the roast clock: second N of the file is second N after the recording started.
+ * time: Start() ends the speaker, Stop() brings it back, and the app plays no sound at all during a roast.
+ * If the SD card stalls for longer than the buffer, the lost samples are replaced by the same number of zeros, so
+ * the WAV stays on the roast clock: second N of the file is second N after the recording started.
  *
- * Threads: Start/Pause/Resume/Stop and every codec register write run on the UI task, which also owns the keyboard
- * on the same I2C bus. A capture task (I2S -> ring of 8 KB blocks) and a writer task (blocks -> SD) run on core 1.
+ * Threads: Start/Stop and every codec register write run on the UI task, which also owns the keyboard on the same
+ * I2C bus. A capture task (I2S -> ring of 8 KB blocks) and a writer task (blocks -> SD) run on core 1.
  */
 #pragma once
 #include <cstdint>
@@ -18,17 +17,14 @@
 
 namespace roast {
 
-enum class GapWhy : uint8_t { Tone = 0, Overrun = 1 };
-
+/// Silence inserted after an SD stall.
 struct AudioGap {
     uint32_t atMs;  // position in the recording
-    uint32_t ms;    // length of the silence that was inserted
-    GapWhy why;
+    uint32_t ms;    // length of the silence
 };
 
 struct AudioStats {
-    bool active        = false;  // recording, running or paused
-    bool paused        = false;  // capture stopped and clocks released: the speaker may play
+    bool active        = false;
     bool failed        = false;  // SD write failed; the file holds what was written before
     uint32_t samples   = 0;      // samples in the file so far, padding included
     uint32_t sampleRate = 32000;
@@ -48,12 +44,6 @@ constexpr int kMaxGainDb       = 30;
 
 /// Opens `path`, configures the codec for the microphone and starts capture. Ends the speaker first.
 bool Start(const std::string& path, int gainDb, std::string* err);
-/// Asks the capture task to stop and release the clocks. Commands run in order; returns a ticket for Paused().
-uint32_t Pause();
-/// True once the Pause() that returned `ticket` has been carried out: the speaker may use the codec now.
-bool Paused(uint32_t ticket);
-/// Re-enables the microphone and restarts capture; the time spent paused becomes silence.
-void Resume();
 /// Stops capture, writes the remaining blocks and the final header, closes the file and restores the speaker.
 /// Blocks until done (well under a second unless the card is stalling). Returns false when the file is incomplete.
 bool Stop(AudioStats* out, std::vector<AudioGap>* gaps);

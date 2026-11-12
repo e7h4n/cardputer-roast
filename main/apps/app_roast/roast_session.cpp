@@ -286,13 +286,12 @@ bool Session::finalize(std::string* err)
         const char* evKeys[5] = {"charge", "dry", "fc_start", "fc_end", "drop"};
         for (int i = 0; i < 5; i++)
             if (a.eventMs[i] >= 0) cJSON_AddNumberToObject(ev, evKeys[i], a.eventMs[i]);
-        // silence inserted while a tone played (the speaker shares the codec) or after an SD stall
+        // zeros inserted where the SD card stalled for longer than the buffer
         cJSON* gaps = cJSON_AddArrayToObject(au, "silence");
         for (auto& g : a.gaps) {
             cJSON* o = cJSON_CreateObject();
             cJSON_AddNumberToObject(o, "at_ms", g.atMs);
             cJSON_AddNumberToObject(o, "ms", g.ms);
-            cJSON_AddStringToObject(o, "why", g.why == GapWhy::Tone ? "tone" : "overrun");
             cJSON_AddItemToArray(gaps, o);
         }
         if (a.gapCount > a.gaps.size()) cJSON_AddNumberToObject(au, "silence_total", a.gapCount);

@@ -46,8 +46,7 @@ public:
 private:
     enum class Screen : uint8_t { Connect, Prep, Roast, Cool, Summary, Curves, Editor, Settings, Help };
     enum class Phase : uint8_t { Idle, FanOn, Roasting, Cooling, Done };
-    // Window = the drop-window chime (same notes as Good). While recording only Window, Warn and Alarm play.
-    enum class Tone : uint8_t { Key, Info, Good, Window, Warn, Alarm };
+    enum class Tone : uint8_t { Key, Info, Good, Warn };
 
     struct Input {
         bool active = false;
@@ -114,8 +113,6 @@ private:
     bool _satWarned      = false;
     bool _heatDropWarned = false;
     bool _rorWarned      = false;
-    bool _windowBeeped   = false;
-    uint32_t _lastAlarmMs = 0;
     bool _autoDropped    = false;
     std::string _autoDropWhy;
 
@@ -171,9 +168,7 @@ private:
     std::string _saveMsg;
 
     // ---- audio recording (roast_audio.h): charge -> end of the log
-    bool _recording     = false;
-    bool _recToneHold   = false;  // capture paused so a tone can use the codec
-    uint32_t _recTicket = 0;      // the Pause request the tone is waiting for
+    bool _recording      = false;
     uint32_t _recStartMs = 0;
     int32_t _markMs[(int)roast::Mark::Count];  // ms after charge, -1 = not set (for the recording's event times)
     void startRecording();
@@ -222,6 +217,12 @@ private:
         return _linkState == roast::LinkState::Ready;
     }
     void toast(const std::string& msg, uint32_t color = 0xFFFFFF, uint32_t ms = 2200);
+    /// From charge until the log ends the speaker stays off: no key clicks, chimes, warnings or alarms. Alerts are
+    /// shown on screen only, and the microphone can record (it shares the codec and its clocks with the speaker).
+    bool quietRoast() const
+    {
+        return _phase == Phase::Roasting || _phase == Phase::Cooling;
+    }
     void beep(Tone t);
     void pumpBeep();
     std::deque<std::pair<int, int>> _beepQueue;

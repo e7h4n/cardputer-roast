@@ -179,10 +179,8 @@ void AppRoast::onRunning()
     if (GetHAL().homeButton.wasClicked()) {
         if (_phase == Phase::Roasting) {
             toast("Roasting: drop before exit", ui::DROP);
-            beep(Tone::Warn);
         } else {
-            stopRecording();  // the exit tone needs the codec
-            audio::play_random_tone();
+            if (!quietRoast()) audio::play_random_tone();
             close();
             return;
         }
@@ -312,7 +310,7 @@ void AppRoast::charge()
     _lastSampleT  = -1;
     _dropMs       = 0;
     _satRun       = 0;
-    _satWarned = _heatDropWarned = _rorWarned = _windowBeeped = _autoDropped = false;
+    _satWarned = _heatDropWarned = _rorWarned = _autoDropped = false;
     _autoDropWhy.clear();
     _session.reset(_hasCurve ? &_curve : nullptr, _rules.greenG, _bean);
     _session.openLog(NextLogId());
@@ -324,8 +322,10 @@ void AppRoast::charge()
     }
     _phase  = Phase::Roasting;
     _screen = Screen::Roast;
+    // quiet roast (see quietRoast()): no key clicks either, until the log ends
+    audio::set_keyboard_sfx_enable(false);
+    _beepQueue.clear();
     toast(_hasCurve ? "Charged: PID follows curve" : "Charged: manual heat (←→)", ui::GO);
-    beep(Tone::Good);
     startRecording();  // last, so a failure toast is not covered by the charge toast
 }
 
@@ -342,7 +342,6 @@ void AppRoast::drop(const char* why)
     _dropMs = GetHAL().millis();
     _phase  = Phase::Cooling;
     _screen = Screen::Cool;
-    beep(Tone::Good);
 }
 
 void AppRoast::stopMachine()
@@ -458,7 +457,6 @@ void AppRoast::toggleManual()
         _session.addAction(t, "PID on curve");
         toast("PID on curve", ui::GO);
     }
-    beep(Tone::Info);
 }
 
 void AppRoast::toggleMark(Mark m)
@@ -471,7 +469,7 @@ void AppRoast::toggleMark(Mark m)
         _session.clearMark(m);
         _markMs[(int)m] = -1;
         toast(std::string("Cleared ") + MarkName(m), ui::WARN);
-        if (m == Mark::FCs) _heatDropWarned = _rorWarned = _windowBeeped = false;
+        if (m == Mark::FCs) _heatDropWarned = _rorWarned = false;
         return;
     }
     _session.setMark(m, t, bt);
@@ -479,7 +477,6 @@ void AppRoast::toggleMark(Mark m)
     char b[48];
     snprintf(b, sizeof(b), "%s %s · %.1f°", MarkName(m), FormatMmSs(t).c_str(), bt);
     toast(b, m == Mark::Dry ? ui::DRY : (m == Mark::FCs ? ui::FC : ui::FCE));
-    beep(Tone::Info);
 }
 
 bool AppRoast::confirm(int key, const std::string& msg, bool quiet)
@@ -527,16 +524,9 @@ void AppRoast::tickRoast()
     if (!cap) _session.addSample(s);
     if (cap) stopRecording();  // the recording ends with the curve log
 
-    uint32_t now = GetHAL().millis();
-
-    // 3) link loss is the most dangerous state: the machine keeps chasing its last target
-    if (_phase == Phase::Roasting && !linkReady()) {
-        if (now - _lastAlarmMs > 3000) {
-            beep(Tone::Alarm);
-            _lastAlarmMs = now;
-        }
-        return;
-    }
+    // 3) link loss is the most dangerous state (the machine keeps chasing its last target): the red bar says so,
+    //    and the alerts below would only be guesses without fresh readings
+    if (_phase == Phase::Roasting && !linkReady()) return;
     if (_phase != Phase::Roasting) return;
 
     float bt   = s.bt10 / 10.0f;
@@ -547,31 +537,25 @@ void AppRoast::tickRoast()
         _autoDropped = true;
         _autoDropWhy = "BT above safety limit";
         drop(" (auto: over temp)");
-        beep(Tone::Alarm);
         return;
     }
     if (_hasCurve && t >= _curve.endTime() + _rules.afterEnd) {
         _autoDropped = true;
         _autoDropWhy = "Curve ended long ago";
         drop(" (auto: timeout)");
-        beep(Tone::Alarm);
         return;
     }
 
     // 5) heater saturation
     if (heat >= 95.0f && !_manual) {
-        if (++_satRun >= 20 && !_satWarned) {
-            _satWarned = true;
-            beep(Tone::Warn);
-        }
+        if (++_satRun >= 20) _satWarned = true;
     } else {
         _satRun = 0;
     }
 
     int fc = _session.markT(Mark::FCs);
     if (fc >= 0) {
-        int dev  = t - fc;
-        float dT = bt - _session.markBT(Mark::FCs);
+        int dev = t - fc;
         // heater falling right after first crack (PID sees BT above target)
         if (!_heatDropWarned && !_manual && dev <= 60) {
             double sum = 0;
@@ -581,33 +565,18 @@ void AppRoast::tickRoast()
                     sum += x.heat10 / 10.0;
                     n++;
                 }
-            if (n > 5 && heat < sum / n - _rules.heatDrop) {
-                _heatDropWarned = true;
-                beep(Tone::Warn);
-            }
+            if (n > 5 && heat < sum / n - _rules.heatDrop) _heatDropWarned = true;
         }
         float ror = _session.rorNow();
-        if (!_rorWarned && dev >= 30 && !std::isnan(ror) && ror < _rules.rorLow) {
-            _rorWarned = true;
-            beep(Tone::Warn);
-        }
-        bool mustDrop = bt >= _rules.maxDropBT || dev >= _rules.devMax;
-        bool window   = dev >= _rules.devMin && dT >= _rules.dtMin;
-        if (mustDrop) {
-            if (now - _lastAlarmMs > 4000) {
-                beep(Tone::Alarm);
-                _lastAlarmMs = now;
-            }
-        } else if (window && !_windowBeeped) {
-            _windowBeeped = true;
-            beep(Tone::Window);
-        }
+        if (!_rorWarned && dev >= 30 && !std::isnan(ror) && ror < _rules.rorLow) _rorWarned = true;
+        // the drop window and "drop now" are drawn from the live values (bannerText); nothing to latch here
     }
 }
 
 void AppRoast::enterSummary()
 {
     stopRecording();
+    audio::set_keyboard_sfx_enable(true);  // the roast is over: sounds are back
     std::string err;
     bool ok   = _session.finalize(&err);
     _saveMsg  = ok ? "Saved: roast/logs/" + _session.logId() : err;
@@ -680,7 +649,7 @@ void AppRoast::onKey(const Keyboard::KeyEvent_t& e)
     }
     if (!typing && code == KEY_M) {
         _muted = !_muted;
-        toast(_muted ? "Muted (alarms still sound)" : "Sound on", FAINT);
+        toast(_muted ? "Muted" : (quietRoast() ? "Sound on after the roast" : "Sound on"), FAINT);
         return;
     }
     switch (_screen) {
@@ -1548,30 +1517,23 @@ void AppRoast::keyInput(const Keyboard::KeyEvent_t& e, int code)
 void AppRoast::startRecording()
 {
     if (_recording || !_rules.recAudio || !_sdOk || !_session.logging()) return;
-    // Key clicks would start the speaker on the microphone's clocks.
-    audio::set_keyboard_sfx_enable(false);
-    _beepQueue.clear();
     std::string err;
     if (!rec::Start(LogPath(_session.logId(), ".wav"), _rules.micGain, &err)) {
-        audio::set_keyboard_sfx_enable(true);
         _session.addAction(roastT(), "no audio: " + err);
         toast("No recording: " + err, WARN, 3500);
         return;
     }
-    _recording   = true;
-    _recToneHold = false;
-    _recStartMs  = rec::StartMs();
+    _recording  = true;
+    _recStartMs = rec::StartMs();
 }
 
 void AppRoast::stopRecording()
 {
     if (!_recording) return;
-    _recording   = false;
-    _recToneHold = false;
+    _recording = false;
     AudioStats st;
     std::vector<AudioGap> gaps;
     bool ok = rec::Stop(&st, &gaps);
-    audio::set_keyboard_sfx_enable(true);
     AudioInfo a;
     a.valid              = true;
     a.file               = _session.logId() + ".wav";
@@ -1601,7 +1563,6 @@ void AppRoast::pollRecording()
     if (rec::Stats().failed) {
         stopRecording();
         toast("Recording stopped: SD write failed", DROP, 4000);
-        beep(Tone::Warn);
     }
 }
 
@@ -1616,37 +1577,25 @@ void AppRoast::toast(const std::string& msg, uint32_t color, uint32_t ms)
 
 void AppRoast::beep(Tone t)
 {
-    // Notes are played one by one with Speaker.tone(); the launcher's play_melody() renders the whole
-    // melody into one large buffer, which runs out of heap while BLE is up.
+    // Silent during a roast (quietRoast()). Notes are played one by one with Speaker.tone(); the launcher's
+    // play_melody() renders the whole melody into one large buffer, which runs out of heap while BLE is up.
+    if (g_debugQuiet || quietRoast() || _muted || audio::is_quiet_mode()) return;
     auto midi = [](int m) { return (int)lround(440.0 * pow(2.0, (m - 69) / 12.0)); };
     std::vector<std::pair<int, int>> notes;  // freq (0 = rest), ms
-    if (g_debugQuiet) return;
-    if (t == Tone::Alarm) {
-        // Always audible, even when muted or in launcher quiet mode.
-        if (GetHAL().speaker.getVolume() < 160) GetHAL().speaker.setVolume(160);
-        notes = {{midi(93), 90}, {0, 90}, {midi(93), 90}, {0, 90}, {midi(93), 90}};
-    } else {
-        if (_muted || audio::is_quiet_mode()) return;
-        if (GetHAL().speaker.getVolume() < audio::DEFAULT_VOLUME) GetHAL().speaker.setVolume(audio::DEFAULT_VOLUME);
-        // Recording: the speaker would interrupt the microphone (shared codec), so only what needs attention plays.
-        if (_recording && (t == Tone::Key || t == Tone::Info || t == Tone::Good)) return;
-        switch (t) {
-            case Tone::Key:
-                notes = {{1800, 30}};
-                break;
-            case Tone::Info:
-                notes = {{midi(76), 60}, {midi(81), 60}};
-                break;
-            case Tone::Good:
-            case Tone::Window:
-                notes = {{midi(72), 70}, {midi(76), 70}, {midi(79), 70}, {midi(84), 90}};
-                break;
-            case Tone::Warn:
-                notes = {{midi(84), 90}, {midi(77), 90}, {midi(84), 90}, {midi(77), 90}};
-                break;
-            default:
-                break;
-        }
+    if (GetHAL().speaker.getVolume() < audio::DEFAULT_VOLUME) GetHAL().speaker.setVolume(audio::DEFAULT_VOLUME);
+    switch (t) {
+        case Tone::Key:
+            notes = {{1800, 30}};
+            break;
+        case Tone::Info:
+            notes = {{midi(76), 60}, {midi(81), 60}};
+            break;
+        case Tone::Good:
+            notes = {{midi(72), 70}, {midi(76), 70}, {midi(79), 70}, {midi(84), 90}};
+            break;
+        case Tone::Warn:
+            notes = {{midi(84), 90}, {midi(77), 90}, {midi(84), 90}, {midi(77), 90}};
+            break;
     }
     _beepQueue.clear();
     for (auto& n : notes) _beepQueue.push_back(n);
@@ -1656,23 +1605,9 @@ void AppRoast::beep(Tone t)
 void AppRoast::pumpBeep()
 {
     uint32_t now = GetHAL().millis();
-    if (_recording) {
-        // Microphone and speaker share the codec and its clocks: pause capture, play, then resume. The recorder
-        // fills the pause with silence, so the recording stays on the roast clock.
-        if (_beepQueue.empty()) {
-            if (_recToneHold && now >= _beepNextMs && !GetHAL().speaker.isPlaying()) {
-                GetHAL().speaker.end();
-                rec::Resume();
-                _recToneHold = false;
-            }
-            return;
-        }
-        if (!_recToneHold) {
-            _recTicket   = rec::Pause();
-            _recToneHold = true;
-            return;
-        }
-        if (!rec::Paused(_recTicket)) return;
+    if (quietRoast()) {
+        _beepQueue.clear();
+        return;
     }
     if (_beepQueue.empty()) return;
     if (now < _beepNextMs) return;

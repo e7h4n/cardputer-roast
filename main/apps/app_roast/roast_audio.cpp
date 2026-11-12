@@ -54,8 +54,6 @@ constexpr uint8_t kCodecAddr      = 0x18;  // ES8311
 constexpr uint32_t kI2cHz         = 400000;
 constexpr gpio_num_t kBck = GPIO_NUM_41, kWs = GPIO_NUM_43, kDin = GPIO_NUM_46;
 
-enum class Cmd : uint8_t { Pause, Resume, Stop };
-
 struct Item {
     int8_t block;  // < 0: end of stream
     uint16_t samples;
@@ -66,7 +64,7 @@ struct Rec {
     i2s_chan_handle_t rx        = nullptr;
     int16_t* blocks[kMaxBlocks] = {};
     int nBlocks                 = 0;
-    QueueHandle_t freeQ = nullptr, fullQ = nullptr, cmdQ = nullptr;
+    QueueHandle_t freeQ = nullptr, fullQ = nullptr;
     SemaphoreHandle_t done = nullptr;  // given once by each task when it has finished
     int64_t t0Us           = 0;
     int gainDb             = 0;
@@ -82,11 +80,9 @@ struct Rec {
     int peakHist[32]   = {};
     int peakIdx        = 0;
     // shared with the UI task
-    std::atomic<bool> active{false}, paused{false}, failed{false};
+    std::atomic<bool> active{false}, failed{false}, stopReq{false};
     std::atomic<uint32_t> written{0}, clipped{0};
     std::atomic<int> peak{0}, recentPeak{0}, slot{-1};
-    uint32_t sent = 0;               // commands sent (UI task)
-    std::atomic<uint32_t> acked{0};  // commands carried out (capture task)
     portMUX_TYPE gapLock = portMUX_INITIALIZER_UNLOCKED;
     AudioGap gaps[kMaxGaps];
     uint32_t gapCount = 0;
@@ -203,12 +199,12 @@ bool write_header(uint32_t samples)
 }
 
 /* -------------------------------------------------------------- capture */
-void add_gap(uint32_t atSamples, uint32_t samples, GapWhy why)
+void add_gap(uint32_t atSamples, uint32_t samples)
 {
     portENTER_CRITICAL(&R.gapLock);
     if (R.gapCount < kMaxGaps)
         R.gaps[R.gapCount] = {(uint32_t)((uint64_t)atSamples * 1000 / kSampleRate),
-                              (uint32_t)((uint64_t)samples * 1000 / kSampleRate), why};
+                              (uint32_t)((uint64_t)samples * 1000 / kSampleRate)};
     R.gapCount++;
     portEXIT_CRITICAL(&R.gapLock);
 }
@@ -258,7 +254,7 @@ void feed(const int16_t* s, uint32_t n, TickType_t wait = 0)
             R.dropTotal += n;
             return;
         }
-        add_gap(R.dropAt, R.dropTotal, GapWhy::Overrun);
+        add_gap(R.dropAt, R.dropTotal);
         R.dropTotal = 0;
     }
     uint32_t left = append(s, n, wait);
@@ -267,17 +263,6 @@ void feed(const int16_t* s, uint32_t n, TickType_t wait = 0)
         R.dropped   = left;
         R.dropTotal = left;
     }
-}
-
-// After a pause: silence up to the current time, so the file stays on the roast clock.
-void pad_to_now()
-{
-    uint32_t expected = (uint32_t)((esp_timer_get_time() - R.t0Us) * (int64_t)kSampleRate / 1000000);
-    uint32_t have     = R.queued + R.dropped;
-    if (expected <= have) return;
-    uint32_t n = expected - have;
-    if (!R.dropped) add_gap(have, n, GapWhy::Tone);
-    feed(nullptr, n);
 }
 
 void take_chunk(size_t bytes)
@@ -311,36 +296,12 @@ void take_chunk(size_t bytes)
 
 void capture_task(void*)
 {
-    bool running = true;
-    for (;;) {
-        Cmd c;
-        // While paused there is nothing to read: wait for the next command.
-        while (xQueueReceive(R.cmdQ, &c, running ? 0 : portMAX_DELAY) == pdTRUE) {
-            if (c == Cmd::Stop) goto stop;
-            if (c == Cmd::Pause && running) {
-                i2s_channel_disable(R.rx);
-                running = false;
-            } else if (c == Cmd::Resume && !running) {
-                // The speaker routed G41/G43 to I2S1 while we were paused: take the pins back first.
-                i2s_std_gpio_config_t g = gpio_cfg();
-                esp_err_t e             = i2s_channel_reconfig_std_gpio(R.rx, &g);
-                if (e == ESP_OK) e = i2s_channel_enable(R.rx);
-                if (e == ESP_OK)
-                    running = true;
-                else
-                    ESP_LOGE(TAG, "resume failed: %s", esp_err_to_name(e));
-                pad_to_now();
-            }
-            R.paused = !running;
-            R.acked++;
-            if (!running) continue;
-        }
+    while (!R.stopReq.load()) {
         size_t got = 0;
         i2s_channel_read(R.rx, s_stereo, sizeof(s_stereo), &got, pdMS_TO_TICKS(100));
         if (got) take_chunk(got);  // a timeout can still return part of a buffer: keep every sample
     }
-stop:
-    if (running) i2s_channel_disable(R.rx);
+    i2s_channel_disable(R.rx);
     if (R.dropped) feed(nullptr, 0, pdMS_TO_TICKS(2000));  // let the writer drain, then fill the hole
     if (R.curBlock >= 0) {
         if (R.curFill > 0) {
@@ -405,21 +366,13 @@ void release()
     R.nBlocks = 0;
     if (R.freeQ) vQueueDelete(R.freeQ);
     if (R.fullQ) vQueueDelete(R.fullQ);
-    if (R.cmdQ) vQueueDelete(R.cmdQ);
     if (R.done) vSemaphoreDelete(R.done);
-    R.freeQ = R.fullQ = R.cmdQ = nullptr;
+    R.freeQ = R.fullQ = nullptr;
     R.done                     = nullptr;
     if (R.fd >= 0) {
         close(R.fd);
         R.fd = -1;
     }
-}
-
-uint32_t send(Cmd c)
-{
-    if (!R.active || !R.cmdQ) return 0;
-    xQueueSend(R.cmdQ, &c, portMAX_DELAY);
-    return ++R.sent;
 }
 
 }  // namespace
@@ -445,15 +398,13 @@ bool Start(const std::string& path, int gainDb, std::string* err)
     R.probeEnergy[0] = R.probeEnergy[1] = 0;
     memset(R.peakHist, 0, sizeof(R.peakHist));
     R.peakIdx = 0;
-    R.paused  = false;
     R.failed  = false;
+    R.stopReq = false;
     R.written = 0;
     R.clipped = 0;
     R.peak = R.recentPeak = 0;
     R.slot                = -1;
     R.gapCount            = 0;
-    R.sent                = 0;
-    R.acked               = 0;
     R.gainDb              = std::max(0, std::min(kMaxGainDb, gainDb)) / 3 * 3;  // the PGA has 3 dB steps
 
     R.fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -465,9 +416,8 @@ bool Start(const std::string& path, int gainDb, std::string* err)
     if (i2s_create() != ESP_OK) return fail("I2S init failed");
     R.freeQ = xQueueCreate(kMaxBlocks, sizeof(int8_t));
     R.fullQ = xQueueCreate(kMaxBlocks + 1, sizeof(Item));
-    R.cmdQ  = xQueueCreate(8, sizeof(Cmd));
     R.done  = xSemaphoreCreateCounting(2, 0);
-    if (!R.freeQ || !R.fullQ || !R.cmdQ || !R.done) return fail("out of memory");
+    if (!R.freeQ || !R.fullQ || !R.done) return fail("out of memory");
     while (R.nBlocks < kMaxBlocks &&
            heap_caps_get_free_size(MALLOC_CAP_8BIT) > kHeapLeft + kStacks + kBlockBytes) {
         auto* p = (int16_t*)heap_caps_malloc(kBlockBytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
@@ -501,35 +451,17 @@ bool Start(const std::string& path, int gainDb, std::string* err)
     return true;
 }
 
-uint32_t Pause()
-{
-    return send(Cmd::Pause);
-}
-
-bool Paused(uint32_t ticket)
-{
-    return !R.active || (R.acked.load() >= ticket && R.paused.load());
-}
-
-void Resume()
-{
-    if (!R.active) return;
-    codec_mic_on(R.gainDb);  // the speaker reprogrammed the codec for playback
-    send(Cmd::Resume);
-}
-
 bool Stop(AudioStats* out, std::vector<AudioGap>* gaps)
 {
     if (!R.active) {
         if (out) *out = Stats();
         return false;
     }
-    send(Cmd::Stop);
+    R.stopReq = true;
     xSemaphoreTake(R.done, portMAX_DELAY);  // capture task
     xSemaphoreTake(R.done, portMAX_DELAY);  // writer task: file closed
     AudioStats st = Stats();
     st.active     = false;
-    st.paused     = false;
     if (out) *out = st;
     if (gaps) {
         gaps->clear();
@@ -537,7 +469,6 @@ bool Stop(AudioStats* out, std::vector<AudioGap>* gaps)
     }
     R.active = false;
     release();
-    M5.Speaker.end();  // a tone may be playing; end() + begin() makes the speaker reprogram the codec
     codec_mic_off();
     M5.Speaker.begin();
     ESP_LOGI(TAG, "stopped: %u samples, %u gaps, peak %.1f dBFS, %u clipped%s", (unsigned)st.samples,
@@ -549,7 +480,6 @@ AudioStats Stats()
 {
     AudioStats s;
     s.active     = R.active;
-    s.paused     = R.paused;
     s.failed     = R.failed;
     s.samples    = R.written;
     s.sampleRate = kSampleRate;
