@@ -29,6 +29,7 @@ typedef enum {
 typedef struct {
     bool open;          // roast_net_open() succeeded and close() was not called
     bool advertising;   // setup service visible, waiting for a browser
+    bool connecting;    // a browser is connected and pairing: its OS dialog asks for the passkey now
     bool paired;        // a browser is connected over an authenticated, encrypted link
     bool saved;         // Wi-Fi credentials are stored
     int setup_error;    // nonzero: Bluetooth setup could not start (NimBLE return code)

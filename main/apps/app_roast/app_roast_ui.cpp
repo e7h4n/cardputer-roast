@@ -1208,10 +1208,11 @@ void AppRoast::renderNetwork()
         dot(156, 59, 4, GO);
         check(156, 59, ui::WHITE, 2);
         text(164, 53, "paired", F12(), GO);
-    } else if (v.advertising) {
+    } else if (v.advertising || v.connecting) {
+        // The code stays up from advertising through pairing: the computer's dialog asks for it after connecting.
         char code[8];
         snprintf(code, sizeof(code), "%06u", v.passkey % 1000000);
-        text(151, 46, "code", F10(), DIM);
+        text(151, 46, v.connecting ? "enter now" : "code", F10(), v.connecting ? GO : DIM);
         text(W - 9, 54, code, F19(), INK, Datum::top_right);
     } else {
         text(151, 53, "starting…", F11(), DIM);

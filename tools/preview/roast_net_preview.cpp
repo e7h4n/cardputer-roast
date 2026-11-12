@@ -37,8 +37,9 @@ rn_view_t roast_net_view(void)
     uint32_t t = s_open ? GetHAL().millis() - s_t0 : 0;
     v.open        = s_open;
     v.passkey     = 482915;
-    v.advertising = s_open && t > 300 && t < 1500;
-    v.paired      = s_open && t >= 1500;
+    v.advertising = s_open && t > 300 && t < 1000;
+    v.connecting  = s_open && t >= 1000 && t < 2000;
+    v.paired      = s_open && t >= 2000;
     snprintf(v.device_name, sizeof v.device_name, "CardputerRoast-3F2A");
     if (t >= 3500) {
         v.state = RN_NET_CONNECTED;

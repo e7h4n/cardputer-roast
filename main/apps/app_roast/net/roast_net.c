@@ -458,6 +458,7 @@ static void setup_state(bool advertising, bool paired, bool new_code)
     portENTER_CRITICAL(&lock);
     view.advertising = advertising;
     view.paired      = paired;
+    view.connecting  = false;
     if (new_code) {
         view.passkey     = esp_random() % 1000000;
         view.setup_error = 0;
@@ -476,8 +477,10 @@ static int setup_gap(struct ble_gap_event *e, void *arg)
             } else {
                 status_length = dropbox_length = 0;
                 browser                        = e->connect.conn_handle;
+                // Connected: no longer advertising, and the passkey stays on screen while the OS dialog asks for it.
                 portENTER_CRITICAL(&lock);
-                view.advertising = false;  // connected: no longer advertising
+                view.advertising = false;
+                view.connecting  = true;
                 portEXIT_CRITICAL(&lock);
                 ble_gap_security_initiate(browser);
             }

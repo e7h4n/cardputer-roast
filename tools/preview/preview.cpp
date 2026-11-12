@@ -231,7 +231,9 @@ int main(int argc, char** argv)
     press("enter");
     step(600);
     shot("network_code");
-    step(3200);
+    step(500);
+    shot("network_pairing");
+    step(2700);
     shot("network_wifi");
     step(1200);
     shot("network_dropbox_busy");
