@@ -6,7 +6,7 @@
  * account in NVS, and proves it with an upload whose Dropbox content_hash must match ours.
  *
  * HTTPS: ESP-IDF certificate bundle, no redirects, SNTP first so certificates can be checked. Tokens, the secret and
- * the code are never logged or returned over GATT; private buffers are wiped after use. The 8 KB response buffer and
+ * the code are never logged or returned over GATT; private buffers are wiped after use. The 4 KB response buffer and
  * the access token are heap allocated while the setup screen is open (the device has no PSRAM).
  */
 #include "roast_dropbox.h"
@@ -36,7 +36,7 @@
 #define UPLOAD_URL "https://content.dropboxapi.com/2/files/upload"
 #define WRITE_SCOPE "files.content.write"
 #define CHECK_PATH "/cardputer-roast/connection-check.json"  // its own file: the app folder may be shared with a watch
-#define RESPONSE_MAX 8192
+#define RESPONSE_MAX 4096  // token and upload replies are ~1.5 KB
 #define TOKEN_MAX 2049
 #define HASH_BLOCK (4 * 1024 * 1024)
 
@@ -431,7 +431,7 @@ bool rn_dropbox_start(void)
     finished     = xSemaphoreCreateBinary();
     atomic_store(&busy, false);
     if (!response || !access_token || !commands || !finished ||
-        xTaskCreate(dropbox_task, "rn_dropbox", 12288, NULL, 3, &task) != pdPASS) {
+        xTaskCreate(dropbox_task, "rn_dropbox", 8192, NULL, 3, &task) != pdPASS) {
         task = NULL;
         rn_dropbox_stop();
         return false;
