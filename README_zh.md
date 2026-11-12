@@ -102,7 +102,7 @@ Roast 会自动搜索名为 `E-Meter…BLE` 的设备并连接。没有机器想
 "mic gain"（0–30 dB，每档 3 dB，默认 18 dB）是音频芯片的模拟增益。默认值是估的；如果总结页提示 "clipped"，就调低一些。
 
 ### Wi-Fi 和 Dropbox
-按 **O**（连接页也可以）› *network* 进入配置页。进入前会先断开烘豆机（配置要独占蓝牙），所以只能在风机关着时进入；按 **Esc** 退出配置并重新连接烘豆机。
+按 **O**（连接页也可以）› *network* 进入配置页。进入前会先断开烘豆机（配置要独占蓝牙），所以只能在风机关着时进入。按 **Esc** 退出配置，Roast 会重启（几秒钟）再重新连接烘豆机：蓝牙、Wi-Fi 和 HTTPS 用过之后内存碎片太多，不够开始烘焙和录音，重启能拿回完整的内存。
 
 1. 在电脑或安卓手机的 Chrome 里打开 https://e7h4n.github.io/coffee-watch/ ，点 **Connect watch**。
 2. 选 `CardputerRoast-XXXX`。系统配对弹窗要求输入时，输入 Cardputer 屏幕上的 6 位配对码。

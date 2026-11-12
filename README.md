@@ -140,7 +140,9 @@ summary says "clipped", lower it.
 
 ### Wi-Fi & Dropbox
 **O** (also from the Connect page) › *network* opens the setup screen. It closes the roaster link first (setup needs
-Bluetooth for itself), so it is only available with the fan off; **Esc** closes setup and reconnects to the roaster.
+Bluetooth for itself), so it is only available with the fan off. **Esc** closes setup and restarts Roast (a few
+seconds), which reconnects to the roaster with a clean heap: Bluetooth, Wi-Fi and TLS leave it too fragmented for a
+roast log and a recording.
 
 1. In Chrome on a computer or Android phone, open https://e7h4n.github.io/coffee-watch/ and press **Connect watch**.
 2. Pick `CardputerRoast-XXXX`. When the system pairing dialog asks, type the six-digit code on the Cardputer.

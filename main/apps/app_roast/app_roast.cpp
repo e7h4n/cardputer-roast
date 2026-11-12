@@ -1574,8 +1574,19 @@ void AppRoast::openNetwork()
 
 void AppRoast::closeNetwork()
 {
+    bool started = _netOpen;
     if (_netOpen) roast_net_close();
     _netOpen = false;
+    if (started) {
+        // BLE + Wi-Fi + TLS leave the heap fragmented (measured: largest block 15 KB afterwards), too little for the
+        // roast log (19 KB) and a recording. Restart into Roast with a clean heap; esp_restart() boots this app again,
+        // not the Launcher. Rules and the network setup are already saved in NVS.
+        _rules.save();
+        toast("Restarting…", INK, 5000);
+        render();
+        GetHAL().delay(150);
+        esp_restart();
+    }
     refreshNetSummary();
     startLink(_netWasSim);
     _screen = Screen::Connect;  // pollLink() moves on to Prep when the roaster answers
