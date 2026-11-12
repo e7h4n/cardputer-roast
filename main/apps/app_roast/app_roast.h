@@ -28,6 +28,8 @@ struct RoastRules {
     float greenG     = 200.f; // default batch
     float heatDrop   = 5.0f;  // heater drop around first crack that triggers a hint
     float curveOffset = 0.0f; // shift the whole curve (myERoast tempCompensation), -30..30
+    bool recAudio    = true;  // record the roast from charge to <id>.wav
+    int micGain      = 18;    // microphone PGA gain, 0..30 dB in 3 dB steps
     void load();
     void save() const;
 };
@@ -44,7 +46,8 @@ public:
 private:
     enum class Screen : uint8_t { Connect, Prep, Roast, Cool, Summary, Curves, Editor, Settings, Help };
     enum class Phase : uint8_t { Idle, FanOn, Roasting, Cooling, Done };
-    enum class Tone : uint8_t { Key, Info, Good, Warn, Alarm };
+    // Window = the drop-window chime (same notes as Good). While recording only Window, Warn and Alarm play.
+    enum class Tone : uint8_t { Key, Info, Good, Window, Warn, Alarm };
 
     struct Input {
         bool active = false;
@@ -70,6 +73,7 @@ private:
         float lo = 0, hi = 0, step = 1;
         const char* unit = "";
         bool simToggle = false;
+        bool* toggle   = nullptr;  // on/off row
     };
     std::vector<RuleRow> ruleRows();
 
@@ -166,6 +170,16 @@ private:
     void pollFanBarrier();
     std::string _saveMsg;
 
+    // ---- audio recording (roast_audio.h): charge -> end of the log
+    bool _recording     = false;
+    bool _recToneHold   = false;  // capture paused so a tone can use the codec
+    uint32_t _recTicket = 0;      // the Pause request the tone is waiting for
+    uint32_t _recStartMs = 0;
+    int32_t _markMs[(int)roast::Mark::Count];  // ms after charge, -1 = not set (for the recording's event times)
+    void startRecording();
+    void stopRecording();
+    void pollRecording();
+
     // ---- logic (app_roast.cpp)
     void startLink(bool sim);
     void pollLink();
@@ -231,7 +245,11 @@ private:
     void renderInput();
     void renderBanner();
     void renderToast();
-    void renderStatus();
+    int renderStatus(bool draw = true);  // returns the left edge of the status corner
+    int statusLeft()
+    {
+        return renderStatus(false);
+    }
     void renderBatch();
     void renderKeysBar();
     bool renderAlertBar();

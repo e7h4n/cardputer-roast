@@ -30,6 +30,9 @@ opens in Artisan. It runs as an app under the community [Launcher](https://githu
 - **Curve editor.** The phone app's eight nodes (Start, Dry, FC start/end, SC start/end, Drop, Total), edited on
   the device with a live curve beside the table, saved to the SD card.
 - **Logs.** Every roast is written as `.csv` (1 Hz), `.json` summary and `.alog` for Artisan.
+- **Recording.** The built-in microphone records the whole roast, from charge to the end of the log, to a `.wav`
+  beside the log. The summary JSON places every mark (dry, first crack, drop) in the recording, for listening back
+  to first crack or building a crack-detection dataset.
 - **Simulator.** A built-in thermal model for practising without a machine; a yellow SIM tag shows when it is on.
 - **Colour-keyed UI.** Colour = what it controls: fan blue, heat orange, curve/PID violet, marks yellow/brown, drop
   and alarms red, "go" green. The bottom row always shows the keys that work right now.
@@ -107,9 +110,27 @@ starts at F). After first crack it outlines the drop window. Exit is locked unti
 - **X X** stops the fan and opens the summary. **Enter** finishes the log and leaves the fan running; the summary
   then says "fan still on" and **X X** still stops it there (and on Prep afterwards).
 - **W** sets the roasted weight; **N** adds a note; **Enter** goes back to Prep.
+- The recording stops with the log: Enter or X X on the cooling page, 4 minutes after the drop, or on exit.
 
 The summary shows total time, development percentage and weight loss, the whole roast on the phase bar, first crack
-and the rise to drop, RoR at first crack and 30 s later, peak heater output and curve-following error.
+and the rise to drop, RoR at first crack and 30 s later, peak heater output and curve-following error. The bottom
+line shows the recording's length, with "clipped" when the microphone overloaded (lower *mic gain*) and "cut" when
+the SD card failed during the roast.
+
+### Recording
+A red **REC** tag in the status corner shows while the roast is being recorded (rule *record roast*, on by
+default). Format: WAV, 32 kHz, 16-bit, mono, about 3.8 MB per minute; a 15-minute roast with cooling is about
+60 MB. 32 kHz covers 0–16 kHz, which includes the 2–16 kHz band used in first-crack detection, and leaves enough
+memory for the SD write buffer next to BLE.
+
+The microphone and the speaker share one codec and its clocks, so they cannot work at the same time. While
+recording, key clicks and confirmation chimes are silent; warnings, alarms and the drop-window chime still play.
+For each of those tones capture pauses for a fraction of a second and the gap is filled with silence, so the file
+stays on the roast clock: second N of the WAV is second N after the recording started. The JSON lists every inserted
+silence.
+
+*Mic gain* (0–30 dB in 3 dB steps, default 18 dB) is the codec's analog gain. The default is an estimate; if the
+summary says "clipped", lower it.
 
 ### Fan floors
 The roaster's own minimum fan register reads 50 %. A short press of ↓ stops at **50 %** and again at **40 %**.
@@ -132,6 +153,8 @@ shown underneath, and range rules (window, rise) take the lower then the upper e
 | Start fan | 53 % |
 | Cold temperature | 40 °C |
 | Curve offset | 0 °C |
+| Record roast | on |
+| Mic gain | 18 dB |
 
 The bottom bar turns green inside the drop window, red (and keeps beeping) past the development limit or at the
 drop-now temperature, and yellow for a heater pinned at 95 % or more for 20 s, heater output falling after first
@@ -169,6 +192,7 @@ The card must be FAT32. Without one, logs live only in memory until the summary 
 | `roast/logs/<id>.csv` | One row per second: `t,bt,target,heat,fan,ror,pid,machine_t`. Marks and actions are lines starting with `#`. |
 | `roast/logs/<id>.json` | Roast summary. |
 | `roast/logs/<id>.alog` | Opens in Artisan. |
+| `roast/logs/<id>.wav` | The roast's recording (32 kHz, 16-bit, mono). Samples start at byte 512. |
 
 Curve JSON:
 ```json
@@ -188,6 +212,19 @@ Curve JSON:
 - `t` is in seconds and `c` is in °C.
 - Leave out `c` to keep the preset's temperature at that time.
 - Tags are `CHARGE`, `DRY`, `FCs`, `FCe`, `SCs`, `SCe` and `DROP`.
+
+The summary JSON has an `audio` object when the roast was recorded:
+```json
+"audio": {
+  "file": "R0012.wav", "format": "wav pcm 16-bit mono", "sample_rate": 32000, "mic_gain_db": 18,
+  "start_ms_after_charge": 4, "duration_s": 812.37, "peak_dbfs": -7.9, "clipped_samples": 0, "buffer_ms": 896,
+  "i2s_slot": "right",
+  "events_ms": {"charge": 0, "dry": 284996, "fc_start": 471512, "fc_end": 529870, "drop": 569004},
+  "silence": [{"at_ms": 512304, "ms": 431, "why": "tone"}]
+}
+```
+`events_ms` are positions in the WAV file. `silence` lists the gaps filled with zeros: `tone` while a warning played,
+`overrun` when the SD card stalled for longer than the buffer (`buffer_ms`).
 
 ## Protocol notes (E-Meter621 BLE)
 - **GATT:** service `FFF0`.
@@ -276,7 +313,12 @@ The console accepts:
 - key presses and holds, and typed text;
 - full-screen (240×135) screenshots;
 - `quiet`, `ping` and `regs`;
-- SD listing (`ls`), file dump (`cat`), file removal under `/sdcard/roast/` (`rm`) and card info (`sdinfo`).
+- SD listing (`ls`), file dump (`cat`), file removal under `/sdcard/roast/` (`rm`) and card info (`sdinfo`);
+- `rec` (recorder state and levels) and `b64 <file> <offset> <length>` (a file range in base64).
+
+`tools/pull_audio.py <id> [seconds]` pulls the start of a recording over USB and prints peak and RMS level and the
+share of inserted silence for every second, with the marks from the JSON. It manages about 1 s of audio per
+1–2 s, so take the SD card out for whole roasts.
 
 ## License
 [MIT](LICENSE). Built on the M5Stack [M5Cardputer-UserDemo](https://github.com/m5stack/M5Cardputer-UserDemo)

@@ -6,12 +6,15 @@
  *   shot           dump the 240x135 screen canvas: "SHOT w h" + one hex line per row (RGB565, as stored) + "ENDSHOT"
  *   hold <key> <ms>, quiet, ping, regs
  *   ls <dir>, cat <file>, rm <file under /sdcard/roast/>, sdinfo, sdformat FORMAT-SD-CARD
+ *   rec            recorder state: "REC state=... samples=... peak_dbfs=... recent_dbfs=... ..."
+ *   b64 <file> <offset> <length>   base64 of a byte range (pull a WAV over USB: tools/pull_audio.py)
  */
 #include "roast_debug.h"
 #include <hal/hal.h>
 #include <apps/utils/audio/audio.h>
 #include "roast_curve.h"
 #include "roast_link.h"
+#include "roast_audio.h"
 #include <dirent.h>
 #include <sys/stat.h>
 #include <driver/usb_serial_jtag.h>
@@ -255,6 +258,42 @@ void DebugPollMain()
             printf("OK rm %s\n", p.c_str());
         } else {
             printf("ERR rm %s\n", p.c_str());
+        }
+        fflush(stdout);
+    } else if (line == "rec") {
+        AudioStats st = rec::Stats();
+        printf("REC state=%s samples=%u secs=%.1f peak_dbfs=%.1f recent_dbfs=%.1f clipped=%u gaps=%u buffer_ms=%u "
+               "slot=%d gain=%d failed=%d heap=%u largest=%u\n",
+               !st.active ? "off" : (st.paused ? "paused" : "running"), (unsigned)st.samples,
+               (double)st.samples / st.sampleRate, PeakDbfs(st.peak), PeakDbfs(st.recentPeak), (unsigned)st.clipped,
+               (unsigned)st.gapCount, (unsigned)st.bufferMs, st.slot, st.gainDb, st.failed ? 1 : 0,
+               (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        fflush(stdout);
+    } else if (line.rfind("b64 ", 0) == 0) {  // b64 <file> <offset> <length>: one line "B64 <n> <data>"
+        static char path[100];
+        long off = 0, len = 0;
+        if (sscanf(line.c_str() + 4, "%99s %ld %ld", path, &off, &len) != 3 || off < 0 || len <= 0 || len > 3072) {
+            printf("ERR b64 <file> <offset> <length<=3072>\n");
+        } else if (FILE* f = fopen(path, "rb")) {
+            static uint8_t buf[3072];
+            static char out[4100];
+            size_t n = 0;
+            if (fseek(f, off, SEEK_SET) == 0) n = fread(buf, 1, (size_t)len, f);
+            fclose(f);
+            static const char* tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            size_t o = 0;
+            for (size_t i = 0; i < n; i += 3) {
+                uint32_t v = buf[i] << 16 | (i + 1 < n ? buf[i + 1] << 8 : 0) | (i + 2 < n ? buf[i + 2] : 0);
+                out[o++]   = tbl[(v >> 18) & 63];
+                out[o++]   = tbl[(v >> 12) & 63];
+                out[o++]   = i + 1 < n ? tbl[(v >> 6) & 63] : '=';
+                out[o++]   = i + 2 < n ? tbl[v & 63] : '=';
+            }
+            out[o] = 0;
+            printf("B64 %u %s\n", (unsigned)n, out);
+        } else {
+            printf("ERR b64 cannot open %s\n", path);
         }
         fflush(stdout);
     } else if (line == "sdinfo") {
