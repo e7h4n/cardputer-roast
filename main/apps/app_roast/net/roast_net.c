@@ -17,6 +17,7 @@
 #include "esp_netif.h"
 #include "esp_random.h"
 #include "esp_wifi.h"
+#include "esp_heap_caps.h"
 #include "nvs.h"
 #include "mbedtls/platform_util.h"
 #include "freertos/FreeRTOS.h"
@@ -557,8 +558,17 @@ static void host_task(void *param)
     nimble_port_freertos_deinit();
 }
 
+// The BLE controller asserts (and the chip resets) when its allocations fail, so it starts first, and only with room
+// to spare; Wi-Fi after it fails cleanly instead. Measured need is unknown yet: these floors are conservative.
+#define BLE_MIN_FREE (40 * 1024)
+#define WIFI_MIN_FREE (36 * 1024)
+
 static bool ble_start(void)
 {
+    size_t free_now = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    ESP_LOGI(TAG, "heap before BLE: %u free, %u largest", (unsigned)free_now,
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    if (free_now < BLE_MIN_FREE) return false;
     if (nimble_port_init() != ESP_OK) return false;
     ble_hs_cfg.sync_cb         = on_sync;
     ble_hs_cfg.reset_cb        = on_reset;
@@ -617,6 +627,10 @@ static bool wifi_start(void)
     }
     station_interface = esp_netif_create_default_wifi_sta();  // destroyed again in wifi_stop()
     if (!station_interface) return false;
+    size_t free_now = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    ESP_LOGI(TAG, "heap before Wi-Fi: %u free, %u largest", (unsigned)free_now,
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    if (free_now < WIFI_MIN_FREE) return false;
     network_queue = xQueueCreate(8, sizeof(network_command_t));
     network_done  = xSemaphoreCreateBinary();
     if (!network_queue || !network_done) return false;
@@ -668,9 +682,12 @@ bool roast_net_open(void)
     portEXIT_CRITICAL(&lock);
     request_id = 0;
     atomic_store(&requested_open, true);
-    bool ok = wifi_start();
+    bool ok = ble_start();  // first: the BLE controller cannot fail gracefully
+    if (ok) ok = wifi_start();
     if (ok) ok = rn_dropbox_start();
-    if (ok) ok = ble_start();
+    ESP_LOGI(TAG, "setup %s; heap %u free, %u largest", ok ? "running" : "FAILED",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     if (!ok) {
         ESP_LOGE(TAG, "setup could not start");
         atomic_store(&opened, true);  // let close() release what did start

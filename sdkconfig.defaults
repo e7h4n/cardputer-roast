@@ -35,3 +35,14 @@ CONFIG_FATFS_API_ENCODING_UTF_8=y
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
 CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y
+# Wi-Fi is used only on the setup screen (and later for sync), never during a roast: give its IRAM speed-ups back to
+# the heap (IRAM and DRAM share the S3's internal SRAM) and keep its buffers small. Without this, linking Wi-Fi cut the
+# idle heap from ~101 KB to ~48 KB and the BLE controller could not start next to Wi-Fi (BLE_INIT: Malloc failed).
+CONFIG_ESP_WIFI_IRAM_OPT=n
+CONFIG_ESP_WIFI_RX_IRAM_OPT=n
+CONFIG_LWIP_IRAM_OPTIMIZATION=n
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
