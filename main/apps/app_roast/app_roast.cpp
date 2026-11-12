@@ -5,6 +5,7 @@
 #include "app_roast.h"
 #include "roast_debug.h"
 #include "roast_audio.h"
+#include "net/roast_net.h"
 #include <apps/utils/audio/audio.h>
 #include <hal/utils/settings/settings.h>
 #include <mooncake_log.h>
@@ -118,6 +119,8 @@ void AppRoast::onClose()
     if (_keySlot >= 0) GetHAL().keyboard.onKeyEvent.disconnect(_keySlot);
     _keySlot = -1;
     stopRecording();
+    if (_netOpen) roast_net_close();
+    _netOpen = false;
     if (_session.active()) {
         std::string err;
         _session.finalize(&err);
@@ -680,6 +683,9 @@ void AppRoast::onKey(const Keyboard::KeyEvent_t& e)
         case Screen::Help:
             if (code == KEY_ESC || code == KEY_ENTER || code == KEY_H) _screen = _backScreen;
             break;
+        case Screen::Network:
+            keyNetwork(code);
+            break;
     }
 }
 
@@ -687,6 +693,10 @@ bool AppRoast::keyConnect(int code)
 {
     if (code == KEY_D) {
         setSimulator(true);
+        return true;
+    }
+    if (code == KEY_O) {  // rules, including Wi-Fi & Dropbox setup, also while the roaster is off
+        openSettings();
         return true;
     }
     if (code == KEY_ENTER || code == KEY_R) {
@@ -831,9 +841,7 @@ bool AppRoast::keyPrep(int code, bool shift)
             openBatch(1);
             return true;
         case KEY_O:
-            _setSel     = 0;
-            _setEditing = false;
-            _screen     = Screen::Settings;
+            openSettings();
             return true;
         case KEY_TAB:
             if (_hasCurve)
@@ -1364,6 +1372,11 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     recRow.toggle = &_rules.recAudio;
     v.push_back(recRow);
     rowI("mic gain", &_rules.micGain, nullptr, 0, rec::kMaxGainDb, 3, " dB");
+    group("SYNC", CURVE);
+    RuleRow netRow;
+    netRow.label   = "network";
+    netRow.network = true;
+    v.push_back(netRow);
     group("MODE", SIM);
     RuleRow sim;
     sim.label     = "simulator";
@@ -1396,6 +1409,10 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
                     setSimulator(!(_link && _link->isSimulated()));
                     return true;
                 }
+                if (r.network) {
+                    openNetwork();
+                    return true;
+                }
                 if (r.toggle) {
                     *r.toggle = !*r.toggle;
                     _rules.save();
@@ -1411,7 +1428,7 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
                 return true;
             case KEY_ESC:
                 _rules.save();
-                _screen = Screen::Prep;
+                _screen = _setBack;
                 return true;
             default:
                 return false;
@@ -1511,6 +1528,68 @@ void AppRoast::keyInput(const Keyboard::KeyEvent_t& e, int code)
     } else if (c >= 32 && c < 127) {
         _input.buf += c;
     }
+}
+
+/* ------------------------- Wi-Fi & Dropbox setup ------------------------- */
+void AppRoast::openSettings()
+{
+    _setBack    = _screen == Screen::Connect ? Screen::Connect : Screen::Prep;
+    _setSel     = 0;
+    _setEditing = false;
+    refreshNetSummary();
+    _screen = Screen::Settings;
+}
+
+void AppRoast::refreshNetSummary()
+{
+    char ssid[33];
+    bool wifi    = roast_net_saved_wifi(ssid);
+    bool dropbox = roast_net_saved_dropbox();
+    if (!wifi && !dropbox)
+        _netSummary = "set up Wi-Fi & Dropbox";
+    else
+        _netSummary = std::string(wifi ? ssid : "no Wi-Fi") + (dropbox ? " · Dropbox" : " · no Dropbox");
+}
+
+// Setup needs NimBLE for itself (and the memory BLE + Wi-Fi + TLS take), so the roaster link closes meanwhile.
+void AppRoast::openNetwork()
+{
+    if (_phase != Phase::Idle || _fanRunning) {
+        toast("Stop the fan before network setup", WARN);
+        return;
+    }
+    _netWasSim = _link && _link->isSimulated();
+    if (_link) {
+        g_activeLink = nullptr;
+        _link->clearQueue();
+        _link->end();
+        _link.reset();
+    }
+    GetHAL().setRoastBleActive(false);
+    _linkState = _prevLinkState = LinkState::Off;
+    _netOpen = roast_net_open();
+    if (!_netOpen) toast("Setup could not start", DROP, 3000);
+    _screen = Screen::Network;
+}
+
+void AppRoast::closeNetwork()
+{
+    if (_netOpen) roast_net_close();
+    _netOpen = false;
+    refreshNetSummary();
+    startLink(_netWasSim);
+    _screen = Screen::Connect;  // pollLink() moves on to Prep when the roaster answers
+}
+
+bool AppRoast::keyNetwork(int code)
+{
+    if (code != KEY_ESC) return false;
+    if (_netOpen && roast_net_busy()) {
+        toast("Dropbox is busy: wait a moment", WARN);
+        return true;
+    }
+    closeNetwork();
+    return true;
 }
 
 /* ------------------------------- recording ------------------------------- */

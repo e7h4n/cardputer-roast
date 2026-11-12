@@ -20,6 +20,7 @@ Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE*
 - **曲线编辑器。** 和手机 App 一样的 8 个节点（初始、脱水、一爆始/末、二爆始/末、排豆、总用时），直接在设备上编辑，表格旁边实时显示曲线，保存到 SD 卡。
 - **烘焙记录。** 每锅都会保存 `.csv`（每秒一行）、`.json` 总结，以及可导入 Artisan 的 `.alog`。
 - **全程录音。** 用机身麦克风从投豆录到记录结束，`.wav` 和曲线记录放在一起。总结 JSON 里标出每个打点（脱水、一爆、排豆）在录音里的位置，方便回听一爆，或者整理一爆识别的数据集。
+- **Wi-Fi 和 Dropbox 配对。** 和手表一样，在 Chrome 里打开 [Coffee Watch 配置页](https://e7h4n.github.io/coffee-watch/)，通过加密蓝牙配好 Wi-Fi 和你自己的 Dropbox app（App folder 权限）。曲线和记录的同步是下一步。
 - **模拟器。** 内置简单的热学模型，没有机器也能练习；开启时右上角显示黄色 SIM 标签。
 - **按功能着色的界面。** 颜色 = 它控制什么：风机蓝、火力橙、曲线/PID 紫、打点黄/棕、排豆和报警红、"可以进行"绿。底栏永远显示当前能按的键。
 
@@ -99,6 +100,18 @@ Roast 会自动搜索名为 `E-Meter…BLE` 的设备并连接。没有机器想
 录音时间轴始终和烘焙计时对齐：WAV 的第 N 秒就是开始录音后的第 N 秒。如果 SD 卡卡住的时间超过写入缓冲，丢掉的采样会用同样数量的静音补上，每段都记在 JSON 里。
 
 "mic gain"（0–30 dB，每档 3 dB，默认 18 dB）是音频芯片的模拟增益。默认值是估的；如果总结页提示 "clipped"，就调低一些。
+
+### Wi-Fi 和 Dropbox
+按 **O**（连接页也可以）› *network* 进入配置页。进入前会先断开烘豆机（配置要独占蓝牙），所以只能在风机关着时进入；按 **Esc** 退出配置并重新连接烘豆机。
+
+1. 在电脑或安卓手机的 Chrome 里打开 https://e7h4n.github.io/coffee-watch/ ，点 **Connect watch**。
+2. 选 `CardputerRoast-XXXX`。系统配对弹窗要求输入时，输入 Cardputer 屏幕上的 6 位配对码。
+3. 填 2.4 GHz 的 Wi-Fi。Cardputer 拿到 IP 才算连上，这时才会保存。
+4. 关联 Dropbox：在 [App Console](https://www.dropbox.com/developers/apps) 建一个 Scoped access、App folder 权限的 app，勾上 `files.content.write`、`files.content.read` 和 `files.metadata.read`，在网页上填它的 App key 和 App secret，到 Dropbox 点允许，把页面显示的授权码贴回来。Cardputer 自己用授权码换长期 token，并往 app 文件夹里的 `/cardputer-roast/connection-check.json` 试传一次来验证。也可以直接用 Coffee Watch 的 Dropbox app，两台设备共用同一个 app 文件夹。
+
+协议、数据包和状态都和 Coffee Watch 一样（[说明](https://github.com/e7h4n/coffee-watch/blob/main/spec/dropbox.md)），代码移植自它的固件。账号信息只通过加密、已认证的蓝牙连接发送，保存在 NVS（`rn_wifi`、`rn_dropbox`；普通 flash，没有开 flash 加密），不会写进日志，也不能通过蓝牙读出来。Wi-Fi、蓝牙配置服务和 TLS 缓冲只在这个页面打开时运行。网页上的 Remove Dropbox 只会清掉 Cardputer 上的授权；要彻底撤销，到 Dropbox 设置的 Connected apps 里断开。
+
+规则页会显示已保存的 Wi-Fi 和 Dropbox 是否已关联。Dropbox 配置时会通过 SNTP 对时，之后新记录的编号改成日期（`YYYYMMDD-HHMMSS`，UTC），不再是 `R####`，直到下次断电。
 
 ### 最低风力保护
 烘豆机自己的最低风力寄存器是 50%。短按 ↓ 会停在 **50%**，再往下会停在 **40%**。要降到某道门槛以下，先停在门槛上，再长按 ↓ 至少 0.6 秒，会降到门槛下一档；之后短按又能继续往下，直到下一道门槛。待机时调开风预设、以及 0.1% 微调，都遵守同样的规则。
@@ -260,7 +273,8 @@ python3 tools/rdbg.py raw 'ls /sdcard/roast/logs' 2
 - 整屏（240×135）截图；
 - `quiet`、`ping`、`regs`；
 - SD 卡列目录（`ls`）、读文件（`cat`）、删除 `/sdcard/roast/` 下的文件（`rm`）、查看卡信息（`sdinfo`）；
-- `rec`（录音状态和电平）、`b64 <文件> <偏移> <长度>`（以 base64 读取文件的一段）。
+- `rec`（录音状态和电平）、`b64 <文件> <偏移> <长度>`（以 base64 读取文件的一段）；
+- `net`（Wi-Fi 和 Dropbox 配置状态、剩余内存；不含账号信息）。
 
 `tools/pull_audio.py <编号> [秒数]` 通过 USB 拉取录音开头的一段，逐秒打印峰值、RMS 电平和补静音的比例，并标出 JSON 里的打点。速度大约每 1–2 秒拉 1 秒音频，整锅录音建议直接拔 SD 卡读。
 

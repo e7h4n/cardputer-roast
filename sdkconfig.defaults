@@ -29,3 +29,9 @@ CONFIG_TINYUSB_HID_COUNT=1
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
 CONFIG_FATFS_API_ENCODING_UTF_8=y
+
+# Wi-Fi & Dropbox setup (no PSRAM): TLS record buffers sized per message, config and CA data freed after the
+# handshake. Wi-Fi, BLE and TLS only run together while the setup screen is open, with the roaster link closed.
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y

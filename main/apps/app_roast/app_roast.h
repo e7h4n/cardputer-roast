@@ -44,7 +44,7 @@ public:
     void onClose() override;
 
 private:
-    enum class Screen : uint8_t { Connect, Prep, Roast, Cool, Summary, Curves, Editor, Settings, Help };
+    enum class Screen : uint8_t { Connect, Prep, Roast, Cool, Summary, Curves, Editor, Settings, Help, Network };
     enum class Phase : uint8_t { Idle, FanOn, Roasting, Cooling, Done };
     enum class Tone : uint8_t { Key, Info, Good, Warn };
 
@@ -73,6 +73,7 @@ private:
         const char* unit = "";
         bool simToggle = false;
         bool* toggle   = nullptr;  // on/off row
+        bool network   = false;    // opens the Wi-Fi & Dropbox setup screen
     };
     std::vector<RuleRow> ruleRows();
 
@@ -166,6 +167,18 @@ private:
     void fanDown(float step);
     void pollFanBarrier();
     std::string _saveMsg;
+
+    // ---- Wi-Fi & Dropbox setup (net/roast_net.h): pairs with the Coffee Watch setup page over Bluetooth
+    bool _netOpen    = false;  // setup running: the roaster link is closed meanwhile
+    bool _netWasSim  = false;  // reopen the simulator rather than BLE when setup closes
+    Screen _setBack  = Screen::Prep;  // where Esc on the rules page returns
+    std::string _netSummary;          // rules page value: saved network and Dropbox state
+    void openNetwork();
+    void closeNetwork();
+    void refreshNetSummary();
+    bool keyNetwork(int code);
+    void renderNetwork();
+    void openSettings();
 
     // ---- audio recording (roast_audio.h): charge -> end of the log
     bool _recording      = false;

@@ -8,6 +8,7 @@
  */
 #include "app_roast.h"
 #include "fonts/roast_fonts.h"
+#include "net/roast_net.h"
 #include <cmath>
 #include <climits>
 #include <cstring>
@@ -324,6 +325,9 @@ void AppRoast::render()
         case Screen::Help:
             renderHelp();
             break;
+        case Screen::Network:
+            renderNetwork();
+            break;
     }
     renderStatus();
     if (_batch.active) renderBatch();
@@ -431,7 +435,7 @@ void AppRoast::renderConnect()
             text(W - 42, 104, std::to_string(r.rssi) + " dBm", F10(), DIM, Datum::middle_right);
         }
     }
-    keybar({{"Enter", INK, "retry"}, {"D", SIM, "simulator"}, {"H", FAINT, "keys"}, {"Esc", FAINT, "exit"}});
+    keybar({{"Enter", INK, "retry"}, {"D", SIM, "simulator"}, {"O", INK, "rules"}, {"Esc", FAINT, "exit"}});
 }
 
 /* ================================================================== prep */
@@ -1129,6 +1133,7 @@ void AppRoast::renderSettings()
     auto value = [&](const RuleRow& r, bool live) {
         if (r.simToggle) return std::string(_link && _link->isSimulated() ? "on" : "off");
         if (r.toggle) return std::string(*r.toggle ? "on" : "off");
+        if (r.network) return clipTo(_netSummary, W - 30 - tw(r.label, F12()), F12());
         bool isInt = whole(r);
         float v0   = live ? _setVal[0] : (r.f[0] ? *r.f[0] : (float)*r.i[0]);
         if (r.f[1] || r.i[1]) {
@@ -1176,6 +1181,80 @@ void AppRoast::renderSettings()
         keybar({{"← →", INK, "±"}, {"0-9", INK, "type"}, {"Enter", GO, "ok"}, {"Esc", FAINT, "cancel"}});
     else
         keybar({{"↑ ↓", INK, "select"}, {"Enter", INK, "change"}, {"Esc", FAINT, "back"}});
+}
+
+/* ======================================================== Wi-Fi & Dropbox */
+// Pair from the Coffee Watch setup page: it finds this device by its Bluetooth service, asks for the code shown here,
+// then sends Wi-Fi details and the Dropbox app key, secret and authorization code.
+void AppRoast::renderNetwork()
+{
+    rn_view_t v = roast_net_view();
+    text(4, 0, "Wi-Fi & Dropbox", F16(), INK);
+    if (!_netOpen || v.setup_error) {
+        text(4, 24, "Bluetooth setup could not start.", F12(), DROP);
+        char b[48];
+        snprintf(b, sizeof(b), "error %d · Esc and try again", v.setup_error);
+        text(4, 40, b, F11(), DIM);
+        keybar({{"Esc", FAINT, "close"}});
+        return;
+    }
+    // how to pair: the page, this device's name, and the code the pairing dialog asks for
+    text(4, 18, "In Chrome (computer or Android) open", F10(), DIM);
+    text(4, 29, "e7h4n.github.io/coffee-watch", F12(), INK);
+    text(4, 46, "Connect watch, pick", F10(), DIM);
+    text(4, 57, clipTo(v.device_name[0] ? v.device_name : "CardputerRoast", 138, F11()), F11(), INK);
+    rbox(146, 44, W - 5, 74, 5, CARD);
+    if (v.paired) {
+        dot(156, 59, 4, GO);
+        check(156, 59, ui::WHITE, 2);
+        text(164, 53, "paired", F12(), GO);
+    } else if (v.advertising) {
+        char code[8];
+        snprintf(code, sizeof(code), "%06u", v.passkey % 1000000);
+        text(151, 46, "code", F10(), DIM);
+        text(W - 9, 54, code, F19(), INK, Datum::top_right);
+    } else {
+        text(151, 53, "starting…", F11(), DIM);
+    }
+    // Wi-Fi
+    static const char* wifiText[] = {"not set", "joining", "", "failed", "disconnected"};
+    uint32_t wc = v.state == RN_NET_CONNECTED ? GO : (v.state == RN_NET_CONNECTING ? WARN : (v.state == RN_NET_FAILED ? DROP : FAINT));
+    std::string w;
+    if (v.state == RN_NET_CONNECTED)
+        w = std::string(v.ssid) + " · " + v.ip;
+    else if (v.state == RN_NET_UNCONFIGURED)
+        w = "not set";
+    else
+        w = std::string(wifiText[v.state]) + (v.ssid[0] ? std::string(" ") + v.ssid : "") +
+            (v.state == RN_NET_FAILED ? " (" + std::to_string(v.reason) + ")" : "");
+    dot(8, 87, 3, wc);
+    text(15, 81, "Wi-Fi", F12(), INK);
+    text(78, 82, clipTo(w, W - 82, F11()), F11(), v.state == RN_NET_CONNECTED ? INK : DIM);
+    // Dropbox
+    std::string ds = v.dropbox, d;
+    uint32_t dc    = FAINT;
+    if (ds == "connected") {
+        d  = "upload verified";
+        dc = GO;
+    } else if (ds == "saved") {
+        d  = "authorization saved";
+        dc = GO;
+    } else if (ds == "authorizing") {
+        d  = "exchanging the code…";
+        dc = WARN;
+    } else if (ds == "verifying") {
+        d  = "checking an upload…";
+        dc = WARN;
+    } else if (ds == "failed") {
+        d  = std::string("failed: ") + v.dropbox_error;
+        dc = DROP;
+    } else {
+        d = "not linked";
+    }
+    dot(8, 102, 3, dc);
+    text(15, 96, "Dropbox", F12(), INK);
+    text(78, 97, clipTo(d, W - 82, F11()), F11(), ds == "failed" ? DROP : (dc == GO ? INK : DIM));
+    keybar({{"Esc", FAINT, _netOpen && roast_net_busy() ? "wait…" : "close · back to the roaster"}});
 }
 
 /* ================================================================== help */

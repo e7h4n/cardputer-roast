@@ -3,6 +3,7 @@ file(GLOB_RECURSE MY_SRCS
     "./hal/*.cc"
     "./hal/*.cpp"
     "./apps/app_roast/*.cpp"
+    "./apps/app_roast/*.c"
     "./apps/utils/*.c"
     "./apps/utils/*.cpp"
 )

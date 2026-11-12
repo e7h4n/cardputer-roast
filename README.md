@@ -33,6 +33,9 @@ opens in Artisan. It runs as an app under the community [Launcher](https://githu
 - **Recording.** The built-in microphone records the whole roast, from charge to the end of the log, to a `.wav`
   beside the log. The summary JSON places every mark (dry, first crack, drop) in the recording, for listening back
   to first crack or building a crack-detection dataset.
+- **Wi-Fi & Dropbox pairing.** Paired from the [Coffee Watch setup page](https://e7h4n.github.io/coffee-watch/)
+  in Chrome over authenticated Bluetooth, like the watch: Wi-Fi network, then your own Dropbox app (App folder access).
+  Syncing curves and logs comes next.
 - **Simulator.** A built-in thermal model for practising without a machine; a yellow SIM tag shows when it is on.
 - **Colour-keyed UI.** Colour = what it controls: fan blue, heat orange, curve/PID violet, marks yellow/brown, drop
   and alarms red, "go" green. The bottom row always shows the keys that work right now.
@@ -134,6 +137,28 @@ lists each such gap.
 
 *Mic gain* (0–30 dB in 3 dB steps, default 18 dB) is the codec's analog gain. The default is an estimate; if the
 summary says "clipped", lower it.
+
+### Wi-Fi & Dropbox
+**O** (also from the Connect page) › *network* opens the setup screen. It closes the roaster link first (setup needs
+Bluetooth for itself), so it is only available with the fan off; **Esc** closes setup and reconnects to the roaster.
+
+1. In Chrome on a computer or Android phone, open https://e7h4n.github.io/coffee-watch/ and press **Connect watch**.
+2. Pick `CardputerRoast-XXXX`. When the system pairing dialog asks, type the six-digit code on the Cardputer.
+3. Enter a 2.4 GHz Wi-Fi network. It counts (and is saved) only once the Cardputer has an IP address.
+4. Link Dropbox: in the [App Console](https://www.dropbox.com/developers/apps) create an app with Scoped access and
+   App folder access, enable `files.content.write`, `files.content.read` and `files.metadata.read`, enter its App key
+   and App secret, allow access on Dropbox and paste the code it shows. The Cardputer exchanges the code for a
+   refresh token itself and checks it with an upload to `/cardputer-roast/connection-check.json` in the app folder.
+   You can reuse the Coffee Watch Dropbox app: both devices then share one app folder.
+
+The protocol, packets and status are the Coffee Watch ones ([spec](https://github.com/e7h4n/coffee-watch/blob/main/spec/dropbox.md)),
+ported from its firmware. Credentials go only over the authenticated, encrypted Bluetooth link, are stored in NVS
+(`rn_wifi`, `rn_dropbox`; plain flash, no flash encryption) and are never logged or readable over Bluetooth. Wi-Fi,
+Bluetooth setup and the TLS buffers run only while this screen is open. Removing Dropbox on the page erases it from
+the Cardputer; revoke access under Connected apps in your Dropbox settings.
+
+The rules page shows the saved network and whether Dropbox is linked. Once Dropbox setup has set the clock (SNTP),
+new log ids are dated (`YYYYMMDD-HHMMSS`, UTC) instead of `R####`, until the next power-off.
 
 ### Fan floors
 The roaster's own minimum fan register reads 50 %. A short press of ↓ stops at **50 %** and again at **40 %**.
@@ -317,7 +342,8 @@ The console accepts:
 - full-screen (240×135) screenshots;
 - `quiet`, `ping` and `regs`;
 - SD listing (`ls`), file dump (`cat`), file removal under `/sdcard/roast/` (`rm`) and card info (`sdinfo`);
-- `rec` (recorder state and levels) and `b64 <file> <offset> <length>` (a file range in base64).
+- `rec` (recorder state and levels) and `b64 <file> <offset> <length>` (a file range in base64);
+- `net` (Wi-Fi & Dropbox setup state and heap; no credentials).
 
 `tools/pull_audio.py <id> [seconds]` pulls the start of a recording over USB and prints peak and RMS level and the
 share of inserted silence for every second, with the marks from the JSON. It manages about 1 s of audio per

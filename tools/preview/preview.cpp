@@ -224,6 +224,26 @@ int main(int argc, char** argv)
     shot("keys");
     press("esc");
 
+    // Wi-Fi & Dropbox setup: the rules row, then a whole (simulated) pairing
+    press("o");
+    for (int i = 0; i < 12; i++) press("down", 60);
+    shot("rules_sync");
+    press("enter");
+    step(600);
+    shot("network_code");
+    step(3200);
+    shot("network_wifi");
+    step(1200);
+    shot("network_dropbox_busy");
+    step(3000);
+    shot("network_done");
+    press("esc");
+    step(3000);  // back on Connect, then Prep once the (preview) roaster answers
+    press("o");
+    for (int i = 0; i < 12; i++) press("down", 60);
+    shot("rules_sync_saved");
+    press("esc");
+
     press("s");
     shot("fan_on");
     step(4000);
@@ -286,7 +306,7 @@ int main(int argc, char** argv)
     shot("prep_after");
 
     press("o");
-    for (int i = 0; i < 12; i++) press("down", 60);
+    for (int i = 0; i < 20; i++) press("down", 60);
     press("enter");
     shot("prep_simulator");
     press("esc");
