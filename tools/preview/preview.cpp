@@ -187,7 +187,7 @@ static int fcScenario(int floorOn, int lookahead, const std::string& tag, int ca
     AppRoast app;
     g_app = &app;
     app.onOpen();
-    step(3500);  // link up -> Prep
+    step(5500);  // boot sync, link up -> Prep
     press("s");
     step(4000);
     press("enter");  // charge at t = 0
@@ -214,6 +214,19 @@ static int fcScenario(int floorOn, int lookahead, const std::string& tag, int ca
 int main(int argc, char** argv)
 {
     g_out = argc > 1 ? argv[1] : "shots";
+    if (argc > 2 && std::string(argv[2]) == "syncfail") {  // boot sync failure screen
+        setenv("ROAST_PREVIEW_SYNC_FAIL", "1", 1);
+        mkdir(g_out.c_str(), 0755);
+        auto& cv = GetHAL().canvas;
+        cv.setColorDepth(16);
+        if (!cv.createSprite(240, 135)) return 1;
+        AppRoast app;
+        g_app = &app;
+        app.onOpen();
+        step(2000);
+        shot("boot_sync_failed");
+        return 0;
+    }
     if (argc > 5 && std::string(argv[2]) == "fcA") {
         mkdir(g_out.c_str(), 0755);
 #ifdef ROAST_SD_ROOT
@@ -231,8 +244,10 @@ int main(int argc, char** argv)
 
     AppRoast app;
     g_app = &app;
-    app.onOpen();
+    app.onOpen();  // boot: curve sync from Dropbox first, then (after the restart) the roaster link
     step(600);
+    shot("boot_sync");
+    step(1500);
     shot("connect");
     step(2500);  // link comes up
     shot("prep");
@@ -362,7 +377,10 @@ int main(int argc, char** argv)
     press("tab");
     shot("summary_chart");
     press("tab");
-    press("enter");
+    press("enter");  // closing the summary saves the roast to Dropbox
+    step(600);
+    shot("save_roast");
+    step(4500);  // upload, restart, link
     shot("prep_after");
 
     press("o");

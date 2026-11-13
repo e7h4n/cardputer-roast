@@ -20,7 +20,8 @@ Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE*
 - **曲线编辑器。** 和手机 App 一样的 8 个节点（初始、脱水、一爆始/末、二爆始/末、排豆、总用时），直接在设备上编辑，表格旁边实时显示曲线，保存到 SD 卡。
 - **烘焙记录。** 每锅都会保存 `.csv`（每秒一行）、`.json` 总结，以及可导入 Artisan 的 `.alog`。
 - **全程录音。** 用机身麦克风从投豆录到记录结束，`.wav` 和曲线记录放在一起。总结 JSON 里标出每个打点（脱水、一爆、排豆）在录音里的位置，方便回听一爆，或者整理一爆识别的数据集。
-- **Wi-Fi 和 Dropbox 配对。** 和手表一样，在 Chrome 里打开 [Coffee Watch 配置页](https://e7h4n.github.io/coffee-watch/)，通过加密蓝牙配好 Wi-Fi 和你自己的 Dropbox app（App folder 权限）。曲线和记录的同步是下一步。
+- **Wi-Fi 和 Dropbox 配对。** 和手表一样，在 Chrome 里打开 [Coffee Watch 配置页](https://e7h4n.github.io/coffee-watch/)，通过加密蓝牙配好 Wi-Fi 和你自己的 Dropbox app（App folder 权限）。两者都是必需的。
+- **Dropbox 同步。** 曲线以 Dropbox 为准：每次开机同步一次，在设备上保存或删除曲线会马上写回 Dropbox。每锅的记录和录音在关闭总结页时存到 Dropbox。
 - **模拟器。** 内置简单的热学模型，没有机器也能练习；开启时右上角显示黄色 SIM 标签。
 - **按功能着色的界面。** 颜色 = 它控制什么：风机蓝、火力橙、曲线/PID 紫、打点黄/棕、排豆和报警红、"可以进行"绿。底栏永远显示当前能按的键。
 
@@ -112,6 +113,18 @@ Roast 会自动搜索名为 `E-Meter…BLE` 的设备并连接。没有机器想
 协议、数据包和状态都和 Coffee Watch 一样（[说明](https://github.com/e7h4n/coffee-watch/blob/main/spec/dropbox.md)），代码移植自它的固件。账号信息只通过加密、已认证的蓝牙连接发送，保存在 NVS（`rn_wifi`、`rn_dropbox`；普通 flash，没有开 flash 加密），不会写进日志，也不能通过蓝牙读出来。Wi-Fi、蓝牙配置服务和 TLS 缓冲只在这个页面打开时运行。网页上的 Remove Dropbox 只会清掉 Cardputer 上的授权；要彻底撤销，到 Dropbox 设置的 Connected apps 里断开。
 
 规则页会显示已保存的 Wi-Fi 和 Dropbox 是否已关联。Dropbox 配置时会通过 SNTP 对时，之后新记录的编号改成日期（`YYYYMMDD-HHMMSS`，UTC），不再是 `R####`，直到下次断电。
+
+### Dropbox 同步
+Wi-Fi 和 Dropbox 都是必需的：两者没配好之前，开机就直接进配置页。下面的文件都放在 Dropbox app 的文件夹里（Dropbox › 应用 › *app 名*）。每次上传、下载都会核对 Dropbox 的 `content_hash`。所有操作都不重试：失败就停下，在屏幕上显示原因。
+
+| 时机 | 内容 | 方向 |
+|---|---|---|
+| 每次开机，以及曲线列表里按 **S** | `Roast Curves/` → `roast/curves/`：卡里的曲线变得和那一刻的文件夹完全一致（缺的或不一样的下载，多的删掉）。必须成功：失败就停在这一页（**Enter** 再试一次，**O** 进配网，**Esc** 退出）。 | Dropbox → 卡 |
+| 编辑器里保存曲线（**S**） | 只传这一个文件，覆盖 Dropbox 上的。 | 卡 → Dropbox |
+| 曲线列表里删除曲线（连按两次 **Del**） | 先删 Dropbox 上的这个文件，再删卡里的。 | 卡 → Dropbox |
+| 关闭一锅的总结页（**Enter**） | `roast/logs/<编号>.csv/.json/.alog/.wav` → `Roast Logs/`，覆盖，只传一次（包含在总结页填的重量和备注）。之后这锅不再同步；Roast 不提供历史记录查看。 | 卡 → Dropbox |
+
+以最后写入的为准：设备上的修改马上推上去，下一次同步时卡里的曲线由 Dropbox 覆盖。Cardputer 没有 PSRAM，蓝牙、Wi-Fi 和 HTTPS 放不下，所以这些操作进行时会先断开烘豆机，做完后 Roast 自动重启（几秒钟；同步或推送后的那次开机不再同步曲线）。所以保存或删除曲线、关闭总结页时，风机要先关（先按 **X X**）。15 分钟一锅的录音约 60 MB，上传要几分钟，屏幕上有进度。
 
 ### 跟随曲线：提前量和一爆兜底
 Roast 自己不跑 PID。它每秒写一次烘豆机的目标温度（SV，寄存器 9），火力由烘豆机自带的 PID 决定（P/I/D 在寄存器 21–23，Roast 从来不写）。有两条规则决定写进去的 SV（`roast_control.h`）：

@@ -13,6 +13,7 @@
 #include "roast_curve.h"
 #include "roast_session.h"
 #include "roast_control.h"
+#include "roast_sync.h"
 #include "roast_theme.h"
 
 struct RoastRules {
@@ -48,7 +49,7 @@ public:
     void onClose() override;
 
 private:
-    enum class Screen : uint8_t { Connect, Prep, Roast, Cool, Summary, Curves, Editor, Settings, Help, Network };
+    enum class Screen : uint8_t { Connect, Prep, Roast, Cool, Summary, Curves, Editor, Settings, Help, Network, Sync };
     enum class Phase : uint8_t { Idle, FanOn, Roasting, Cooling, Done };
     enum class Tone : uint8_t { Key, Info, Good, Warn };
 
@@ -184,6 +185,16 @@ private:
     std::string _netSummary;          // rules page value: saved network and Dropbox state
     void openNetwork();
     void closeNetwork();
+
+    // ---- Dropbox sync (roast_sync.h): runs with the roaster link closed, then Roast restarts
+    bool _netRequired = false;  // Wi-Fi or Dropbox not set up yet: setup is the only way forward
+    bool startJob(roast::sync::Job job, const std::string& arg);
+    void pollSync();
+    bool keySync(int code);
+    void renderSync();
+    void restartApp(bool skipBootSync);
+    bool consumeSkipSync();  // esp_restart(); boot sync runs again unless skipBootSync
+    bool networkIdle(const char* what);  // fan off and nothing running: a network job may close the link
     void refreshNetSummary();
     bool keyNetwork(int code);
     void renderNetwork();

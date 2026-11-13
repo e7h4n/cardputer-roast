@@ -12,6 +12,7 @@
  */
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -50,6 +51,11 @@ void roast_net_close(void);
 /// A Dropbox request (authorize or upload check) is running.
 bool roast_net_busy(void);
 rn_view_t roast_net_view(void);
+
+/// Sync: joins the saved network (no Bluetooth). Fails fast: no saved network, a failed join or `timeout_ms` without
+/// an IP address. err gets a short reason.
+bool roast_net_wifi_up(int timeout_ms, char *err, size_t errlen);
+void roast_net_wifi_down(void);
 
 /// Saved state, read from NVS without starting anything (for the rules page).
 bool roast_net_saved_wifi(char ssid[33]);

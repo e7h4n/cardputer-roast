@@ -7,7 +7,7 @@
 
 static bool s_open    = false;
 static uint32_t s_t0  = 0;
-static bool s_wifi    = false, s_dropbox = false;
+static bool s_wifi    = true, s_dropbox = true;  // set up already: boot goes straight to the curve sync
 
 extern "C" {
 

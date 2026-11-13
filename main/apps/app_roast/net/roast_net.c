@@ -729,3 +729,43 @@ rn_view_t roast_net_view(void)
 {
     return snapshot();
 }
+
+/* --------------------------------------------------------------- sync Wi-Fi */
+bool roast_net_wifi_up(int timeout_ms, char *err, size_t errlen)
+{
+    if (atomic_load(&opened)) {
+        snprintf(err, errlen, "setup is open");
+        return false;
+    }
+    char ssid[33];
+    if (!roast_net_saved_wifi(ssid)) {
+        snprintf(err, errlen, "no Wi-Fi saved: set it up under Rules > network");
+        return false;
+    }
+    portENTER_CRITICAL(&lock);
+    memset(&view, 0, sizeof view);
+    portEXIT_CRITICAL(&lock);
+    if (!wifi_start()) {
+        wifi_stop();
+        snprintf(err, errlen, "Wi-Fi could not start");
+        return false;
+    }
+    for (int waited = 0; waited < timeout_ms; waited += 100) {
+        rn_view_t v = snapshot();
+        if (v.state == RN_NET_CONNECTED) return true;
+        if (v.state == RN_NET_FAILED || v.state == RN_NET_DISCONNECTED) {
+            snprintf(err, errlen, "Wi-Fi %s failed (reason %d)", ssid, v.reason);
+            wifi_stop();
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    snprintf(err, errlen, "Wi-Fi %s: no IP address after %d s", ssid, timeout_ms / 1000);
+    wifi_stop();
+    return false;
+}
+
+void roast_net_wifi_down(void)
+{
+    wifi_stop();
+}

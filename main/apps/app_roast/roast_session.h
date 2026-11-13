@@ -160,6 +160,13 @@ public:
         return _csv != nullptr;
     }
     void close();
+    /// Frees the samples and actions (after the log is written): sync needs the heap.
+    void release()
+    {
+        std::vector<Sample>().swap(_samples);
+        std::vector<Action>().swap(_actions);
+        std::vector<float>().swap(_curveTable);
+    }
     void end()
     {
         _active = false;

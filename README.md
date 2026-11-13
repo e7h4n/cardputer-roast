@@ -35,7 +35,9 @@ opens in Artisan. It runs as an app under the community [Launcher](https://githu
   to first crack or building a crack-detection dataset.
 - **Wi-Fi & Dropbox pairing.** Paired from the [Coffee Watch setup page](https://e7h4n.github.io/coffee-watch/)
   in Chrome over authenticated Bluetooth, like the watch: Wi-Fi network, then your own Dropbox app (App folder access).
-  Syncing curves and logs comes next.
+  Both are required.
+- **Dropbox sync.** Curves live in Dropbox: synced at every boot, and every curve saved or deleted on the device is
+  written to Dropbox at once. Each roast (logs and recording) is saved to Dropbox when its summary is closed.
 - **Simulator.** A built-in thermal model for practising without a machine; a yellow SIM tag shows when it is on.
 - **Colour-keyed UI.** Colour = what it controls: fan blue, heat orange, curve/PID violet, marks yellow/brown, drop
   and alarms red, "go" green. The bottom row always shows the keys that work right now.
@@ -161,6 +163,24 @@ the Cardputer; revoke access under Connected apps in your Dropbox settings.
 
 The rules page shows the saved network and whether Dropbox is linked. Once Dropbox setup has set the clock (SNTP),
 new log ids are dated (`YYYYMMDD-HHMMSS`, UTC) instead of `R####`, until the next power-off.
+
+### Dropbox sync
+Wi-Fi and Dropbox are required: until both are set up, Roast opens the setup screen at boot. Everything below lives in
+the Dropbox app's folder (Dropbox › Apps › *app name*). Every transfer is checked against Dropbox's `content_hash`;
+nothing is retried: a failure stops with its reason on screen.
+
+| When | What | Direction |
+|---|---|---|
+| Every boot, and **S** in the curve library | `Roast Curves/` → `roast/curves/`: the card ends up exactly like the folder at that moment (missing or different files downloaded, others deleted). Must succeed: on failure Roast stays on that screen (**Enter** tries again, **O** network setup, **Esc** exit). | Dropbox → card |
+| A curve saved in the editor (**S**) | That one file, overwritten on Dropbox. | card → Dropbox |
+| A curve deleted in the library (**Del** twice) | That one file, deleted on Dropbox, then on the card. | card → Dropbox |
+| Closing a roast's summary (**Enter**) | `roast/logs/<id>.csv/.json/.alog/.wav` → `Roast Logs/`, overwritten, once (weight and note set on the summary included). The record is not synced again; Roast has no history view. | card → Dropbox |
+
+Last writer wins: the device pushes its own edits immediately, and the next sync replaces the card's curves with
+Dropbox's. The Cardputer has no PSRAM, and BLE, Wi-Fi and TLS do not fit together, so each of these closes the roaster
+link while it runs and Roast restarts afterwards (a few seconds; the boot after a sync or a push skips the curve
+sync). That is why saving or deleting a curve and closing a summary need the fan off (**X X** first). The recording
+of a 15-minute roast is about 60 MB and takes minutes to upload; the screen shows its progress.
 
 ### Curve following: lookahead and the first-crack floor
 Roast does not run a PID itself. Once a second it writes the roaster's target (SV, register 9); the roaster's own PID
