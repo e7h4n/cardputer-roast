@@ -122,8 +122,8 @@ line shows the recording's length, with "clipped" when the microphone overloaded
 the SD card failed during the roast.
 
 ### Recording
-A red **REC** tag in the status corner shows while the roast is being recorded (rule *record roast*, on by
-default). Format: WAV, 32 kHz, 16-bit, mono, about 3.8 MB per minute; a 15-minute roast with cooling is about
+Every roast is recorded when an SD card is present; there is no switch. A red **REC** tag in the status corner
+shows while it records. Format: WAV, 32 kHz, 16-bit, mono, about 3.8 MB per minute; a 15-minute roast with cooling is about
 60 MB. 32 kHz covers 0–16 kHz, which includes the 2–16 kHz band used in first-crack detection, and leaves enough
 memory for the SD write buffer next to BLE.
 
@@ -205,7 +205,6 @@ shown underneath, and range rules (window, rise) take the lower then the upper e
 | FC floor | on |
 | Floor above BT | 1 °C |
 | Floor cap (above the curve) | 8 °C |
-| Record roast | on |
 | Mic gain | 18 dB |
 
 The bottom bar turns green inside the drop window, red past the development limit or at the

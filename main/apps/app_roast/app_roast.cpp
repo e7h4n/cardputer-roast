@@ -40,7 +40,6 @@ void RoastRules::load()
     greenG    = s.GetInt("green10", (int)lroundf(greenG * 10)) / 10.0f;
     heatDrop  = s.GetInt("heatDrop10", (int)lroundf(heatDrop * 10)) / 10.0f;
     curveOffset = s.GetInt("curveOff10", (int)lroundf(curveOffset * 10)) / 10.0f;
-    recAudio    = s.GetInt("recAudio", recAudio ? 1 : 0) != 0;
     micGain     = std::max(0, std::min(rec::kMaxGainDb, (int)s.GetInt("micGain", micGain)));
     svLookahead = std::max(0, std::min(20, (int)s.GetInt("svLook", svLookahead)));
     fcFloor     = s.GetInt("fcFloor", fcFloor ? 1 : 0) != 0;
@@ -64,7 +63,6 @@ void RoastRules::save() const
     s.SetInt("green10", (int)lroundf(greenG * 10));
     s.SetInt("heatDrop10", (int)lroundf(heatDrop * 10));
     s.SetInt("curveOff10", (int)lroundf(curveOffset * 10));
-    s.SetInt("recAudio", recAudio ? 1 : 0);
     s.SetInt("micGain", micGain);
     s.SetInt("svLook", svLookahead);
     s.SetInt("fcFloor", fcFloor ? 1 : 0);
@@ -1420,11 +1418,7 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     v.push_back(floorRow);
     rowF("floor above BT", &_rules.floorDelta, nullptr, 0, 5, 0.5f, "°");
     rowF("floor cap", &_rules.floorCap, nullptr, 1, 8, 0.5f, "°");
-    group("AUDIO", DROP);
-    RuleRow recRow;
-    recRow.label  = "record roast";
-    recRow.toggle = &_rules.recAudio;
-    v.push_back(recRow);
+    group("AUDIO", DROP);  // every roast is recorded (when there is an SD card); only the gain is a setting
     rowI("mic gain", &_rules.micGain, nullptr, 0, rec::kMaxGainDb, 3, " dB");
     group("SYNC", CURVE);
     RuleRow netRow;
@@ -1470,8 +1464,6 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
                 if (r.toggle) {
                     *r.toggle = !*r.toggle;
                     _rules.save();
-                    if (r.toggle == &_rules.recAudio && _recording)
-                        toast("Applies from the next roast", FAINT);
                     return true;
                 }
                 _setEditing = true;
@@ -1660,7 +1652,7 @@ bool AppRoast::keyNetwork(int code)
 /* ------------------------------- recording ------------------------------- */
 void AppRoast::startRecording()
 {
-    if (_recording || !_rules.recAudio || !_sdOk || !_session.logging()) return;
+    if (_recording || !_sdOk || !_session.logging()) return;  // always on: there is no switch
     std::string err;
     if (!rec::Start(LogPath(_session.logId(), ".wav"), _rules.micGain, &err)) {
         _session.addAction(roastT(), "no audio: " + err);

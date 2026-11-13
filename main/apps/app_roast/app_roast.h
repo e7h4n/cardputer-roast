@@ -29,7 +29,6 @@ struct RoastRules {
     float greenG     = 200.f; // default batch
     float heatDrop   = 5.0f;  // heater drop around first crack that triggers a hint
     float curveOffset = 0.0f; // shift the whole curve (myERoast tempCompensation), -30..30
-    bool recAudio    = true;  // record the roast from charge to <id>.wav
     int micGain      = 18;    // microphone PGA gain, 0..30 dB in 3 dB steps
     int svLookahead  = 8;     // SV = curve(t + this), 0..20 s (roast_control.h)
     bool fcFloor     = true;  // around first crack, SV >= BT + floorDelta (capped at curve + 8)

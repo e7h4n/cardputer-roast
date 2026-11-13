@@ -284,7 +284,7 @@ int main(int argc, char** argv)
 
     // Wi-Fi & Dropbox setup: the rules row, then a whole (simulated) pairing
     press("o");
-    for (int i = 0; i < 16; i++) press("down", 60);
+    for (int i = 0; i < 15; i++) press("down", 60);
     shot("rules_sync");
     press("enter");
     step(600);
@@ -300,7 +300,7 @@ int main(int argc, char** argv)
     press("esc");
     step(3000);  // back on Connect, then Prep once the (preview) roaster answers
     press("o");
-    for (int i = 0; i < 16; i++) press("down", 60);
+    for (int i = 0; i < 15; i++) press("down", 60);
     shot("rules_sync_saved");
     press("esc");
 
