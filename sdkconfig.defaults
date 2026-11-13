@@ -58,3 +58,8 @@ CONFIG_BT_NIMBLE_TRANSPORT_EVT_DISCARD_COUNT=4
 
 # SNTP: three servers (roast_dropbox.c clock_ready)
 CONFIG_LWIP_SNTP_MAX_SERVERS=3
+
+# Software AES: the hardware AES driver allocates DMA bounce buffers per TLS record, and at the roast's save
+# (Wi-Fi + TLS + the summary's samples) that allocation failed ("esp-aes: Failed to allocate memory") and the WAV
+# upload dropped. The upload is network bound; software AES costs no heap.
+CONFIG_MBEDTLS_HARDWARE_AES=n

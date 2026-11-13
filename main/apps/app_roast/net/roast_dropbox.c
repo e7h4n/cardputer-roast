@@ -457,7 +457,7 @@ int rn_dropbox_status(char *out, int capacity)
 #define LIST_URL "https://api.dropboxapi.com/2/files/list_folder"
 #define LIST_MORE_URL "https://api.dropboxapi.com/2/files/list_folder/continue"
 #define DELETE_URL "https://api.dropboxapi.com/2/files/delete_v2"
-#define CHUNK 8192
+#define CHUNK 4096  // one TLS record (CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN); 8 KB left too little heap at save time
 
 static void seterr(char *err, size_t n, const char *fmt, ...)
 {

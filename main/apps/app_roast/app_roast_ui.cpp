@@ -351,6 +351,9 @@ int AppRoast::renderStatus(bool draw)
     if (syncingNow()) {  // a temporary state: it takes the battery's place until the transfer is done
         if (draw) text(x, 1, "Syncing", F11(), CURVE, Datum::top_right);
         x -= tw("Syncing", F11());
+    } else if (saveFailed()) {  // the roast is not (all) in Dropbox: stays until the summary is left
+        if (draw) text(x, 1, "Sync failed", F11(), DROP, Datum::top_right);
+        x -= tw("Sync failed", F11());
     } else {
         uint32_t bc     = _batPct < 0 ? DIM : (_batPct <= 15 ? DROP : (_batPct <= 30 ? HEAT : INK));
         std::string pct = _batPct < 0 ? "--" : std::to_string(_batPct) + "%";

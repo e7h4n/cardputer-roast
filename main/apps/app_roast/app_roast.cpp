@@ -1865,6 +1865,14 @@ bool AppRoast::syncingNow()
     return st.running && !st.idle;
 }
 
+bool AppRoast::saveFailed()
+{
+    if (_screen != Screen::Summary && _screen != Screen::Help) return false;
+    if (!_saveStarted) return false;
+    sync::Status st = sync::Get();
+    return st.finished && !st.ok;
+}
+
 bool AppRoast::saveBusy()
 {
     if (_phase != Phase::Done || !_sdOk || _session.logId().empty()) return false;

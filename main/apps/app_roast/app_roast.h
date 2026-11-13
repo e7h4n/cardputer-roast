@@ -209,6 +209,7 @@ private:
     void resaveEdited();         // the summary's edits rewrote the .json and .alog
     bool saveBusy();             // the roast on the summary is not in Dropbox yet (and has not failed)
     bool syncingNow();           // a Dropbox job is moving data: the status corner says "Syncing" instead of battery
+    bool saveFailed();           // the summary's roast save ended with an error (status corner: "Sync failed")
     bool startJob(roast::sync::Job job, const std::string& arg);
     void pollSync();
     bool keySync(int code);
