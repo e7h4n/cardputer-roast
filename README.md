@@ -179,7 +179,8 @@ Last writer wins: the device pushes its own edits immediately, and the next sync
 Dropbox's. The Cardputer has no PSRAM, and BLE, Wi-Fi and TLS do not fit together, so each of these closes the roaster
 link while it runs and Roast restarts afterwards (a few seconds; the boot after a sync or a push skips the curve
 sync). That is why saving or deleting a curve and saving a roast need the fan off (**X X** first). The recording
-of a 15-minute roast is about 60 MB and takes minutes to upload; the screen shows its progress.
+of a 15-minute roast is about 60 MB and takes minutes to upload. While anything syncs, the status corner says
+**Syncing** in place of the battery; the sync screen shows details only when it failed.
 
 ### Curve following: lookahead and the first-crack floor
 Roast does not run a PID itself. Once a second it writes the roaster's target (SV, register 9); the roaster's own PID

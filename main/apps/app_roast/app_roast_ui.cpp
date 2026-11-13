@@ -347,16 +347,21 @@ bool AppRoast::confirmPending(int key) const
 /* ========================================================= status corner */
 int AppRoast::renderStatus(bool draw)
 {
-    int x       = W - 3;
-    uint32_t bc = _batPct < 0 ? DIM : (_batPct <= 15 ? DROP : (_batPct <= 30 ? HEAT : INK));
-    std::string pct = _batPct < 0 ? "--" : std::to_string(_batPct) + "%";
-    if (draw) {
-        cv().drawRect(x - 16, 3, 14, 8, bc);
-        cv().fillRect(x - 2, 5, 2, 4, bc);
-        if (_batPct > 0) cv().fillRect(x - 14, 5, std::max(1, 10 * std::min(100, _batPct) / 100), 4, bc);
-        text(x - 19, 1, pct, F11(), bc, Datum::top_right);
+    int x = W - 3;
+    if (syncingNow()) {  // a temporary state: it takes the battery's place until the transfer is done
+        if (draw) text(x, 1, "Syncing", F11(), CURVE, Datum::top_right);
+        x -= tw("Syncing", F11());
+    } else {
+        uint32_t bc     = _batPct < 0 ? DIM : (_batPct <= 15 ? DROP : (_batPct <= 30 ? HEAT : INK));
+        std::string pct = _batPct < 0 ? "--" : std::to_string(_batPct) + "%";
+        if (draw) {
+            cv().drawRect(x - 16, 3, 14, 8, bc);
+            cv().fillRect(x - 2, 5, 2, 4, bc);
+            if (_batPct > 0) cv().fillRect(x - 14, 5, std::max(1, 10 * std::min(100, _batPct) / 100), 4, bc);
+            text(x - 19, 1, pct, F11(), bc, Datum::top_right);
+        }
+        x -= 19 + tw(pct, F11());
     }
-    x -= 19 + tw(pct, F11());
     if (_muted) {  // speaker with a red slash
         x -= 13;
         if (draw) {
@@ -1169,59 +1174,32 @@ void AppRoast::renderSettings()
 /* ================================================================== sync */
 void AppRoast::renderSync()
 {
+    // Boot sync, curve push/delete: just "Syncing" (the corner says so too); details only when it failed.
     sync::Status st = sync::Get();
-    static const char* titles[] = {"Syncing curves", "Saving curve", "Deleting curve", "Saving roast"};
-    text(4, 0, titles[(int)st.job], F16(), INK);
-    bool failed = st.finished && !st.ok;
-    // what is happening
-    uint32_t c = failed ? DROP : (st.finished ? GO : CURVE);
-    dot(8, 27, 3, c);
-    std::string what = failed ? "failed" : st.step;
-    if (!failed && !st.file.empty()) what += " " + st.file;
-    text(15, 21, clipTo(what, W - 19, F12()), F12(), failed ? DROP : INK);
-    // counts
-    char b[96];
-    if (st.job == sync::Job::Curves)
-        snprintf(b, sizeof(b), "%d downloaded · %d removed · %d same", st.downloaded, st.removed, st.unchanged);
-    else
-        snprintf(b, sizeof(b), "%d uploaded%s", st.uploaded, st.removed ? " · deleted" : "");
-    text(15, 38, clipTo(b, W - 19, F11()), F11(), DIM);
-    // bytes of the current file (the recording is tens of MB)
-    if (!st.finished && st.total > 0) {
-        const int x0 = 4, x1 = W - 5, y = 60;
-        float frac = std::min(1.0f, (float)st.done / st.total);
-        rbox(x0, y, x1, y + 5, 2, LINE);
-        rbox(x0, y, x0 + std::max(4, (int)((x1 - x0) * frac)), y + 5, 2, CURVE);
-        if (st.total >= 1024 * 1024)
-            snprintf(b, sizeof(b), "%.1f / %.1f MB", st.done / 1048576.0, st.total / 1048576.0);
-        else
-            snprintf(b, sizeof(b), "%u / %u KB", (unsigned)(st.done / 1024), (unsigned)(st.total / 1024));
-        text(x1, y + 9, b, F10(), DIM, Datum::top_right);
-    }
-    if (failed) {  // the reason, wrapped over up to three lines
-        std::string e = st.error.empty() ? "unknown error" : st.error;
-        int y         = 56;
-        while (!e.empty() && y <= 84) {
-            size_t n = e.size();
-            while (n > 0 && tw(e.substr(0, n), F11()) > W - 8) {
-                size_t sp = e.rfind(' ', n - 1);
-                n         = (sp == std::string::npos || sp == 0) ? n - 1 : sp;
-            }
-            text(4, y, e.substr(0, n), F11(), DROP);
-            e = e.substr(n);
-            while (!e.empty() && e[0] == ' ') e.erase(0, 1);
-            y += 14;
-        }
-        if (st.job == sync::Job::Curves)
-            keybar({{"Enter", INK, "try again"}, {"O", INK, "network"}, {"Esc", FAINT, "exit"}});
-        else
-            keybar({{"Enter", INK, "continue (not saved)"}, {"O", INK, "network"}});
-    } else {
-        text(4, 100, st.job == sync::Job::SaveRoast ? "roaster link closed while saving" : "roaster link closed meanwhile",
-             F10(), FAINT);
+    bool failed     = st.finished && !st.ok;
+    if (!failed) {
+        text(W / 2, 58, "Syncing", F16(), CURVE, Datum::middle_center);
         cv().drawFastHLine(0, BAR_Y, W, LINE);
-        text(4, BAR_Y + 10, st.finished ? "restarting…" : "wait…", F11(), DIM, Datum::middle_left);
+        return;
     }
+    text(4, 0, "Sync failed", F16(), DROP);
+    std::string e = st.error.empty() ? "unknown error" : st.error;  // the reason, wrapped over up to four lines
+    int y         = 26;
+    while (!e.empty() && y <= 74) {
+        size_t n = e.size();
+        while (n > 0 && tw(e.substr(0, n), F12()) > W - 8) {
+            size_t sp = e.rfind(' ', n - 1);
+            n         = (sp == std::string::npos || sp == 0) ? n - 1 : sp;
+        }
+        text(4, y, e.substr(0, n), F12(), INK);
+        e = e.substr(n);
+        while (!e.empty() && e[0] == ' ') e.erase(0, 1);
+        y += 16;
+    }
+    if (st.job == sync::Job::Curves)
+        keybar({{"Enter", INK, "try again"}, {"O", INK, "network"}, {"Esc", FAINT, "exit"}});
+    else
+        keybar({{"Enter", INK, "continue (not saved)"}, {"O", INK, "network"}});
 }
 
 /* ======================================================== Wi-Fi & Dropbox */

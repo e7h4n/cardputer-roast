@@ -214,7 +214,7 @@ void AppRoast::onRunning()
     if (GetHAL().homeButton.wasClicked()) {
         if ((_screen == Screen::Sync && !sync::Get().finished) || saveBusy()) {
             // leaving now would cut an upload in half (or skip the roast's save altogether)
-            toast(_fanRunning ? "Stop the fan (X X): the roast is saved to Dropbox" : "Saving to Dropbox: wait", WARN);
+            toast(_fanRunning ? "Stop the fan first (X X)" : "Syncing", WARN);
         } else if (_phase == Phase::Roasting) {
             toast("Roasting: drop before exit", ui::DROP);
         } else {
@@ -1062,11 +1062,11 @@ bool AppRoast::keySummary(int code)
                 return true;
             }
             if (_fanRunning) {
-                toast("Stop the fan (X X): the roast is saved to Dropbox", WARN, 3000);
+                toast("Stop the fan first (X X)", WARN, 3000);
                 return true;
             }
             if (saveBusy()) {
-                toast("Saving to Dropbox: wait", WARN, 2500);
+                toast("Syncing", WARN, 1500);
                 return true;
             }
             sync::Finish();
@@ -1735,6 +1735,13 @@ void AppRoast::pollSave()
             toast("Not saved: " + st.error, DROP, 6000);
         }
     }
+}
+
+bool AppRoast::syncingNow()
+{
+    if (_saveAt) return true;  // the roast's save starts in a moment
+    sync::Status st = sync::Get();
+    return st.running && !st.idle;
 }
 
 bool AppRoast::saveBusy()
