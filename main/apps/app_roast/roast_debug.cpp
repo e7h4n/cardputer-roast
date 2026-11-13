@@ -9,6 +9,8 @@
  *   rec            recorder state: "REC state=... samples=... peak_dbfs=... recent_dbfs=... ..."
  *   b64 <file> <offset> <length>   base64 of a byte range (pull a WAV over USB: tools/pull_audio.py)
  *   net            Wi-Fi & Dropbox setup state (no credentials): "NET open=... wifi=... dropbox=... heap=..."
+ *   sync           sync job state: "SYNC job=... running=... ok=... step=... error=..."
+ *   boot roast     test only: restart into Roast once without the Wi-Fi/Dropbox requirement or the boot sync
  */
 #include "roast_debug.h"
 #include <hal/hal.h>
@@ -17,6 +19,7 @@
 #include "roast_link.h"
 #include "roast_audio.h"
 #include "net/roast_net.h"
+#include "roast_sync.h"
 #include <dirent.h>
 #include <sys/stat.h>
 #include <driver/usb_serial_jtag.h>
@@ -309,6 +312,19 @@ void DebugPollMain()
                (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         fflush(stdout);
+    } else if (line == "sync") {
+        sync::Status st = sync::Get();
+        printf("SYNC job=%d running=%d finished=%d ok=%d idle=%d step=%s file=%s done=%u total=%u down=%d removed=%d "
+               "same=%d up=%d error=%s heap=%u largest=%u\n",
+               (int)st.job, st.running, st.finished, st.ok, st.idle, st.step.c_str(), st.file.c_str(), (unsigned)st.done,
+               (unsigned)st.total, st.downloaded, st.removed, st.unchanged, st.uploaded, st.error.c_str(),
+               (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        fflush(stdout);
+    } else if (line == "boot roast") {
+        printf("OK boot roast: restarting without the Dropbox sync\n");
+        fflush(stdout);
+        DebugBootRoast();
     } else if (line == "sdinfo") {
         printf("SDINFO\n%sENDSDINFO\n", GetHAL().sdCardInspect().c_str());
     } else if (line == "sdformat FORMAT-SD-CARD") {

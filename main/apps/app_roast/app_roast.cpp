@@ -125,7 +125,10 @@ void AppRoast::onOpen()
     // Wi-Fi and Dropbox are required. Boot syncs the curves from Dropbox (must succeed) and restarts once with a
     // clean heap; that second boot (flagged in RTC memory) skips the sync and connects to the roaster.
     char ssid[33];
-    if (!roast_net_saved_wifi(ssid) || !roast_net_saved_dropbox()) {
+    if (consumeBypass()) {  // test only: USB console `boot roast`
+        if (!_blockedByKeyboardApp) startLink(false);
+        toast("Test boot: no Dropbox sync", WARN, 4000);
+    } else if (!roast_net_saved_wifi(ssid) || !roast_net_saved_dropbox()) {
         _netRequired = true;
         openNetwork();
     } else if (consumeSkipSync()) {
@@ -1646,6 +1649,21 @@ void AppRoast::keyInput(const Keyboard::KeyEvent_t& e, int code)
 // just pushed a change).
 static RTC_NOINIT_ATTR uint32_t s_bootFlag;
 static constexpr uint32_t kSkipSync = 0x53594E43;  // "SYNC"
+
+static constexpr uint32_t kBypass = 0x42595053;  // "BYPS": test boot from the USB console
+
+void roast::DebugBootRoast()
+{
+    s_bootFlag = kBypass;
+    esp_restart();
+}
+
+bool AppRoast::consumeBypass()
+{
+    if (s_bootFlag != kBypass) return false;
+    s_bootFlag = 0;
+    return true;
+}
 
 bool AppRoast::consumeSkipSync()
 {

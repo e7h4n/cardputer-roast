@@ -201,7 +201,8 @@ private:
     bool keySync(int code);
     void renderSync();
     void restartApp(bool skipBootSync);
-    bool consumeSkipSync();  // esp_restart(); boot sync runs again unless skipBootSync
+    bool consumeSkipSync();
+    bool consumeBypass();  // esp_restart(); boot sync runs again unless skipBootSync
     bool networkIdle(const char* what);  // fan off and nothing running: a network job may close the link
     void refreshNetSummary();
     bool keyNetwork(int code);
