@@ -96,6 +96,16 @@ public:
         _heatPending = true;
         _heatRaw     = raw;
     }
+    void debugDisconnect(uint32_t holdMs) override
+    {
+        uint16_t conn;
+        {
+            Lock l(_mtx);
+            _holdOffUntil = now_ms() + holdMs;
+            conn          = _conn;
+        }
+        if (conn != 0xFFFF) ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
+    }
     void cancelHeat() override
     {
         Lock l(_mtx);
@@ -155,6 +165,7 @@ private:
     bool _wantScan      = false;
     std::atomic<bool> _connecting{false};
     uint32_t _scanRestartAt = 0;
+    uint32_t _holdOffUntil  = 0;  // debugDisconnect: no rescan before this
 
     std::string _devName;
     std::string _err;
@@ -531,6 +542,7 @@ void BleLink::connectionLost(const char* why)
         _err           = why;
         _wantScan      = _running;
         _scanRestartAt = now_ms() + 500;
+        if ((int32_t)(_holdOffUntil - _scanRestartAt) > 0) _scanRestartAt = _holdOffUntil;
         _rx.clear();
     }
 }
