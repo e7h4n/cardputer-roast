@@ -37,7 +37,7 @@ opens in Artisan. It runs as an app under the community [Launcher](https://githu
   in Chrome over authenticated Bluetooth, like the watch: Wi-Fi network, then your own Dropbox app (App folder access).
   Both are required.
 - **Dropbox sync.** Curves live in Dropbox: synced at every boot, and every curve saved or deleted on the device is
-  written to Dropbox at once. Each roast (logs and recording) is saved to Dropbox from its summary once the fan is off.
+  written to Dropbox at once. Each roast's logs (not the recording, which stays on the SD card) are saved to Dropbox from its summary once the fan is off.
 - **Simulator.** A built-in thermal model for practising without a machine; a yellow SIM tag shows when it is on.
 - **Colour-keyed UI.** Colour = what it controls: fan blue, heat orange, curve/PID violet, marks yellow/brown, drop
   and alarms red, "go" green. The bottom row always shows the keys that work right now.
@@ -176,13 +176,14 @@ nothing is retried: a failure stops with its reason on screen.
 | Every boot, and **S** in the curve library | `Roast Curves/` → `roast/curves/`: the card ends up exactly like the folder at that moment (missing or different files downloaded, others deleted). Must succeed: on failure Roast stays on that screen (**Enter** tries again, **O** network setup, **Esc** exit). | Dropbox → card |
 | A curve saved in the editor (**S**) | That one file, overwritten on Dropbox. | card → Dropbox |
 | A curve deleted in the library (**Del** twice) | That one file, deleted on Dropbox, then on the card. | card → Dropbox |
-| On the summary, once the fan is off | `roast/logs/<id>.csv/.json/.alog/.wav` → `Roast Logs/`, overwritten, in the background: the summary stays usable (weight, note, chart). An edit there re-saves the .json and .alog. The summary can be closed only when everything is saved (or the save failed). Afterwards the record is not synced again; Roast has no history view. | card → Dropbox |
+| On the summary, once the fan is off | `roast/logs/<id>.csv/.json/.alog` → `Roast Logs/` (not the `.wav`: it stays on the card), overwritten, in the background: the summary stays usable (weight, note, chart). An edit there re-saves the .json and .alog. The summary can be closed only when everything is saved (or the save failed). Afterwards the record is not synced again; Roast has no history view. | card → Dropbox |
 
 Last writer wins: the device pushes its own edits immediately, and the next sync replaces the card's curves with
 Dropbox's. The Cardputer has no PSRAM, and BLE, Wi-Fi and TLS do not fit together, so each of these closes the roaster
 link while it runs and Roast restarts afterwards (a few seconds; the boot after a sync or a push skips the curve
-sync). That is why saving or deleting a curve and saving a roast need the fan off (**X X** first). The recording
-of a 15-minute roast is about 60 MB and takes minutes to upload. While anything syncs, the status corner says
+sync). That is why saving or deleting a curve and saving a roast need the fan off (**X X** first). A roast's save takes
+a few seconds. The recording is not uploaded: about 55 MB for a 14-minute roast took ~10 minutes over Wi-Fi with
+the summary blocked; read it from the SD card or over USB (`tools/pull_audio.py`). While anything syncs, the status corner says
 **Syncing** in place of the battery; the sync screen shows details only when it failed.
 
 ### Curve following: the Cardputer PID

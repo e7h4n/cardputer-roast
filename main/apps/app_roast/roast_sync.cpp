@@ -160,7 +160,9 @@ bool saveRoast(const std::string& id)
     update([](Status& s) { s.idle = false; });
     xSemaphoreTake(s_mtx, portMAX_DELAY);
     s_pending.clear();
-    for (const char* ext : {".csv", ".json", ".alog", ".wav"}) {  // the recording last: it is the big one
+    // Not the recording: a roast's WAV is ~55 MB and took ~10 minutes over Wi-Fi with the summary blocked. It stays
+    // on the card (SD card reader, or tools/pull_audio.py over USB).
+    for (const char* ext : {".csv", ".json", ".alog"}) {
         struct stat st;
         if (stat((std::string(kLogDir) + "/" + id + ext).c_str(), &st) == 0) s_pending.push_back(ext);
     }

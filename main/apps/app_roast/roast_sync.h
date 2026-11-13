@@ -7,7 +7,8 @@
  *                downloaded (content_hash compared), local curve files not in the folder are deleted.
  *  - PushCurve   after a curve is saved on the device: upload that one file, overwriting.
  *  - DeleteCurve after a curve is deleted on the device: delete that one file on Dropbox, then on the card.
- *  - SaveRoast   once the fan is off on a roast's summary: upload <id>.csv/.json/.alog/.wav to "/Roast Logs",
+ *  - SaveRoast   once the fan is off on a roast's summary: upload <id>.csv/.json/.alog to "/Roast Logs" (not the
+ *                .wav: it stays on the card),
  *                overwriting. The summary stays usable meanwhile; an edit there (weight, note) rewrites the .json and
  *                .alog, and Resave() uploads them again after the current file. Finish() ends the session once nothing
  *                is pending; the summary cannot be closed before that. The record is not synced again afterwards.
