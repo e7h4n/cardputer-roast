@@ -1,6 +1,9 @@
 /*
  * Simulated roaster for practising the UI without the machine.
- * Same register semantics as the BLE link; a crude fluid-bed thermal model with an on-board PID.
+ * Same register semantics as the BLE link. Thermal model and on-board PID fitted on R0012-R0014 (roast_control.h:
+ * PlantModel): heater -> inlet air after a 5 s dead time and a 1 s lag, beans approach the air at 0.0175/s at
+ * 53.5 % fan; more airflow dilutes the air and speeds up the transfer. The on-board PID is the fitted positional
+ * form heat = 0.50 e + 0.036 integral(e dt) + 12 %.
  */
 #include "roast_link.h"
 #include <esp_timer.h>
@@ -59,7 +62,10 @@ public:
         s.reg[21] = 6;
         s.reg[22] = 1;
         s.reg[23] = 8;
-        s.reg[28] = 450;
+        s.reg[24] = 900;
+        s.reg[25] = 2000;
+        s.reg[26] = 100;
+        s.reg[28] = 500;
         s.reg[29] = 1000;
         s.valid   = 0x3FFFFFFC;
         s.lastRxMs = (uint32_t)(now() * 1000);
@@ -83,6 +89,10 @@ public:
     {
         _target = raw;
     }
+    void setHeat(uint16_t raw) override
+    {
+        apply(11, raw);
+    }
     void clearQueue() override
     {
     }
@@ -91,6 +101,9 @@ private:
     LinkState _state = LinkState::Off;
     double _t0 = 0, _last = 0;
     double _bt = 26.0, _air = 26.0, _heat = 0, _integ = 0, _timer = 0;
+    double _hist[64] = {};  // heater output per 0.1 s slot, for the dead time
+    double _histT    = 0;
+    int _histPos     = 0;
     int _target = 500, _fan = 530;
     bool _running = false, _pid = false, _timerOn = false, _dropped = false;
     uint32_t _next = 1;
@@ -156,19 +169,27 @@ private:
         if (_timerOn) _timer += dt;
 
         double fanFrac = _running ? _fan / 1000.0 : 0;
-        if (_pid && _running) {
+        if (_pid && _running) {  // fitted on-board PID (positional, 1 s cycle)
             double err = _target / 10.0 - _bt;
-            _integ += err * dt * 0.08;
-            if (_integ > 60) _integ = 60;
-            if (_integ < -20) _integ = -20;
-            double out = 6.0 * err + _integ + 30;
+            _integ += 0.036 * err * dt;
+            if (_integ > 88) _integ = 88;
+            if (_integ < -12) _integ = -12;
+            double out = 0.50 * err + _integ + 12;
             _heat      = out < 0 ? 0 : (out > 100 ? 100 : out);
         }
-        // Inlet air: heater raises it, more airflow dilutes it.
-        double airTarget = 26 + (_running ? _heat * 3.3 * (0.55 / (fanFrac > 0.2 ? fanFrac : 0.2)) : 0);
-        _air += (airTarget - _air) * (1 - exp(-dt / 6.0));
-        double k = _running ? 0.010 * (fanFrac / 0.53) : 0.002;
-        double endo = (_bt > 196 && _bt < 203 && _timerOn) ? 0.25 : 0;  // first-crack heat sink
+        // Dead time: the air sees the heater output of ~5 s ago.
+        _histT += dt;
+        while (_histT >= 0.1) {
+            _histT -= 0.1;
+            _hist[_histPos] = _heat;
+            _histPos        = (_histPos + 1) % 64;
+        }
+        double late = _hist[(_histPos + 64 - 50) % 64];
+        double f    = fanFrac > 0.2 ? fanFrac : 0.2;
+        double airTarget = 26 + (_running ? late * 2.2 * (0.535 / f) : 0);
+        _air += (airTarget - _air) * (1 - exp(-dt / 1.0));
+        double k = _running ? 0.0175 * (fanFrac / 0.535) : 0.002;
+        double endo = (_bt > 196 && _bt < 203 && _timerOn) ? 0.05 : 0;  // first crack: a small heat sink (assumed)
         _bt += ((_air - _bt) * k - endo) * dt;
         _bt += ((rand() % 100) - 50) / 2000.0;
         if (_bt < 20) _bt = 20;

@@ -44,6 +44,7 @@ jobs:
         run: |
           command -v g++ >/dev/null || (apt-get update -qq && apt-get install -y -qq g++ >/dev/null)
           tools/tests/run.sh
+          tools/pid/run.sh   # batch A: roaster PID vs Cardputer PID on the fitted model
 
       - name: UI preview (desktop build of the real UI code)
         shell: bash

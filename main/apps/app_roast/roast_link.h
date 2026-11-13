@@ -102,6 +102,10 @@ public:
 
     /// Latest-value slot for the PID target (reg 9). Older unsent values are replaced.
     virtual void setTarget(uint16_t raw) = 0;
+    /// Latest-value slot for the heater output (reg 11), written once a second by the Cardputer PID.
+    virtual void setHeat(uint16_t raw) = 0;
+    /// Forget a heater value not yet written (before a drop: it must not land after it).
+    virtual void cancelHeat() {}
 
     /// Drop anything still queued (used when leaving a roast).
     virtual void clearQueue() = 0;
