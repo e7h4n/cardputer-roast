@@ -1849,6 +1849,10 @@ void AppRoast::pollSave()
         }
         GetHAL().setRoastBleActive(false);
         _linkState = _prevLinkState = LinkState::Off;
+        // The curve library keeps every curve's 1 Hz table (~3 KB each); the summary cannot open it and Roast
+        // restarts after the save, so give that memory to Wi-Fi + TLS. A 10-minute recording's upload ran the heap
+        // down to 2.7 KB without this (2026-11-13).
+        std::vector<Curve>().swap(_curves);
         _saveStarted = sync::Start(sync::Job::SaveRoast, _session.logId());
         if (!_saveStarted) toast("Dropbox save could not start", DROP, 3000);
         _dirty = true;
