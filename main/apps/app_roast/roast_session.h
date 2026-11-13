@@ -3,6 +3,7 @@
  */
 #pragma once
 #include "roast_curve.h"
+#include "roast_audio.h"
 #include <string>
 #include <vector>
 #include <cstdio>
@@ -28,6 +29,24 @@ struct Sample {
 struct Action {
     int t;
     std::string text;
+};
+
+/// The roast's recording, as written into the summary JSON. Event times are positions in the WAV file.
+struct AudioInfo {
+    bool valid            = false;
+    std::string file;              // file name next to the log, e.g. R0012.wav
+    uint32_t sampleRate   = 0;
+    int gainDb            = 0;
+    int startMsAfterCharge = 0;    // sample 0 of the file, relative to charge
+    double durationS      = 0;
+    float peakDbfs        = NAN;
+    uint32_t clipped      = 0;
+    uint32_t bufferMs     = 0;
+    int slot              = -1;
+    bool failed           = false;
+    int eventMs[5]        = {-1, -1, -1, -1, -1};  // charge, dry, fc_start, fc_end, drop
+    std::vector<AudioGap> gaps;
+    uint32_t gapCount     = 0;
 };
 
 struct RoastMetrics {
@@ -116,6 +135,14 @@ public:
     {
         _note = n;
     }
+    void setAudio(const AudioInfo& a)
+    {
+        _audio = a;
+    }
+    const AudioInfo& audio() const
+    {
+        return _audio;
+    }
 
     RoastMetrics metrics() const;
 
@@ -155,8 +182,13 @@ private:
     FILE* _csv       = nullptr;
     int _sinceFlush  = 0;
     std::vector<float> _curveTable;
+    AudioInfo _audio;
 };
 
 std::string NextLogId();
+/// Path of a log file: LogPath("R0012", ".wav") -> /sdcard/roast/logs/R0012.wav
+std::string LogPath(const std::string& id, const char* ext);
+/// Creates the log directory if needed.
+bool EnsureLogDir();
 
 }  // namespace roast

@@ -18,6 +18,9 @@ struct FakeSpeaker {
     void setVolume(int x) { v = x; }
     template <typename... A>
     void tone(A...) {}
+    bool isPlaying() { return false; }
+    bool begin() { return true; }
+    void end() {}
 };
 struct FakeButton {
     bool clicked = false;

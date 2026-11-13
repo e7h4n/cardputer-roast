@@ -4,7 +4,7 @@
  *  - one hero number per screen; secondary numbers are small cards with a colour bar
  *  - the bottom row always shows the keys that work right now; it turns into a full-width colour bar only when
  *    something needs a hand (green = drop window, red = act now, yellow = attention)
- *  - top-right status corner: battery, link dot / SIM tag, mute, missing SD
+ *  - top-right status corner: battery, link dot / SIM tag, mute, missing SD, REC while recording
  */
 #include "app_roast.h"
 #include "fonts/roast_fonts.h"
@@ -338,35 +338,51 @@ bool AppRoast::confirmPending(int key) const
 }
 
 /* ========================================================= status corner */
-void AppRoast::renderStatus()
+int AppRoast::renderStatus(bool draw)
 {
     int x       = W - 3;
     uint32_t bc = _batPct < 0 ? DIM : (_batPct <= 15 ? DROP : (_batPct <= 30 ? HEAT : INK));
-    cv().drawRect(x - 16, 3, 14, 8, bc);
-    cv().fillRect(x - 2, 5, 2, 4, bc);
-    if (_batPct > 0) cv().fillRect(x - 14, 5, std::max(1, 10 * std::min(100, _batPct) / 100), 4, bc);
     std::string pct = _batPct < 0 ? "--" : std::to_string(_batPct) + "%";
-    x -= 19 + text(x - 19, 1, pct, F11(), bc, Datum::top_right);
+    if (draw) {
+        cv().drawRect(x - 16, 3, 14, 8, bc);
+        cv().fillRect(x - 2, 5, 2, 4, bc);
+        if (_batPct > 0) cv().fillRect(x - 14, 5, std::max(1, 10 * std::min(100, _batPct) / 100), 4, bc);
+        text(x - 19, 1, pct, F11(), bc, Datum::top_right);
+    }
+    x -= 19 + tw(pct, F11());
     if (_muted) {  // speaker with a red slash
         x -= 13;
-        cv().fillRect(x, 4, 3, 5, DIM);
-        cv().fillTriangle(x + 2, 6, x + 7, 1, x + 7, 11, DIM);
-        cv().drawLine(x - 1, 11, x + 9, 1, DROP);
+        if (draw) {
+            cv().fillRect(x, 4, 3, 5, DIM);
+            cv().fillTriangle(x + 2, 6, x + 7, 1, x + 7, 11, DIM);
+            cv().drawLine(x - 1, 11, x + 9, 1, DROP);
+        }
     }
     if (!_sdOk) {
         int w = tw("SD", F10()) + 8;
         x -= w + 4;
-        pill(x, 1, "SD", DROP);
+        if (draw) pill(x, 1, "SD", DROP);
     }
     if (_link && _link->isSimulated()) {
         int w = tw("SIM", F10()) + 8;
         x -= w + 4;
-        pill(x, 1, "SIM", SIM);
+        if (draw) pill(x, 1, "SIM", SIM);
     } else {
         x -= 8;
         uint32_t c = _linkState == LinkState::Ready ? GO : (_linkState == LinkState::Lost ? DROP : FAINT);
-        dot(x, 6, 3, c);
+        if (draw) dot(x, 6, 3, c);
+        x -= 3;
     }
+    if (_recording) {  // red dot + REC, like a camera
+        int w = tw("REC", F10()) + 14;
+        x -= w + 4;
+        if (draw) {
+            rbox(x, 1, x + w, 12, 5, DROP);
+            dot(x + 6, 6, 2, ui::WHITE);
+            text(x + 10, 7, "REC", F10(), ui::WHITE, Datum::middle_left);
+        }
+    }
+    return x;
 }
 
 /* =============================================================== connect */
@@ -534,7 +550,7 @@ void AppRoast::renderRoast()
         float b = _snap.has(4) ? _snap.bt() : _session.lastBT();
         int x   = 4 + text(4, 0, mmss(t), F14(), INK);
         x += 6 + text(x + 6, 0, fmt1(b) + "°", F14(), linkReady() ? INK : FAINT);
-        text(x + 12, 3, "RoR " + fmt1(_session.rorNow()), F11(), DIM);
+        text(x + 12, 3, clipTo("RoR " + fmt1(_session.rorNow()), statusLeft() - 4 - (x + 12), F11()), F11(), DIM);
     } else {
         renderDash();
     }
@@ -785,7 +801,10 @@ void AppRoast::renderCool()
     int since         = _dropMs ? (int)((GetHAL().millis() - _dropMs) / 1000) : 0;
     std::string title = _autoDropped ? "Auto-dropped" : "Cooling";
     int x             = 4 + text(4, 0, title, F16(), _autoDropped ? DROP : INK);
-    text(x + 6, 5, "+" + mmss(since) + " since drop", F11(), DIM);
+    int room          = statusLeft() - 4 - (x + 6);
+    std::string sub   = "+" + mmss(since) + " since drop";
+    if (tw(sub, F11()) > room) sub = "+" + mmss(since);
+    text(x + 6, 5, clipTo(sub, room, F11()), F11(), DIM);
     bool cold = bt < _rules.coldBT;
     int bw    = text(4, 22, fmt1(bt), F47(), cold ? GO : INK);
     if (8 + bw + tw("°C", F14()) < 156) text(8 + bw, 29, "°C", F14(), DIM);
@@ -874,14 +893,35 @@ void AppRoast::renderSummary()
     snprintf(b, sizeof(b), "RoR %s→%s · max heat %s%% · err %s°", fmt1(m.rorAtFC).c_str(), fmt1(m.rorFC30).c_str(),
              fmt0(m.maxHeat).c_str(), fmt1(m.meanAbsErr).c_str());
     text(4, 91, b, F11(), DIM);
-    bool updated = _saveMsg.rfind("Updated", 0) == 0;
-    if (updated || _saveMsg.rfind("Saved", 0) == 0) {
+    // bottom line: save state, then the recording (length; "clipped" means: lower the mic gain under O)
+    bool updated        = _saveMsg.rfind("Updated", 0) == 0;
+    bool saved          = updated || _saveMsg.rfind("Saved", 0) == 0;
+    const AudioInfo& au = _session.audio();
+    int right           = _fanRunning ? W - 6 - (tw("fan still on", F10()) + 8) : W - 4;
+    std::string a;
+    uint32_t ac = DIM;
+    if (au.valid) {
+        a = "audio " + mmss((int)lround(au.durationS));
+        if (au.failed) {
+            a += " · cut";
+            ac = DROP;
+        } else if (au.clipped > 100) {  // a few clipped samples are inaudible
+            a += " · clipped";
+            ac = HEAT;
+        }
+    }
+    int aw = a.empty() ? 0 : tw(a, F10()) + 15;
+    if (saved) {
         dot(8, 111, 4, GO);
         check(8, 111, ui::WHITE, 2);
-        text(16, 111, clipTo(std::string(updated ? "updated " : "saved ") + _session.logId(), 140, F10()), F10(), GO,
-             Datum::middle_left);
+        int x = 16 + text(16, 111, clipTo(std::string(updated ? "updated " : "saved ") + _session.logId(), right - aw - 16, F10()),
+                          F10(), GO, Datum::middle_left);
+        if (aw) {
+            dot(x + 9, 111, 2, ac);
+            text(x + 15, 111, clipTo(a, right - x - 15, F10()), F10(), ac, Datum::middle_left);
+        }
     } else if (!_saveMsg.empty()) {
-        text(4, 111, clipTo(_saveMsg, 150, F10()), F10(), DROP, Datum::middle_left);
+        text(4, 111, clipTo(_saveMsg, right - 4, F10()), F10(), DROP, Datum::middle_left);
     }
     if (_fanRunning) {
         int w = tw("fan still on", F10()) + 8;
@@ -1141,7 +1181,7 @@ void AppRoast::renderSettings()
 void AppRoast::renderHelp()
 {
     int x = 4 + text(4, 0, "Keys", F16(), INK);
-    text(x + 6, 5, "colour = what it controls", F10(), DIM);
+    text(x + 6, 5, clipTo("colour = what it controls", statusLeft() - 4 - (x + 6), F10()), F10(), DIM);
     struct G {
         uint32_t c;
         const char* name;

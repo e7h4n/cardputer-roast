@@ -57,6 +57,16 @@ std::string NextLogId()
     return b;
 }
 
+std::string LogPath(const std::string& id, const char* ext)
+{
+    return std::string(kLogDir) + "/" + id + ext;
+}
+
+bool EnsureLogDir()
+{
+    return EnsureDir(kLogDir);
+}
+
 void Session::reset(const Curve* curve, float greenG, const std::string& bean)
 {
     close();
@@ -72,6 +82,7 @@ void Session::reset(const Curve* curve, float greenG, const std::string& bean)
     _bean     = bean;
     _note.clear();
     _id.clear();
+    _audio = AudioInfo();
     curveName = curve ? curve->name : "";
     curveEnd  = curve ? curve->endTime() : 0;
     _curveTable.clear();
@@ -256,6 +267,35 @@ bool Session::finalize(std::string* err)
     add_num(root, "max_heat_pct", m.maxHeat);
     cJSON_AddNumberToObject(root, "heat_saturated_s", m.heatSatSec);
     add_num(root, "mean_abs_err_after_60s", m.meanAbsErr);
+    if (_audio.valid) {
+        const AudioInfo& a = _audio;
+        cJSON* au          = cJSON_AddObjectToObject(root, "audio");
+        cJSON_AddStringToObject(au, "file", a.file.c_str());
+        cJSON_AddStringToObject(au, "format", "wav pcm 16-bit mono");
+        cJSON_AddNumberToObject(au, "sample_rate", a.sampleRate);
+        cJSON_AddNumberToObject(au, "mic_gain_db", a.gainDb);
+        cJSON_AddNumberToObject(au, "start_ms_after_charge", a.startMsAfterCharge);
+        add_num(au, "duration_s", a.durationS, 2);
+        if (!std::isinf(a.peakDbfs)) add_num(au, "peak_dbfs", a.peakDbfs);
+        cJSON_AddNumberToObject(au, "clipped_samples", a.clipped);
+        cJSON_AddNumberToObject(au, "buffer_ms", a.bufferMs);
+        if (a.slot >= 0) cJSON_AddStringToObject(au, "i2s_slot", a.slot == 0 ? "left" : "right");
+        if (a.failed) cJSON_AddStringToObject(au, "error", "SD write failed: the file ends early");
+        // positions in the recording, in ms (event time after charge minus start_ms_after_charge)
+        cJSON* ev                = cJSON_AddObjectToObject(au, "events_ms");
+        const char* evKeys[5] = {"charge", "dry", "fc_start", "fc_end", "drop"};
+        for (int i = 0; i < 5; i++)
+            if (a.eventMs[i] >= 0) cJSON_AddNumberToObject(ev, evKeys[i], a.eventMs[i]);
+        // zeros inserted where the SD card stalled for longer than the buffer
+        cJSON* gaps = cJSON_AddArrayToObject(au, "silence");
+        for (auto& g : a.gaps) {
+            cJSON* o = cJSON_CreateObject();
+            cJSON_AddNumberToObject(o, "at_ms", g.atMs);
+            cJSON_AddNumberToObject(o, "ms", g.ms);
+            cJSON_AddItemToArray(gaps, o);
+        }
+        if (a.gapCount > a.gaps.size()) cJSON_AddNumberToObject(au, "silence_total", a.gapCount);
+    }
     cJSON* acts = cJSON_AddArrayToObject(root, "actions");
     for (auto& a : _actions) {
         cJSON* o = cJSON_CreateObject();

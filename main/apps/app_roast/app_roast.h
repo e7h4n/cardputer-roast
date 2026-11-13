@@ -28,6 +28,7 @@ struct RoastRules {
     float greenG     = 200.f; // default batch
     float heatDrop   = 5.0f;  // heater drop around first crack that triggers a hint
     float curveOffset = 0.0f; // shift the whole curve (myERoast tempCompensation), -30..30
+    int micGain      = 18;    // microphone PGA gain, 0..30 dB in 3 dB steps
     void load();
     void save() const;
 };
@@ -44,7 +45,7 @@ public:
 private:
     enum class Screen : uint8_t { Connect, Prep, Roast, Cool, Summary, Curves, Editor, Settings, Help };
     enum class Phase : uint8_t { Idle, FanOn, Roasting, Cooling, Done };
-    enum class Tone : uint8_t { Key, Info, Good, Warn, Alarm };
+    enum class Tone : uint8_t { Key, Info, Good, Warn };
 
     struct Input {
         bool active = false;
@@ -110,8 +111,6 @@ private:
     bool _satWarned      = false;
     bool _heatDropWarned = false;
     bool _rorWarned      = false;
-    bool _windowBeeped   = false;
-    uint32_t _lastAlarmMs = 0;
     bool _autoDropped    = false;
     std::string _autoDropWhy;
 
@@ -166,6 +165,14 @@ private:
     void pollFanBarrier();
     std::string _saveMsg;
 
+    // ---- audio recording (roast_audio.h): charge -> end of the log
+    bool _recording      = false;
+    uint32_t _recStartMs = 0;
+    int32_t _markMs[(int)roast::Mark::Count];  // ms after charge, -1 = not set (for the recording's event times)
+    void startRecording();
+    void stopRecording();
+    void pollRecording();
+
     // ---- logic (app_roast.cpp)
     void startLink(bool sim);
     void pollLink();
@@ -208,6 +215,12 @@ private:
         return _linkState == roast::LinkState::Ready;
     }
     void toast(const std::string& msg, uint32_t color = 0xFFFFFF, uint32_t ms = 2200);
+    /// From charge until the log ends the speaker stays off: no key clicks, chimes, warnings or alarms. Alerts are
+    /// shown on screen only, and the microphone can record (it shares the codec and its clocks with the speaker).
+    bool quietRoast() const
+    {
+        return _phase == Phase::Roasting || _phase == Phase::Cooling;
+    }
     void beep(Tone t);
     void pumpBeep();
     std::deque<std::pair<int, int>> _beepQueue;
@@ -231,7 +244,11 @@ private:
     void renderInput();
     void renderBanner();
     void renderToast();
-    void renderStatus();
+    int renderStatus(bool draw = true);  // returns the left edge of the status corner
+    int statusLeft()
+    {
+        return renderStatus(false);
+    }
     void renderBatch();
     void renderKeysBar();
     bool renderAlertBar();
