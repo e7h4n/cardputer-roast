@@ -38,6 +38,10 @@ void RoastRules::load()
     greenG    = s.GetInt("green10", (int)lroundf(greenG * 10)) / 10.0f;
     heatDrop  = s.GetInt("heatDrop10", (int)lroundf(heatDrop * 10)) / 10.0f;
     curveOffset = s.GetInt("curveOff10", (int)lroundf(curveOffset * 10)) / 10.0f;
+    svLookahead = std::max(0, std::min(20, (int)s.GetInt("svLook", svLookahead)));
+    fcFloor     = s.GetInt("fcFloor", fcFloor ? 1 : 0) != 0;
+    floorDelta  = std::max(0, std::min(50, (int)s.GetInt("floorD10", (int)lroundf(floorDelta * 10)))) / 10.0f;
+    floorCap    = std::max(10, std::min(80, (int)s.GetInt("floorCap10", (int)lroundf(floorCap * 10)))) / 10.0f;
 }
 
 void RoastRules::save() const
@@ -56,6 +60,10 @@ void RoastRules::save() const
     s.SetInt("green10", (int)lroundf(greenG * 10));
     s.SetInt("heatDrop10", (int)lroundf(heatDrop * 10));
     s.SetInt("curveOff10", (int)lroundf(curveOffset * 10));
+    s.SetInt("svLook", svLookahead);
+    s.SetInt("fcFloor", fcFloor ? 1 : 0);
+    s.SetInt("floorD10", (int)lroundf(floorDelta * 10));
+    s.SetInt("floorCap10", (int)lroundf(floorCap * 10));
 }
 
 /* ---------------------------------- app ---------------------------------- */
@@ -287,7 +295,7 @@ void AppRoast::charge()
 
     std::vector<RegWrite> w;
     if (_hasCurve) {
-        uint16_t t0 = (uint16_t)lroundf(_curve.at(0) * 10);
+        uint16_t t0 = (uint16_t)lroundf(ComputeSv(_curve, 0, NAN, false, svConfig()).sv * 10);
         w.push_back({9, t0});
         w.push_back({2, 0});
         w.push_back({15, 1});
@@ -304,6 +312,8 @@ void AppRoast::charge()
     _dropMs       = 0;
     _satRun       = 0;
     _satWarned = _heatDropWarned = _rorWarned = _windowBeeped = _autoDropped = false;
+    _svFloored = _floorLogged = false;
+    _lastSv                   = NAN;
     _autoDropWhy.clear();
     _session.reset(_hasCurve ? &_curve : nullptr, _rules.greenG, _bean);
     _session.openLog(NextLogId());
@@ -431,17 +441,20 @@ void AppRoast::toggleManual()
     }
     int t = roastT();
     if (!_manual) {
-        // PID off, then hold the heater at its current output.
-        _heatSet = _snap.has(11) ? std::round(_snap.heat()) : 80.0f;
+        // PID off, then hold the heater at its average over the last 30 s: one reading can catch the PID mid-swing.
+        float nowHeat = _snap.has(11) ? _snap.heat() : 80.0f;
+        _heatSet      = HoldHeat(_session.samples(), t, 30, nowHeat);
         _link->command({{15, 0}, {11, (uint16_t)lroundf(_heatSet * 10)}});
         _manual = true;
-        char b[48];
-        snprintf(b, sizeof(b), "manual heat %.0f%%", _heatSet);
+        char b[64];
+        snprintf(b, sizeof(b), "manual heat %.1f%% (30 s avg, now %.1f%%)", _heatSet, nowHeat);
         _session.addAction(t, b);
-        toast(std::string(b) + "  ←→ adjust", ui::HEAT, 3000);
+        snprintf(b, sizeof(b), "manual %.1f%% (30 s avg)", _heatSet);
+        toast(std::string(b) + "  ←→", ui::HEAT, 3000);
     } else {
-        uint16_t tgt = (uint16_t)lroundf(curveTargetAt(t) * 10);
+        uint16_t tgt = (uint16_t)lroundf(svAt(curveT()).sv * 10);
         _link->command({{9, tgt}, {15, 1}});
+        _lastTargetRaw = tgt;
         _manual = false;
         _session.addAction(t, "PID on curve");
         toast("PID on curve", ui::GO);
@@ -482,6 +495,26 @@ bool AppRoast::confirm(int key, const std::string& msg, bool quiet)
     return false;
 }
 
+/* ------------------------------ curve follow ------------------------------ */
+SvConfig AppRoast::svConfig() const
+{
+    SvConfig c;
+    c.lookahead  = _rules.svLookahead;
+    c.fcFloor    = _rules.fcFloor;
+    c.floorDelta = _rules.floorDelta;
+    c.floorCap   = _rules.floorCap;
+    return c;
+}
+
+SvResult AppRoast::svAt(int t) const
+{
+    SvConfig c = svConfig();
+    int start  = FcFloorStart(_curve.tagTime(PointTag::FCs), _session.markT(Mark::FCs), c.floorLead);
+    bool in    = _phase == Phase::Roasting && start >= 0 && t >= start;
+    float bt   = _snap.has(4) ? _snap.bt() : NAN;
+    return ComputeSv(_curve, t, bt, in, c);
+}
+
 /* ------------------------------ roast ticks ------------------------------ */
 void AppRoast::tickRoast()
 {
@@ -490,9 +523,22 @@ void AppRoast::tickRoast()
     _lastSampleT = t;
     _dirty       = true;
 
-    // 1) target for the machine PID
+    // 1) target (SV) for the machine PID: curve with lookahead, floored at BT + delta around first crack
+    float sv = NAN;
+    if (_hasCurve) {
+        SvResult r = svAt(curveT());
+        sv         = r.sv;
+        _svFloored = _phase == Phase::Roasting && r.floored;
+        if (_svFloored && !_floorLogged) {
+            char b[64];
+            snprintf(b, sizeof(b), "FC floor on: SV %.1f (BT %+.1f, curve %.1f)", r.sv, _rules.floorDelta, r.ahead);
+            _session.addAction(t, b);
+            _floorLogged = true;
+        }
+    }
+    _lastSv = sv;
     if (_phase == Phase::Roasting && _hasCurve && linkReady()) {
-        int raw = (int)lroundf(curveTargetAt(curveT()) * 10);
+        int raw = (int)lroundf(sv * 10);
         if (raw != _lastTargetRaw) {
             _link->setTarget((uint16_t)raw);
             _lastTargetRaw = raw;
@@ -503,7 +549,7 @@ void AppRoast::tickRoast()
     Sample s;
     s.t      = (int16_t)t;
     s.bt10   = _snap.has(4) ? _snap.reg[4] : (_session.samples().empty() ? 0 : _session.samples().back().bt10);
-    s.tgt10  = _hasCurve ? (int16_t)lroundf(curveTargetAt(curveT()) * 10) : 0;
+    s.tgt10  = _hasCurve ? (int16_t)lroundf(sv * 10) : 0;  // the SV actually written (lookahead, floor)
     s.heat10 = _snap.reg[11];
     s.fan10  = _snap.reg[12];
     s.mtime  = _snap.reg[2];
@@ -1373,6 +1419,14 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     rowF("start fan", &_rules.startFan, nullptr, 20, 100, 1, "%");
     rowF("cold below", &_rules.coldBT, nullptr, 20, 80, 1, "°");
     rowF("curve offset", &_rules.curveOffset, nullptr, -30, 30, 0.5f, "°");
+    group("CURVE FOLLOW", CURVE);
+    rowI("SV lookahead", &_rules.svLookahead, nullptr, 0, 20, 1, " s");
+    RuleRow floorRow;
+    floorRow.label  = "FC floor";
+    floorRow.toggle = &_rules.fcFloor;
+    v.push_back(floorRow);
+    rowF("floor above BT", &_rules.floorDelta, nullptr, 0, 5, 0.5f, "°");
+    rowF("floor cap", &_rules.floorCap, nullptr, 1, 8, 0.5f, "°");
     group("MODE", SIM);
     RuleRow sim;
     sim.label     = "simulator";
@@ -1403,6 +1457,11 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
             case KEY_ENTER:
                 if (r.simToggle) {
                     setSimulator(!(_link && _link->isSimulated()));
+                    return true;
+                }
+                if (r.toggle) {
+                    *r.toggle = !*r.toggle;
+                    _rules.save();
                     return true;
                 }
                 _setEditing = true;

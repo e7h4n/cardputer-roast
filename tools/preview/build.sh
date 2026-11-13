@@ -22,7 +22,7 @@ g++ -std=gnu++17 -O1 -DLGFX_LINUX_FB -DROAST_SD_ROOT="\"$OUT/sd\"" \
     -I"$ROOT/components/mooncake_log/src" -I"$SRC" -I"$CJSON" \
     "$ROOT/tools/preview/preview.cpp" \
     "$APP/app_roast.cpp" "$APP/app_roast_ui.cpp" "$APP/roast_curve.cpp" "$APP/roast_session.cpp" \
-    "$APP/roast_link_sim.cpp" "$APP/fonts/roast_fonts.cpp" \
+    "$APP/roast_link_sim.cpp" "$APP/roast_control.cpp" "$APP/fonts/roast_fonts.cpp" \
     "$SRC/lgfx/v1/LGFXBase.cpp" "$SRC/lgfx/v1/LGFX_Sprite.cpp" "$SRC/lgfx/v1/lgfx_fonts.cpp" \
     "$SRC"/lgfx/v1/misc/*.cpp "$SRC/lgfx/v1/platforms/framebuffer/common.cpp" "$SRC/lgfx/v1/panel/Panel_Device.cpp" \
     "$OUT"/obj/*.o -o "$OUT/preview"

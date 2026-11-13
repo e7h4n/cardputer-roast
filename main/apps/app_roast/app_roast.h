@@ -12,6 +12,7 @@
 #include "roast_link.h"
 #include "roast_curve.h"
 #include "roast_session.h"
+#include "roast_control.h"
 #include "roast_theme.h"
 
 struct RoastRules {
@@ -28,6 +29,10 @@ struct RoastRules {
     float greenG     = 200.f; // default batch
     float heatDrop   = 5.0f;  // heater drop around first crack that triggers a hint
     float curveOffset = 0.0f; // shift the whole curve (myERoast tempCompensation), -30..30
+    int svLookahead  = 8;     // SV = curve(t + this), 0..20 s (roast_control.h)
+    bool fcFloor     = true;  // around first crack, SV >= BT + floorDelta (capped at curve + 8)
+    float floorDelta = 1.0f;  // 0..5 degC
+    float floorCap   = 8.0f;  // the floor never exceeds curve(t) + this, 1..8 degC
     void load();
     void save() const;
 };
@@ -70,6 +75,7 @@ private:
         float lo = 0, hi = 0, step = 1;
         const char* unit = "";
         bool simToggle = false;
+        bool* toggle   = nullptr;  // on/off row
     };
     std::vector<RuleRow> ruleRows();
 
@@ -104,6 +110,11 @@ private:
     uint32_t _fanSetMs   = 0;
     float _heatSet       = 0;
     int _lastTargetRaw   = -1;
+    bool _svFloored      = false;  // last SV came from the first-crack floor
+    bool _floorLogged    = false;  // the floor's first use is in the log
+    float _lastSv        = NAN;
+    roast::SvConfig svConfig() const;
+    roast::SvResult svAt(int t) const;  // what to write as SV at curve second t (lookahead, first-crack floor)
 
     // ---- alerts
     int _satRun          = 0;

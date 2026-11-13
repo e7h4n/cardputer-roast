@@ -8,6 +8,7 @@
 #include <apps/app_roast/app_roast.h>
 #include <apps/app_roast/roast_debug.h>
 #include <apps/app_roast/roast_link.h>
+#include <hal/utils/settings/settings.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -160,9 +161,66 @@ static float bt()
     return l ? l->snapshot().bt() : 0;
 }
 
+// Replays batch A of 2026-11-12 (R0012) on the simulator: curve 50 / dry 4:30 150 / FC 7:30 199 / drop 10:00 210,
+// F at 8:01, drop at 8:56, with the curve-follow rules given on the command line, and shoots the chart.
+//   preview <dir> fcA <fcFloor 0|1> <lookahead s> <tag> [cap x10, default 80]
+static int fcScenario(int floorOn, int lookahead, const std::string& tag, int cap10)
+{
+    std::string dir = std::string(ROAST_SD_ROOT) + "/roast/curves";
+    mkdir((std::string(ROAST_SD_ROOT) + "/roast").c_str(), 0755);
+    mkdir(dir.c_str(), 0755);
+    if (FILE* f = fopen((dir + "/A.json").c_str(), "w")) {
+        fputs("{\"name\": \"A\", \"batch_g\": 100, \"total_s\": 600, \"points\": [{\"t\": 0, \"c\": 50, \"tag\": \"CHARGE\"}, "
+              "{\"t\": 270, \"c\": 150, \"tag\": \"DRY\"}, {\"t\": 450, \"c\": 199, \"tag\": \"FCs\"}, "
+              "{\"t\": 600, \"c\": 210, \"tag\": \"DROP\"}]}\n",
+              f);
+        fclose(f);
+    }
+    Settings s("roast", true);
+    s.SetString("curve", "A");
+    s.SetInt("fcFloor", floorOn);
+    s.SetInt("svLook", lookahead);
+    s.SetInt("floorCap10", cap10);
+    auto& cv = GetHAL().canvas;
+    cv.setColorDepth(16);
+    if (!cv.createSprite(240, 135)) return 1;
+    AppRoast app;
+    g_app = &app;
+    app.onOpen();
+    step(3500);  // link up -> Prep
+    press("s");
+    step(4000);
+    press("enter");  // charge at t = 0
+    uint32_t t0 = g_ms;
+    auto at = [&](int sec) { while ((int)((g_ms - t0) / 1000) < sec) step(50); };
+    at(481);
+    press("f");
+    at(511);
+    press("tab");
+    shot((tag + "_fc30").c_str());
+    press("tab");
+    at(536);
+    press("d", 50);
+    press("d");
+    step(1000);
+    press("tab");
+    shot((tag + "_drop").c_str());
+    step(30000);
+    press("enter");  // finish: writes the log
+    step(500);
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     g_out = argc > 1 ? argv[1] : "shots";
+    if (argc > 5 && std::string(argv[2]) == "fcA") {
+        mkdir(g_out.c_str(), 0755);
+#ifdef ROAST_SD_ROOT
+        mkdir(ROAST_SD_ROOT, 0755);
+#endif
+        return fcScenario(atoi(argv[3]), atoi(argv[4]), argv[5], argc > 6 ? atoi(argv[6]) : 80);
+    }
     mkdir(g_out.c_str(), 0755);
 #ifdef ROAST_SD_ROOT
     mkdir(ROAST_SD_ROOT, 0755);
