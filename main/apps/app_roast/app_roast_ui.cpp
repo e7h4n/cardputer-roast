@@ -1253,17 +1253,14 @@ void AppRoast::renderNetwork()
     // Dropbox
     std::string ds = v.dropbox, d;
     uint32_t dc    = FAINT;
-    if (ds == "connected") {
-        d  = "upload verified";
-        dc = GO;
-    } else if (ds == "saved") {
-        d  = "authorization saved";
+    if (ds == "saved" || ds == "connected") {
+        d  = "saved · checked at boot sync";
         dc = GO;
     } else if (ds == "authorizing") {
         d  = "exchanging the code…";
         dc = WARN;
     } else if (ds == "verifying") {
-        d  = "checking an upload…";
+        d  = "refreshing the token…";
         dc = WARN;
     } else if (ds == "failed") {
         d  = std::string("failed: ") + v.dropbox_error;

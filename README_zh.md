@@ -108,7 +108,7 @@ Roast 会自动搜索名为 `E-Meter…BLE` 的设备并连接。没有机器想
 1. 在电脑或安卓手机的 Chrome 里打开 https://e7h4n.github.io/coffee-watch/ ，点 **Connect watch**。
 2. 选 `CardputerRoast-XXXX`。系统配对弹窗要求输入时，输入 Cardputer 屏幕上的 6 位配对码。
 3. 填 2.4 GHz 的 Wi-Fi。Cardputer 拿到 IP 才算连上，这时才会保存。
-4. 关联 Dropbox：在 [App Console](https://www.dropbox.com/developers/apps) 建一个 Scoped access、App folder 权限的 app，勾上 `files.content.write`、`files.content.read` 和 `files.metadata.read`，在网页上填它的 App key 和 App secret，到 Dropbox 点允许，把页面显示的授权码贴回来。Cardputer 自己用授权码换长期 token，并往 app 文件夹里的 `/cardputer-roast/connection-check.json` 试传一次来验证。也可以直接用 Coffee Watch 的 Dropbox app，两台设备共用同一个 app 文件夹。
+4. 关联 Dropbox：在 [App Console](https://www.dropbox.com/developers/apps) 建一个 Scoped access、App folder 权限的 app，勾上 `files.content.write`、`files.content.read` 和 `files.metadata.read`，在网页上填它的 App key 和 App secret，到 Dropbox 点允许，把页面显示的授权码贴回来。Cardputer 自己用授权码换长期 token 并保存，页面显示 *Authorization saved* 就完成了。这里不试传文件（蓝牙开着时内存不够再建一次 HTTPS 连接）：退出配置后的开机同步不开蓝牙，是第一次真正用这个账号，账号有问题就同步失败并显示原因。页面上的 *Check Dropbox upload* 只刷新一次 token。也可以直接用 Coffee Watch 的 Dropbox app，两台设备共用同一个 app 文件夹。
 
 协议、数据包和状态都和 Coffee Watch 一样（[说明](https://github.com/e7h4n/coffee-watch/blob/main/spec/dropbox.md)），代码移植自它的固件。账号信息只通过加密、已认证的蓝牙连接发送，保存在 NVS（`rn_wifi`、`rn_dropbox`；普通 flash，没有开 flash 加密），不会写进日志，也不能通过蓝牙读出来。Wi-Fi、蓝牙配置服务和 TLS 缓冲只在这个页面打开时运行。网页上的 Remove Dropbox 只会清掉 Cardputer 上的授权；要彻底撤销，到 Dropbox 设置的 Connected apps 里断开。
 

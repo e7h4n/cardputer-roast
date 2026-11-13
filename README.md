@@ -151,7 +151,10 @@ roast log and a recording.
 4. Link Dropbox: in the [App Console](https://www.dropbox.com/developers/apps) create an app with Scoped access and
    App folder access, enable `files.content.write`, `files.content.read` and `files.metadata.read`, enter its App key
    and App secret, allow access on Dropbox and paste the code it shows. The Cardputer exchanges the code for a
-   refresh token itself and checks it with an upload to `/cardputer-roast/connection-check.json` in the app folder.
+   refresh token itself and saves it; the page then shows *Authorization saved*. It does not test an upload here
+   (with Bluetooth up there is not enough memory for a second HTTPS session): close setup, and the boot sync, which
+   runs without Bluetooth, is the first real use of the account. If it is wrong, the sync fails and says why.
+   *Check Dropbox upload* on the page only refreshes the token.
    You can reuse the Coffee Watch Dropbox app: both devices then share one app folder.
 
 The protocol, packets and status are the Coffee Watch ones ([spec](https://github.com/e7h4n/coffee-watch/blob/main/spec/dropbox.md)),

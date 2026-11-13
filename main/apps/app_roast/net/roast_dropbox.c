@@ -2,8 +2,10 @@
 /*
  * Dropbox authorization, ported from e7h4n/coffee-watch (firmware/demo/main/dropbox_setup.c) without its brew-record
  * uploads. The setup page sends the user's own App key, App secret and an authorization code (authorize URL with
- * token_access_type=offline and no redirect URI); this task exchanges the code for a refresh token, stores the
- * account in NVS, and proves it with an upload whose Dropbox content_hash must match ours.
+ * token_access_type=offline and no redirect URI); this task exchanges the code for a refresh token and stores the
+ * account in NVS. Unlike the watch it does not prove the account with an upload here: with Bluetooth up the heap is
+ * too fragmented for a second HTTPS session (7.6 KB largest block after the token exchange). Setup ends at "saved";
+ * the boot sync, which runs with Bluetooth off, is the first real use of the account and fails fast if it is wrong.
  *
  * HTTPS: ESP-IDF certificate bundle, no redirects, SNTP first so certificates can be checked. Tokens, the secret and
  * the code are never logged or returned over GATT; private buffers are wiped after use. The 4 KB response buffer and
@@ -35,9 +37,7 @@
 #define TAG "rn-dropbox"
 #define NVS_NS "rn_dropbox"
 #define TOKEN_URL "https://api.dropboxapi.com/oauth2/token"
-#define UPLOAD_URL "https://content.dropboxapi.com/2/files/upload"
 #define WRITE_SCOPE "files.content.write"
-#define CHECK_PATH "/cardputer-roast/connection-check.json"  // its own file: the app folder may be shared with a watch
 #define RESPONSE_SETUP 4096  // setup: token and upload replies are ~1.5 KB
 #define RESPONSE_SYNC 16384  // sync: folder listings
 #define TOKEN_MAX 2049
@@ -51,7 +51,6 @@ typedef struct {
     bool saved;
     uint32_t request;
 } public_t;
-typedef enum { UPLOAD_OK, UPLOAD_FAILED, UPLOAD_CONFLICT, UPLOAD_RESPONSE_INVALID, UPLOAD_HASH_MISMATCH } upload_result_t;
 typedef struct {
     bool quit;
     cw_dropbox_command_t command;
@@ -293,49 +292,6 @@ static bool refresh(void)
     return status == 200 && !token_response(false);
 }
 
-// Dropbox content_hash: SHA-256 of the concatenated SHA-256 digests of each 4 MiB block.
-static void content_hash(const uint8_t *data, size_t length, char out[65])
-{
-    mbedtls_sha256_context all;
-    uint8_t digest[32];
-    mbedtls_sha256_init(&all);
-    mbedtls_sha256_starts(&all, 0);
-    for (size_t offset = 0; offset < length; offset += HASH_BLOCK) {
-        size_t n = length - offset < HASH_BLOCK ? length - offset : HASH_BLOCK;
-        mbedtls_sha256(data + offset, n, digest, 0);
-        mbedtls_sha256_update(&all, digest, sizeof digest);
-    }
-    mbedtls_sha256_finish(&all, digest);
-    mbedtls_sha256_free(&all);
-    for (unsigned i = 0; i < 32; i++) sprintf(out + 2 * i, "%02x", digest[i]);
-}
-
-// Uploads to an app-folder path with a Dropbox WriteMode; only a stored content_hash equal to ours counts.
-static upload_result_t upload(const char *path, const char *mode, const char *data, size_t length)
-{
-    char arg[320];
-    int n = snprintf(arg, sizeof arg, "{\"path\":\"%s\",\"mode\":%s,\"autorename\":false,\"mute\":true,\"strict_conflict\":true}",
-                     path, mode);
-    if (n < 0 || (size_t)n >= sizeof arg) return UPLOAD_FAILED;
-    char expected[65];
-    content_hash((const uint8_t *)data, length, expected);
-    int status = http(UPLOAD_URL, data, length, "application/octet-stream", true, arg);
-    if (status == 409) return UPLOAD_CONFLICT;
-    if (status != 200) return UPLOAD_FAILED;
-    cJSON *reply = cJSON_Parse(response);
-    char hash[72], stored[96];
-    bool ok = text_field(reply, "content_hash", hash, sizeof hash) && text_field(reply, "path_lower", stored, sizeof stored);
-    cJSON_Delete(reply);
-    if (!ok || strcasecmp(stored, path)) return UPLOAD_RESPONSE_INVALID;  // our paths are ASCII
-    return strcmp(hash, expected) ? UPLOAD_HASH_MISMATCH : UPLOAD_OK;
-}
-
-static bool verify_dropbox(void)
-{
-    const char *content = "{\"schema\":1,\"application\":\"cardputer-roast\",\"purpose\":\"connection-check\"}\n";
-    return upload(CHECK_PATH, "\"overwrite\"", content, strlen(content)) == UPLOAD_OK;
-}
-
 static void begin_auth(const cw_dropbox_command_t *c)
 {
     memset(&account, 0, sizeof account);
@@ -369,15 +325,11 @@ static void begin_auth(const cw_dropbox_command_t *c)
         set_state("failed", "storage_error");
         return;
     }
-    set_state("verifying", NULL);
-    if (!verify_dropbox()) {
-        set_state("failed", "upload_check_failed");
-        return;
-    }
-    set_state("connected", NULL);
+    set_state("saved", NULL);  // the boot sync proves it (see the top of this file)
 }
 
-static void check_upload(void)
+// The page's "Check Dropbox upload": only a token refresh, one HTTPS session, which fits next to Bluetooth.
+static void check_refresh(void)
 {
     if (!load()) {
         set_state("failed", "authorize_first");
@@ -388,10 +340,8 @@ static void check_upload(void)
         set_state("failed", "clock_sync_failed");
     else if (!refresh())
         set_state("failed", "refresh_failed");
-    else if (!verify_dropbox())
-        set_state("failed", "upload_check_failed");
     else
-        set_state("connected", NULL);
+        set_state("saved", NULL);
 }
 
 static void dropbox_task(void *arg)
@@ -415,7 +365,7 @@ static void dropbox_task(void *arg)
                 set_state("failed", "storage_error");
             }
         } else if (c->op == 3) {
-            check_upload();
+            check_refresh();
         }
         mbedtls_platform_zeroize(&item, sizeof item);
         wipe_session();
@@ -498,6 +448,7 @@ int rn_dropbox_status(char *out, int capacity)
 
 /* =============================================================== sync client */
 #define DOWNLOAD_URL "https://content.dropboxapi.com/2/files/download"
+#define UPLOAD_URL "https://content.dropboxapi.com/2/files/upload"
 #define LIST_URL "https://api.dropboxapi.com/2/files/list_folder"
 #define LIST_MORE_URL "https://api.dropboxapi.com/2/files/list_folder/continue"
 #define DELETE_URL "https://api.dropboxapi.com/2/files/delete_v2"
