@@ -902,64 +902,14 @@ void AppRoast::renderSummary()
     snprintf(b, sizeof(b), "RoR %s→%s · max heat %s%% · err %s°", fmt1(m.rorAtFC).c_str(), fmt1(m.rorFC30).c_str(),
              fmt0(m.maxHeat).c_str(), fmt1(m.meanAbsErr).c_str());
     text(4, 91, b, F11(), DIM);
-    // bottom line: save state, then the recording (length; "clipped" means: lower the mic gain under O)
-    bool updated        = _saveMsg.rfind("Updated", 0) == 0;
-    bool saved          = updated || _saveMsg.rfind("Saved", 0) == 0;
-    const AudioInfo& au = _session.audio();
-    // right end: "fan still on", or the Dropbox save (it runs in the background once the fan is off)
-    std::string pillText;
-    uint32_t pillCol = FAN;
+    // bottom line: only what needs a hand. Save progress, the recording's length and clipping are in the JSON; a
+    // failed Dropbox save is toasted, and Enter explains why the summary cannot close while it saves.
+    bool sdFailed = !_saveMsg.empty() && _saveMsg.rfind("Updated", 0) != 0 && _saveMsg.rfind("Saved", 0) != 0;
+    int right     = _fanRunning ? W - 6 - (tw("fan still on", F10()) + 8) : W - 4;
+    if (sdFailed) text(4, 111, clipTo(_saveMsg, right - 4, F10()), F10(), DROP, Datum::middle_left);
     if (_fanRunning) {
-        pillText = "fan still on";
-    } else if (_sdOk && !_session.logId().empty()) {
-        sync::Status st = sync::Get();
-        if (!_saveStarted) {
-            pillText = "Dropbox…";
-            pillCol  = FAINT;
-        } else if (st.finished && !st.ok) {
-            pillText = "not saved";
-            pillCol  = DROP;
-        } else if (st.idle || (st.finished && st.ok)) {
-            pillText = "in Dropbox";
-            pillCol  = GO;
-        } else {
-            std::string f = st.file;
-            size_t dot    = f.rfind('.');
-            std::string ext = dot == std::string::npos ? f : f.substr(dot + 1);
-            int pct         = st.total ? (int)(100.0 * st.done / st.total) : 0;
-            pillText        = "saving " + ext + " " + std::to_string(pct) + "%";
-            pillCol         = CURVE;
-        }
-    }
-    int right = pillText.empty() ? W - 4 : W - 6 - (tw(pillText, F10()) + 8);
-    std::string a;
-    uint32_t ac = DIM;
-    if (au.valid) {
-        a = "audio " + mmss((int)lround(au.durationS));
-        if (au.failed) {
-            a += " · cut";
-            ac = DROP;
-        } else if (au.clipped > 100) {  // a few clipped samples are inaudible
-            a += " · clipped";
-            ac = HEAT;
-        }
-    }
-    int aw = a.empty() ? 0 : tw(a, F10()) + 15;
-    if (saved) {
-        dot(8, 111, 4, GO);
-        check(8, 111, ui::WHITE, 2);
-        int x = 16 + text(16, 111, clipTo(std::string(updated ? "updated " : "saved ") + _session.logId(), right - aw - 16, F10()),
-                          F10(), GO, Datum::middle_left);
-        if (aw) {
-            dot(x + 9, 111, 2, ac);
-            text(x + 15, 111, clipTo(a, right - x - 15, F10()), F10(), ac, Datum::middle_left);
-        }
-    } else if (!_saveMsg.empty()) {
-        text(4, 111, clipTo(_saveMsg, right - 4, F10()), F10(), DROP, Datum::middle_left);
-    }
-    if (!pillText.empty()) {
-        int w = tw(pillText, F10()) + 8;
-        pill(W - 4 - w, 105, pillText, pillCol);
+        int w = tw("fan still on", F10()) + 8;
+        pill(W - 4 - w, 105, "fan still on", FAN);
     }
     if (confirmPending(KEY_X))
         confirmRow("X", "press X again to stop the fan");

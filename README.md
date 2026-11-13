@@ -119,9 +119,8 @@ starts at F). After first crack it outlines the drop window. Exit is locked unti
 - The recording stops with the log: Enter or X X on the cooling page, 4 minutes after the drop, or on exit.
 
 The summary shows total time, development percentage and weight loss, the whole roast on the phase bar, first crack
-and the rise to drop, RoR at first crack and 30 s later, peak heater output and curve-following error. The bottom
-line shows the recording's length, with "clipped" when the microphone overloaded (lower *mic gain*) and "cut" when
-the SD card failed during the roast.
+and the rise to drop, RoR at first crack and 30 s later, peak heater output and curve-following error. The
+recording's length, clipping and inserted silence are in the summary JSON (`audio`), not on screen.
 
 ### Recording
 Every roast is recorded when an SD card is present; there is no switch. A red **REC** tag in the status corner
@@ -138,7 +137,7 @@ stalls for longer than the write buffer, the lost samples are replaced by the sa
 lists each such gap.
 
 *Mic gain* (0–30 dB in 3 dB steps, default 18 dB) is the codec's analog gain. The default is an estimate; if the
-summary says "clipped", lower it.
+JSON's `clipped_samples` is more than a handful, lower it.
 
 ### Wi-Fi & Dropbox
 **O** (also from the Connect page) › *network* opens the setup screen. It closes the roaster link first (setup needs
@@ -174,7 +173,7 @@ nothing is retried: a failure stops with its reason on screen.
 | Every boot, and **S** in the curve library | `Roast Curves/` → `roast/curves/`: the card ends up exactly like the folder at that moment (missing or different files downloaded, others deleted). Must succeed: on failure Roast stays on that screen (**Enter** tries again, **O** network setup, **Esc** exit). | Dropbox → card |
 | A curve saved in the editor (**S**) | That one file, overwritten on Dropbox. | card → Dropbox |
 | A curve deleted in the library (**Del** twice) | That one file, deleted on Dropbox, then on the card. | card → Dropbox |
-| On the summary, once the fan is off | `roast/logs/<id>.csv/.json/.alog/.wav` → `Roast Logs/`, overwritten, in the background: the summary stays usable (weight, note, chart) and its pill shows the progress. An edit there re-saves the .json and .alog. The summary can be closed only when everything is saved (or the save failed). Afterwards the record is not synced again; Roast has no history view. | card → Dropbox |
+| On the summary, once the fan is off | `roast/logs/<id>.csv/.json/.alog/.wav` → `Roast Logs/`, overwritten, in the background: the summary stays usable (weight, note, chart). An edit there re-saves the .json and .alog. The summary can be closed only when everything is saved (or the save failed). Afterwards the record is not synced again; Roast has no history view. | card → Dropbox |
 
 Last writer wins: the device pushes its own edits immediately, and the next sync replaces the card's curves with
 Dropbox's. The Cardputer has no PSRAM, and BLE, Wi-Fi and TLS do not fit together, so each of these closes the roaster

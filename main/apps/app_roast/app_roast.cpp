@@ -1026,7 +1026,7 @@ bool AppRoast::keySummary(int code)
             if (_fanRunning && confirm(KEY_X, "", true)) {
                 stopMachine();
                 _phase = Phase::Done;
-                toast("Fan stopped: saving to Dropbox", INK);
+                toast("Fan stopped", INK);
                 planSave();
             }
             return true;
@@ -1730,12 +1730,9 @@ void AppRoast::pollSave()
     }
     if (_saveStarted && !_saveReported) {
         sync::Status st = sync::Get();
-        if (st.finished && !st.ok) {
+        if (st.finished && !st.ok) {  // only a failure is worth a word: success is the normal case
             _saveReported = true;
             toast("Not saved: " + st.error, DROP, 6000);
-        } else if (st.idle && !_saveReported) {
-            _saveReported = true;
-            toast("Saved to Dropbox", GO, 2000);
         }
     }
 }
