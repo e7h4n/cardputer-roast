@@ -162,6 +162,24 @@ the Cardputer; revoke access under Connected apps in your Dropbox settings.
 The rules page shows the saved network and whether Dropbox is linked. Once Dropbox setup has set the clock (SNTP),
 new log ids are dated (`YYYYMMDD-HHMMSS`, UTC) instead of `R####`, until the next power-off.
 
+### Curve following: lookahead and the first-crack floor
+Roast does not run a PID itself. Once a second it writes the roaster's target (SV, register 9); the roaster's own PID
+(P/I/D in registers 21–23, never written) sets the heater. Two rules shape that target (`roast_control.h`):
+
+- **SV lookahead** (0–20 s, default 8): SV = curve(t + lookahead). The PID acts late (heater → air → beans), so it
+  aims where the curve will be. Artisan follows a background curve the same way. Past the curve's end the last value
+  holds.
+- **FC floor** (default on): from the curve's first-crack time minus 20 s (or the F mark, if earlier) until the drop,
+  SV is never below BT + *floor above BT* (default 1 °C), so the PID does not cut heat just to get back onto the line
+  while the crack absorbs heat (the rate of rise collapsed after first crack in the 2026-11-12 roasts). The floor is
+  capped at curve(t) + *floor cap*. In the simulator a loose cap lets BT climb far above the plan after the crack
+  (+8 °C cap: about +8.6 °C at the drop, RoR back up to ~20); +3 °C kept it to about +3 °C. Drop-now and the safety
+  drop are unchanged. The first time the floor lifts SV it is logged as an action; the Roast page then shows
+  "FC floor SV …" in place of the target.
+
+The log's `target` column records the SV actually written. **P** (manual heat) holds the heater at its mean over the
+last 30 s rather than one reading.
+
 ### Fan floors
 The roaster's own minimum fan register reads 50 %. A short press of ↓ stops at **50 %** and again at **40 %**.
 To go below a floor, sit on it and hold ↓ for at least 0.6 s. That moves you one step below the floor, and short
@@ -183,6 +201,10 @@ shown underneath, and range rules (window, rise) take the lower then the upper e
 | Start fan | 53 % |
 | Cold temperature | 40 °C |
 | Curve offset | 0 °C |
+| SV lookahead | 8 s |
+| FC floor | on |
+| Floor above BT | 1 °C |
+| Floor cap (above the curve) | 8 °C |
 | Record roast | on |
 | Mic gain | 18 dB |
 
@@ -331,6 +353,13 @@ CI uploads the same screenshots as the `ui-preview` artifact.
 ### Fonts
 The UI uses Space Grotesk (SIL OFL 1.1, `tools/fonts/OFL.txt`) as anti-aliased VLW fonts compiled into the
 firmware. `python3 tools/fonts/make_vlw.py` regenerates `main/apps/app_roast/fonts/roast_fonts_data.h` (Pillow).
+
+## Host tests and the simulator sweep
+```sh
+IDF_PATH=... tools/tests/run.sh                                   # roast_control unit tests (also in CI)
+tools/preview/build.sh && tools/preview/build_sweep.sh && build_preview/fc_sweep   # floor/cap/lookahead sweep
+build_preview/preview shots fcA <floor 0|1> <lookahead> <tag> [cap x10]           # batch A replay, chart shots
+```
 
 ## USB serial debug console
 The app listens on the USB serial port. `tools/rdbg.py` drives it:

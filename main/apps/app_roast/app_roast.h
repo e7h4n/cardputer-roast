@@ -12,6 +12,7 @@
 #include "roast_link.h"
 #include "roast_curve.h"
 #include "roast_session.h"
+#include "roast_control.h"
 #include "roast_theme.h"
 
 struct RoastRules {
@@ -30,6 +31,10 @@ struct RoastRules {
     float curveOffset = 0.0f; // shift the whole curve (myERoast tempCompensation), -30..30
     bool recAudio    = true;  // record the roast from charge to <id>.wav
     int micGain      = 18;    // microphone PGA gain, 0..30 dB in 3 dB steps
+    int svLookahead  = 8;     // SV = curve(t + this), 0..20 s (roast_control.h)
+    bool fcFloor     = true;  // around first crack, SV >= BT + floorDelta (capped at curve + 8)
+    float floorDelta = 1.0f;  // 0..5 degC
+    float floorCap   = 8.0f;  // the floor never exceeds curve(t) + this, 1..8 degC
     void load();
     void save() const;
 };
@@ -108,6 +113,11 @@ private:
     uint32_t _fanSetMs   = 0;
     float _heatSet       = 0;
     int _lastTargetRaw   = -1;
+    bool _svFloored      = false;  // last SV came from the first-crack floor
+    bool _floorLogged    = false;  // the floor's first use is in the log
+    float _lastSv        = NAN;
+    roast::SvConfig svConfig() const;
+    roast::SvResult svAt(int t) const;  // what to write as SV at curve second t (lookahead, first-crack floor)
 
     // ---- alerts
     int _satRun          = 0;

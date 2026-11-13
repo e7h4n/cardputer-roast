@@ -581,6 +581,8 @@ void AppRoast::renderDash()
     } else if (_manual) {
         text(4, 32, "manual heat", F11(), HEAT);
         if (_hasCurve) text(4, 45, signed1(bt - tgt) + "° vs curve", F11(), DIM);
+    } else if (_hasCurve && _svFloored) {  // first-crack floor: SV held at BT + delta, above the curve
+        text(4, 32, "FC floor SV " + fmt1(_lastSv), F11(), CURVE);
     } else if (_hasCurve) {
         text(4, 32, "target " + fmt1(tgt), F11(), DIM);
         text(4, 45, signed1(bt - tgt) + "°", F14(), INK);
