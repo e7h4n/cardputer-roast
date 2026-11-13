@@ -28,7 +28,6 @@ struct RoastRules {
     float greenG     = 200.f; // default batch
     float heatDrop   = 5.0f;  // heater drop around first crack that triggers a hint
     float curveOffset = 0.0f; // shift the whole curve (myERoast tempCompensation), -30..30
-    bool recAudio    = true;  // record the roast from charge to <id>.wav
     int micGain      = 18;    // microphone PGA gain, 0..30 dB in 3 dB steps
     void load();
     void save() const;
@@ -72,7 +71,6 @@ private:
         float lo = 0, hi = 0, step = 1;
         const char* unit = "";
         bool simToggle = false;
-        bool* toggle   = nullptr;  // on/off row
     };
     std::vector<RuleRow> ruleRows();
 

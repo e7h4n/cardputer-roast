@@ -1128,7 +1128,6 @@ void AppRoast::renderSettings()
     auto whole = [&](const RuleRow& r) { return r.i[0] != nullptr || r.step >= 1; };
     auto value = [&](const RuleRow& r, bool live) {
         if (r.simToggle) return std::string(_link && _link->isSimulated() ? "on" : "off");
-        if (r.toggle) return std::string(*r.toggle ? "on" : "off");
         bool isInt = whole(r);
         float v0   = live ? _setVal[0] : (r.f[0] ? *r.f[0] : (float)*r.i[0]);
         if (r.f[1] || r.i[1]) {

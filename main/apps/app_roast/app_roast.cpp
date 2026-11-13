@@ -39,7 +39,6 @@ void RoastRules::load()
     greenG    = s.GetInt("green10", (int)lroundf(greenG * 10)) / 10.0f;
     heatDrop  = s.GetInt("heatDrop10", (int)lroundf(heatDrop * 10)) / 10.0f;
     curveOffset = s.GetInt("curveOff10", (int)lroundf(curveOffset * 10)) / 10.0f;
-    recAudio    = s.GetInt("recAudio", recAudio ? 1 : 0) != 0;
     micGain     = std::max(0, std::min(rec::kMaxGainDb, (int)s.GetInt("micGain", micGain)));
 }
 
@@ -59,7 +58,6 @@ void RoastRules::save() const
     s.SetInt("green10", (int)lroundf(greenG * 10));
     s.SetInt("heatDrop10", (int)lroundf(heatDrop * 10));
     s.SetInt("curveOff10", (int)lroundf(curveOffset * 10));
-    s.SetInt("recAudio", recAudio ? 1 : 0);
     s.SetInt("micGain", micGain);
 }
 
@@ -1358,11 +1356,7 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     rowF("start fan", &_rules.startFan, nullptr, 20, 100, 1, "%");
     rowF("cold below", &_rules.coldBT, nullptr, 20, 80, 1, "°");
     rowF("curve offset", &_rules.curveOffset, nullptr, -30, 30, 0.5f, "°");
-    group("AUDIO", DROP);
-    RuleRow recRow;
-    recRow.label  = "record roast";
-    recRow.toggle = &_rules.recAudio;
-    v.push_back(recRow);
+    group("AUDIO", DROP);  // every roast is recorded (when there is an SD card); only the gain is a setting
     rowI("mic gain", &_rules.micGain, nullptr, 0, rec::kMaxGainDb, 3, " dB");
     group("MODE", SIM);
     RuleRow sim;
@@ -1394,13 +1388,6 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
             case KEY_ENTER:
                 if (r.simToggle) {
                     setSimulator(!(_link && _link->isSimulated()));
-                    return true;
-                }
-                if (r.toggle) {
-                    *r.toggle = !*r.toggle;
-                    _rules.save();
-                    if (r.toggle == &_rules.recAudio && _recording)
-                        toast("Applies from the next roast", FAINT);
                     return true;
                 }
                 _setEditing = true;
@@ -1516,7 +1503,7 @@ void AppRoast::keyInput(const Keyboard::KeyEvent_t& e, int code)
 /* ------------------------------- recording ------------------------------- */
 void AppRoast::startRecording()
 {
-    if (_recording || !_rules.recAudio || !_sdOk || !_session.logging()) return;
+    if (_recording || !_sdOk || !_session.logging()) return;  // always on: there is no switch
     std::string err;
     if (!rec::Start(LogPath(_session.logId(), ".wav"), _rules.micGain, &err)) {
         _session.addAction(roastT(), "no audio: " + err);
