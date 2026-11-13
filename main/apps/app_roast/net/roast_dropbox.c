@@ -131,17 +131,26 @@ static bool text_field(cJSON *json, const char *key, char *out, size_t size)
     return true;
 }
 
+// Best effort: sets the clock for dated log ids. TLS does not need it (CONFIG_MBEDTLS_HAVE_TIME_DATE is off, so
+// certificate dates are not checked), so a failure is logged and Dropbox goes on. After a power-off the clock starts
+// at 1970; pool.ntp.org alone timed out on the first device test, hence three servers and a shorter wait.
 static bool clock_ready(void)
 {
     if (time(NULL) > 1735689600) return true;  // after 2025-01-01: already set
     if (!sntp_ready) {
-        esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
-        config.start             = false;
-        if (esp_netif_sntp_init(&config) != ESP_OK) return false;
+        esp_sntp_config_t config =
+            ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(3, ESP_SNTP_SERVER_LIST("ntp.aliyun.com", "time.apple.com", "pool.ntp.org"));
+        config.start = false;
+        if (esp_netif_sntp_init(&config) != ESP_OK) {
+            ESP_LOGW(TAG, "SNTP init failed; the clock stays unset");
+            return false;
+        }
         sntp_ready = true;
     }
     esp_netif_sntp_start();
-    return esp_netif_sntp_sync_wait(pdMS_TO_TICKS(15000)) == ESP_OK && time(NULL) > 1735689600;
+    bool ok = esp_netif_sntp_sync_wait(pdMS_TO_TICKS(8000)) == ESP_OK && time(NULL) > 1735689600;
+    if (!ok) ESP_LOGW(TAG, "SNTP: no time within 8 s; going on without it (log ids fall back to R####)");
+    return ok;
 }
 
 static int http(const char *url, const char *body, size_t length, const char *type, bool authorized, const char *api_arg)
@@ -298,10 +307,7 @@ static void begin_auth(const cw_dropbox_command_t *c)
     snprintf(account.key, sizeof account.key, "%s", c->key);
     snprintf(account.secret, sizeof account.secret, "%s", c->secret);
     set_state("authorizing", NULL);
-    if (!clock_ready()) {
-        set_state("failed", "clock_sync_failed");
-        return;
-    }
+    clock_ready();  // best effort
     int status = post_form(form("code", c->code, "grant_type", "authorization_code", "client_id", account.key,
                                 "client_secret", account.secret, NULL));
     if (status != 200) {
@@ -336,9 +342,8 @@ static void check_refresh(void)
         return;
     }
     set_state("verifying", NULL);
-    if (!clock_ready())
-        set_state("failed", "clock_sync_failed");
-    else if (!refresh())
+    clock_ready();  // best effort
+    if (!refresh())
         set_state("failed", "refresh_failed");
     else
         set_state("saved", NULL);
@@ -601,11 +606,7 @@ bool rn_dbx_open(bool listing, char *err, size_t n)
         seterr(err, n, "Dropbox not linked");
         return false;
     }
-    if (!clock_ready()) {
-        rn_dbx_close();
-        seterr(err, n, "clock sync failed");
-        return false;
-    }
+    clock_ready();  // best effort: only the log ids need it
     if (!refresh()) {
         rn_dbx_close();
         seterr(err, n, "Dropbox token refresh failed");
