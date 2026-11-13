@@ -351,6 +351,9 @@ int AppRoast::renderStatus(bool draw)
     if (syncingNow()) {  // a temporary state: it takes the battery's place until the transfer is done
         if (draw) text(x, 1, "Syncing", F11(), CURVE, Datum::top_right);
         x -= tw("Syncing", F11());
+    } else if (saveFailed()) {  // the roast is not (all) in Dropbox: stays until the summary is left
+        if (draw) text(x, 1, "Sync failed", F11(), DROP, Datum::top_right);
+        x -= tw("Sync failed", F11());
     } else {
         uint32_t bc     = _batPct < 0 ? DIM : (_batPct <= 15 ? DROP : (_batPct <= 30 ? HEAT : INK));
         std::string pct = _batPct < 0 ? "--" : std::to_string(_batPct) + "%";
@@ -590,7 +593,7 @@ void AppRoast::renderDash()
         text(4, 32, "manual heat", F11(), HEAT);
         if (_hasCurve) text(4, 45, signed1(bt - tgt) + "° vs curve", F11(), DIM);
     } else if (_hasCurve && _svFloored) {  // first-crack floor: SV held at BT + delta, above the curve
-        text(4, 32, "FC floor SV " + fmt1(_lastSv), F11(), CURVE);
+        text(4, 32, _cardPid ? std::string("FC hold: heat on plan") : "FC floor SV " + fmt1(_lastSv), F11(), CURVE);
     } else if (_hasCurve) {
         text(4, 32, "target " + fmt1(tgt), F11(), DIM);
         text(4, 45, signed1(bt - tgt) + "°", F14(), INK);

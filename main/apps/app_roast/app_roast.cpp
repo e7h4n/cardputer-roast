@@ -52,6 +52,11 @@ void RoastRules::load()
     fcFloor     = s.GetInt("fcFloor", fcFloor ? 1 : 0) != 0;
     floorDelta  = std::max(0, std::min(50, (int)s.GetInt("floorD10", (int)lroundf(floorDelta * 10)))) / 10.0f;
     floorCap    = std::max(10, std::min(80, (int)s.GetInt("floorCap10", (int)lroundf(floorCap * 10)))) / 10.0f;
+    cardPid     = s.GetInt("cardPid", cardPid ? 1 : 0) != 0;
+    pidKp       = std::max(1, std::min(100, (int)s.GetInt("pidKp10", (int)lroundf(pidKp * 10)))) / 10.0f;
+    pidTi       = std::max(0, std::min(600, (int)s.GetInt("pidTi", pidTi)));
+    pidTd       = std::max(0, std::min(30, (int)s.GetInt("pidTd", pidTd)));
+    pidFF       = s.GetInt("pidFF", pidFF ? 1 : 0) != 0;
 }
 
 void RoastRules::save() const
@@ -75,6 +80,11 @@ void RoastRules::save() const
     s.SetInt("fcFloor", fcFloor ? 1 : 0);
     s.SetInt("floorD10", (int)lroundf(floorDelta * 10));
     s.SetInt("floorCap10", (int)lroundf(floorCap * 10));
+    s.SetInt("cardPid", cardPid ? 1 : 0);
+    s.SetInt("pidKp10", (int)lroundf(pidKp * 10));
+    s.SetInt("pidTi", pidTi);
+    s.SetInt("pidTd", pidTd);
+    s.SetInt("pidFF", pidFF ? 1 : 0);
 }
 
 /* ---------------------------------- app ---------------------------------- */
@@ -331,7 +341,20 @@ void AppRoast::charge()
         return;
 
     std::vector<RegWrite> w;
-    if (_hasCurve) {
+    _cardPid = false;
+    if (_hasCurve && _rules.cardPid) {
+        // Cardputer PID: the roaster's PID stays off; pidTick() writes the heater from the first second on.
+        uint16_t t0 = (uint16_t)lroundf(ComputeSv(_curve, 0, NAN, false, svConfig()).sv * 10);
+        w.push_back({9, t0});  // shown on the roaster; its PID does not use it
+        w.push_back({2, 0});
+        w.push_back({15, 0});
+        _manual        = false;
+        _cardPid       = true;
+        _lastTargetRaw = t0;
+        PidReset(_pid, 0);
+        _lastHeatRaw   = -1;
+        _pidMs         = 0;
+    } else if (_hasCurve) {
         uint16_t t0 = (uint16_t)lroundf(ComputeSv(_curve, 0, NAN, false, svConfig()).sv * 10);
         w.push_back({9, t0});
         w.push_back({2, 0});
@@ -359,20 +382,33 @@ void AppRoast::charge()
         char b[40];
         snprintf(b, sizeof(b), "charge fan %.1f%% BT %.1f", _snap.has(12) ? _snap.fan() : _fanSet, _snap.bt());
         _session.addAction(0, b);
+        if (_hasCurve) {
+            char c[80];
+            if (_cardPid)
+                snprintf(c, sizeof(c), "control: Cardputer PID P %.1f Ti %d s Td %d s feedforward %s", _rules.pidKp,
+                         _rules.pidTi, _rules.pidTd, _rules.pidFF ? "on" : "off");
+            else
+                snprintf(c, sizeof(c), "control: roaster PID");
+            _session.addAction(0, c);
+        }
     }
     _phase  = Phase::Roasting;
     _screen = Screen::Roast;
     // quiet roast (see quietRoast()): no key clicks either, until the log ends
     audio::set_keyboard_sfx_enable(false);
     _beepQueue.clear();
-    toast(_hasCurve ? "Charged: PID follows curve" : "Charged: manual heat (←→)", ui::GO);
+    toast(!_hasCurve ? "Charged: manual heat (←→)" : (_cardPid ? "Charged: Cardputer PID" : "Charged: PID follows curve"),
+          ui::GO);
     startRecording();  // last, so a failure toast is not covered by the charge toast
 }
 
 void AppRoast::drop(const char* why)
 {
     if (_phase != Phase::Roasting) return;
-    if (_link) _link->command({{14, 2}});
+    if (_link) {
+        _link->cancelHeat();  // a heater write queued before the drop must not land after it
+        _link->command({{14, 2}});
+    }
     int t    = roastT();
     float bt = _snap.has(4) ? _snap.bt() : _session.lastBT();
     _session.setMark(Mark::Drop, t, bt);
@@ -492,6 +528,15 @@ void AppRoast::toggleManual()
         _session.addAction(t, b);
         snprintf(b, sizeof(b), "manual %.1f%% (30 s avg)", _heatSet);
         toast(std::string(b) + "  ←→", ui::HEAT, 3000);
+    } else if (_cardPid) {
+        // Bumpless: the Cardputer PID starts from the heat being held now.
+        float bt = _snap.has(4) ? _snap.bt() : NAN;
+        PidPrime(_pid, _heatSet, pidAim(curveT()), bt, pidConfig());
+        _pidMs       = GetHAL().millis();
+        _lastHeatRaw = (int)lroundf(_heatSet * 10);
+        _manual      = false;
+        _session.addAction(t, "Cardputer PID on curve");
+        toast("PID on curve", ui::GO);
     } else {
         uint16_t tgt = (uint16_t)lroundf(svAt(curveT()).sv * 10);
         _link->command({{9, tgt}, {15, 1}});
@@ -547,6 +592,59 @@ SvConfig AppRoast::svConfig() const
     return c;
 }
 
+PidConfig AppRoast::pidConfig() const
+{
+    PidConfig c;
+    c.kp          = _rules.pidKp;
+    c.ti          = (float)_rules.pidTi;
+    c.td          = (float)_rules.pidTd;
+    c.feedforward = _rules.pidFF;
+    return c;
+}
+
+// What the Cardputer PID aims at, at curve second t: error against the curve now, feedforward from the curve
+// `lookahead` seconds ahead (roast_control.h PidAim). Around first crack the floor holds: while BT is above the curve
+// the error is 0, the integral stops and the heater stays on the plan (feedforward); "floor above BT" is for the
+// roaster PID only. With +1 the integral kept pushing BT up and the drop came 4-5 degC over the curve (tools/pid).
+PidAim AppRoast::pidAim(int t) const
+{
+    SvConfig c = svConfig();
+    c.lookahead  = 0;
+    c.floorDelta = 0;  // floor = hold: BT above the curve gives no error, so the PI neither cuts nor pushes
+    int start   = FcFloorStart(_curve.tagTime(PointTag::FCs), _session.markT(Mark::FCs), c.floorLead);
+    bool in     = _phase == Phase::Roasting && start >= 0 && t >= start;
+    float bt    = _snap.has(4) ? _snap.bt() : NAN;
+    PidAim a;
+    SvResult r = ComputeSv(_curve, t, bt, in, c);
+    a.target   = r.sv;
+    a.floored  = r.floored;
+    a.ffTemp = _curve.at(t + _rules.svLookahead);
+    a.ffRate = CurveRate(_curve, t + _rules.svLookahead);
+    return a;
+}
+
+// Cardputer PID, once a roast second: heater output from the curve and BT.
+void AppRoast::pidTick(const PidAim& aim)
+{
+    uint32_t now = GetHAL().millis();
+    float dt     = _pidMs ? (now - _pidMs) / 1000.0f : 1.0f;
+    _pidMs       = now;
+    // A reading older than 3 s is not fresh: hold the output (PidStep with NAN) rather than act on it.
+    bool fresh = _snap.has(4) && _snap.lastRxMs && now - _snap.lastRxMs < 3000;
+    float bt   = fresh ? _snap.bt() : NAN;
+    PidTerms o = PidStep(_pid, aim, bt, dt, pidConfig());
+    int raw    = (int)lroundf(o.heat * 10);
+    // Also re-send an unchanged value every 5 s: the roaster cut its heater ~17-19 s into a Bluetooth loss (empty
+    // run, 2026-11-13), and if that timeout counts writes rather than the connection, a steady output must not
+    // trip it.
+    if (raw != _lastHeatRaw || now - _heatSentMs >= 5000) {
+        _link->setHeat((uint16_t)raw);
+        _lastHeatRaw = raw;
+        _heatSentMs  = now;
+    }
+    _session.setControl(o.heat, o.ff, o.p, o.i, o.d);
+}
+
 SvResult AppRoast::svAt(int t) const
 {
     SvConfig c = svConfig();
@@ -566,7 +664,18 @@ void AppRoast::tickRoast()
 
     // 1) target (SV) for the machine PID: curve with lookahead, floored at BT + delta around first crack
     float sv = NAN;
-    if (_hasCurve) {
+    PidAim aim;
+    if (_hasCurve && _cardPid) {  // what the Cardputer PID aims at: the curve now, held around first crack
+        aim        = pidAim(curveT());
+        sv         = aim.target;
+        _svFloored = _phase == Phase::Roasting && aim.floored;
+        if (_svFloored && !_floorLogged) {
+            char b[64];
+            snprintf(b, sizeof(b), "FC hold on: BT %.1f above curve %.1f", _snap.bt(), _curve.at(curveT()));
+            _session.addAction(t, b);
+            _floorLogged = true;
+        }
+    } else if (_hasCurve) {
         SvResult r = svAt(curveT());
         sv         = r.sv;
         _svFloored = _phase == Phase::Roasting && r.floored;
@@ -579,10 +688,14 @@ void AppRoast::tickRoast()
     }
     _lastSv = sv;
     if (_phase == Phase::Roasting && _hasCurve && linkReady()) {
-        int raw = (int)lroundf(sv * 10);
-        if (raw != _lastTargetRaw) {
-            _link->setTarget((uint16_t)raw);
-            _lastTargetRaw = raw;
+        if (_cardPid) {
+            if (!_manual) pidTick(aim);
+        } else {
+            int raw = (int)lroundf(sv * 10);
+            if (raw != _lastTargetRaw) {
+                _link->setTarget((uint16_t)raw);
+                _lastTargetRaw = raw;
+            }
         }
     }
 
@@ -590,11 +703,11 @@ void AppRoast::tickRoast()
     Sample s;
     s.t      = (int16_t)t;
     s.bt10   = _snap.has(4) ? _snap.reg[4] : (_session.samples().empty() ? 0 : _session.samples().back().bt10);
-    s.tgt10  = _hasCurve ? (int16_t)lroundf(sv * 10) : 0;  // the SV actually written (lookahead, floor)
+    s.tgt10  = _hasCurve ? (int16_t)lroundf(sv * 10) : 0;  // SV written, or the Cardputer PID's target
     s.heat10 = _snap.reg[11];
     s.fan10  = _snap.reg[12];
     s.mtime  = _snap.reg[2];
-    s.pid    = _snap.pidOn() ? 1 : 0;
+    s.pid    = (_cardPid && !_manual && _phase == Phase::Roasting) ? 2 : (_snap.pidOn() ? 1 : 0);
     s.ror10  = INT16_MIN;
     bool cap = _phase == Phase::Cooling && _dropMs && GetHAL().millis() - _dropMs > 240000;
     if (!cap) _session.addSample(s);
@@ -671,6 +784,7 @@ void AppRoast::finishRoast()
     _phase    = _fanRunning ? Phase::FanOn : Phase::Idle;
     _screen   = Screen::Prep;
     _manual   = false;
+    _cardPid  = false;
     _view     = 0;
     if (_link) _link->clearQueue();
     _rules.save();
@@ -1483,6 +1597,17 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     rowF("cold below", &_rules.coldBT, nullptr, 20, 80, 1, "°");
     rowF("curve offset", &_rules.curveOffset, nullptr, -30, 30, 0.5f, "°");
     group("CURVE FOLLOW", CURVE);
+    RuleRow cardRow;
+    cardRow.label  = "PID on Cardputer";
+    cardRow.toggle = &_rules.cardPid;
+    v.push_back(cardRow);
+    rowF("P", &_rules.pidKp, nullptr, 0.1f, 10, 0.1f, "%/°");
+    rowI("I time", &_rules.pidTi, nullptr, 0, 600, 5, " s");
+    rowI("D time", &_rules.pidTd, nullptr, 0, 30, 1, " s");
+    RuleRow ffRow;
+    ffRow.label  = "feedforward";
+    ffRow.toggle = &_rules.pidFF;
+    v.push_back(ffRow);
     rowI("SV lookahead", &_rules.svLookahead, nullptr, 0, 20, 1, " s");
     RuleRow floorRow;
     floorRow.label  = "FC floor";
@@ -1724,6 +1849,10 @@ void AppRoast::pollSave()
         }
         GetHAL().setRoastBleActive(false);
         _linkState = _prevLinkState = LinkState::Off;
+        // The curve library keeps every curve's 1 Hz table (~3 KB each); the summary cannot open it and Roast
+        // restarts after the save, so give that memory to Wi-Fi + TLS. A 10-minute recording's upload ran the heap
+        // down to 2.7 KB without this (2026-11-13).
+        std::vector<Curve>().swap(_curves);
         _saveStarted = sync::Start(sync::Job::SaveRoast, _session.logId());
         if (!_saveStarted) toast("Dropbox save could not start", DROP, 3000);
         _dirty = true;
@@ -1742,6 +1871,14 @@ bool AppRoast::syncingNow()
     if (_saveAt) return true;  // the roast's save starts in a moment
     sync::Status st = sync::Get();
     return st.running && !st.idle;
+}
+
+bool AppRoast::saveFailed()
+{
+    if (_screen != Screen::Summary && _screen != Screen::Help) return false;
+    if (!_saveStarted) return false;
+    sync::Status st = sync::Get();
+    return st.finished && !st.ok;
 }
 
 bool AppRoast::saveBusy()

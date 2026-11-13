@@ -42,8 +42,8 @@ CONFIG_ESP_WIFI_IRAM_OPT=n
 CONFIG_ESP_WIFI_RX_IRAM_OPT=n
 CONFIG_LWIP_IRAM_OPTIMIZATION=n
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=2
-CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
-CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=8
 CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
 CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
 # One BLE connection at a time (the roaster, or the setup page's browser) and legacy advertising/scanning only: the
@@ -55,3 +55,13 @@ CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=8
 CONFIG_BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT=8
 CONFIG_BT_NIMBLE_TRANSPORT_EVT_COUNT=12
 CONFIG_BT_NIMBLE_TRANSPORT_EVT_DISCARD_COUNT=4
+
+# SNTP: three servers (roast_dropbox.c clock_ready)
+CONFIG_LWIP_SNTP_MAX_SERVERS=3
+
+# Software AES: the hardware AES driver allocates DMA bounce buffers per TLS record, and at the roast's save
+# (Wi-Fi + TLS + the summary's samples) that allocation failed ("esp-aes: Failed to allocate memory") and the WAV
+# upload dropped. The upload is network bound; software AES costs no heap.
+CONFIG_MBEDTLS_HARDWARE_AES=n
+# Free the server's certificate chain after the handshake (the roast's save needs every KB; nothing reads it later).
+CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE=n

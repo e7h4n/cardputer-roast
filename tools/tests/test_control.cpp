@@ -1,9 +1,12 @@
-// Host unit tests for roast_control (SV lookahead, first-crack floor, manual hold) and the curve lookup they use.
+// Host unit tests for roast_control (SV lookahead, first-crack floor, manual hold, Cardputer PID) and the curve
+// lookup they use.
 //   tools/tests/run.sh
 #include <apps/app_roast/roast_control.h>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
+#include <algorithm>
 
 using namespace roast;
 
@@ -29,12 +32,64 @@ static Curve line()
     return c;
 }
 
+static PidAim Aim(float target, float rate)
+{
+    PidAim a;
+    a.target = target;
+    a.ffTemp = target;
+    a.ffRate = rate;
+    return a;
+}
+
 static Sample S(int t, float heat)
 {
     Sample s{};
     s.t      = (int16_t)t;
     s.heat10 = (int16_t)lroundf(heat * 10);
     return s;
+}
+
+
+// Heater -> bean plant as fitted on R0012-R0014 (roast_control.h PlantModel), with a dead time; one step per second.
+struct Plant {
+    float gain = 2.2f, rate = 0.0175f, ambient = 26.0f;
+    int dead   = 5;
+    float bt = 100, air = 100;
+    std::vector<float> hist;
+    void step(float heat)
+    {
+        hist.push_back(heat);
+        float late = hist.size() > (size_t)dead ? hist[hist.size() - 1 - dead] : 0;
+        air += (ambient + gain * late - air) * (1 - std::exp(-1.0f));
+        bt += (air - bt) * rate;
+    }
+};
+
+// Follows line() for 600 s from BT 100 (air already at 100) with lookahead 8; worst |BT - curve| after 120 s, and
+// the largest heater change between two seconds over the last 300 s.
+static void follow(const PidConfig& cfg, Plant pl, float* worstErr, float* maxJump)
+{
+    Curve c = line();
+    PidState st;
+    pl.bt = pl.air = 100;
+    auto aim = [&](int t) {
+        PidAim a;
+        a.target = c.at(t);
+        a.ffTemp = c.at(t + 8);
+        a.ffRate = CurveRate(c, t + 8);
+        return a;
+    };
+    PidPrime(st, (100 + (1 / 6.0f) / pl.rate - pl.ambient) / pl.gain, aim(0), 100, cfg);
+    *worstErr = 0;
+    *maxJump  = 0;
+    float last = st.out;
+    for (int t = 0; t < 560; t++) {
+        PidTerms o = PidStep(st, aim(t), pl.bt, 1.0f, cfg);
+        pl.step(o.heat);
+        if (t > 120) *worstErr = std::max(*worstErr, std::fabs(pl.bt - c.at(t + 1)));
+        if (t > 260) *maxJump = std::max(*maxJump, std::fabs(o.heat - last));
+        last = o.heat;
+    }
 }
 
 int main()
@@ -104,6 +159,109 @@ int main()
     NEAR(HoldHeat(s, 80, 30, -1), (20 * 50.0f + 10 * 80.0f) / 30.0f);  // window ends at `now`
     NEAR(HoldHeat({}, 10, 30, 77.0f), 77.0f);                        // no samples: current reading
     NEAR(HoldHeat(s, 5, 30, -1), 50.0f);                              // shorter than 30 s so far
+
+
+    // --- Cardputer PID: feedforward from the model
+    PlantModel pm;
+    NEAR(FeedForwardHeat(200, 5 / 60.0f, pm), (200 + (5 / 60.0f) / 0.0175f - 26) / 2.2f);  // ~81 % at FC, RoR 5
+    NEAR(FeedForwardHeat(26, 0, pm), 0.0f);
+    NEAR(FeedForwardHeat(500, 0, pm), 100.0f);                     // clamped
+    NEAR(FeedForwardHeat(150, NAN, pm), (150 - 26) / 2.2f);        // no slope: hold
+    NEAR(CurveRate(line(), 300), 1 / 6.0f);
+    NEAR(CurveRate(line(), 0), 1 / 6.0f);                          // one-sided at the start
+
+    PidConfig pc;  // P 1.5, Ti 60, Td 0, feedforward, 3 %/s
+    {  // bumpless: primed at 60 %, the first step stays at 60 % plus one second of integral
+        PidState st;
+        PidPrime(st, 60, Aim(180, 0.1f), 178, pc);
+        PidTerms o = PidStep(st, Aim(180, 0.1f), 178, 1.0f, pc);
+        NEAR(o.heat, 60 + 1.5f / 60 * 2);
+        NEAR(o.ff + o.p + o.i + o.d, o.heat);
+    }
+    {  // charge: a fresh start has no integral, and ramps from 0 % at the slew limit
+        PidState st;
+        PidReset(st, 0);
+        NEAR(st.integ, 0.0f);
+        PidTerms o = PidStep(st, Aim(60, 0.4f), 25, 1.0f, pc);
+        NEAR(o.heat, 3.0f);
+        NEAR(st.integ, 0.0f);  // slew-limited: no integration while ramping (anti-windup)
+    }
+    {  // slew limit: from 0 % with a large error, at most 3 % per second
+        PidState st;
+        PidPrime(st, 0, Aim(150, 0), 100, pc);
+        PidTerms o = PidStep(st, Aim(150, 0), 100, 1.0f, pc);
+        NEAR(o.heat, 3.0f);
+        CHECK(o.limited);
+        for (int i = 0; i < 9; i++) o = PidStep(st, Aim(150, 0), 100, 1.0f, pc);
+        NEAR(o.heat, 30.0f);
+    }
+    {  // anti-windup: 200 s pinned at 100 % with BT below SV, then BT above SV: off the limit within 3 s
+        PidState st;
+        PidPrime(st, 100, Aim(220, 0), 150, pc);
+        for (int i = 0; i < 200; i++) PidStep(st, Aim(220, 0), 150, 1.0f, pc);
+        CHECK(st.integ <= pc.iLimit + 1e-3f);
+        PidTerms o{};
+        int n = 0;
+        for (; n < 3; n++) {
+            o = PidStep(st, Aim(220, 0), 225, 1.0f, pc);
+            if (o.heat < 100) break;
+        }
+        CHECK(n < 3);
+    }
+    {  // no fresh reading: hold the output, do not integrate
+        PidState st;
+        PidPrime(st, 70, Aim(190, 0.1f), 185, pc);
+        float i0   = st.integ;
+        PidTerms o = PidStep(st, Aim(190, 0.1f), NAN, 1.0f, pc);
+        NEAR(o.heat, 70.0f);
+        NEAR(st.integ, i0);
+    }
+    {  // no integral (Ti 0): P + feedforward only
+        PidConfig p0 = pc;
+        p0.ti        = 0;
+        PidState st;
+        PidPrime(st, 50, Aim(180, 0), 179, p0);
+        PidTerms o = PidStep(st, Aim(180, 0), 179, 1.0f, p0);
+        NEAR(o.i, 0.0f);
+    }
+    {  // derivative on BT: rising BT lowers the output (Td 10 s)
+        PidConfig pd = pc;
+        pd.td        = 10;
+        pd.maxStep   = 100;
+        PidState a, b;
+        PidPrime(a, 60, Aim(180, 0), 170, pd);
+        PidPrime(b, 60, Aim(180, 0), 170, pd);
+        PidStep(a, Aim(180, 0), 170, 1.0f, pd);
+        PidStep(b, Aim(180, 0), 170, 1.0f, pd);
+        PidTerms flat = PidStep(a, Aim(180, 0), 170, 1.0f, pd);
+        PidTerms rise = PidStep(b, Aim(180, 0), 172, 1.0f, pd);
+        CHECK(rise.d < 0);
+        CHECK(rise.heat < flat.heat);
+    }
+    {  // closed loop on the fitted plant: follows a 10 degC/min ramp within 1 degC, smooth heater
+        float err, jump;
+        follow(pc, Plant(), &err, &jump);
+        printf("  PID on fitted plant: worst |BT - curve| %.2f degC, largest heater step %.2f %%\n", err, jump);
+        CHECK(err < 0.5f);
+        CHECK(jump < 1.0f);
+        // model wrong by 20 % (gain and rate) and 8 s dead time: still within 3 degC and no oscillation
+        Plant off;
+        off.gain = 2.64f;
+        off.rate = 0.014f;
+        off.dead = 8;
+        follow(pc, off, &err, &jump);
+        printf("  PID on mismatched plant: worst |BT - curve| %.2f degC, largest heater step %.2f %%\n", err, jump);
+        CHECK(err < 3.0f);
+        CHECK(jump < 1.5f);
+        // without feedforward the PI alone lags the ramp
+        PidConfig noff = pc;
+        noff.feedforward = false;
+        noff.iLimit      = 100;
+        float errNo;
+        follow(noff, Plant(), &errNo, &jump);
+        printf("  PI without feedforward: worst |BT - curve| %.2f degC\n", errNo);
+        CHECK(errNo > err);
+    }
 
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

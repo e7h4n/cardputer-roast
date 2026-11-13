@@ -102,6 +102,13 @@ public:
 
     /// Latest-value slot for the PID target (reg 9). Older unsent values are replaced.
     virtual void setTarget(uint16_t raw) = 0;
+    /// Latest-value slot for the heater output (reg 11), written once a second by the Cardputer PID.
+    virtual void setHeat(uint16_t raw) = 0;
+    /// Forget a heater value not yet written (before a drop: it must not land after it).
+    virtual void cancelHeat() {}
+    /// Test only (USB console `link drop`): end the connection as a radio loss would, and do not reconnect for
+    /// `holdMs`. The stack stays up (no re-init during a roast).
+    virtual void debugDisconnect(uint32_t holdMs) { (void)holdMs; }
 
     /// Drop anything still queued (used when leaving a roast).
     virtual void clearQueue() = 0;

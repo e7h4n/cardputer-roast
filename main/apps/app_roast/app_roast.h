@@ -35,6 +35,11 @@ struct RoastRules {
     bool fcFloor     = true;  // around first crack, SV >= BT + floorDelta (capped at curve + 8)
     float floorDelta = 1.0f;  // 0..5 degC
     float floorCap   = 8.0f;  // the floor never exceeds curve(t) + this, 1..8 degC
+    bool cardPid     = true;  // the Cardputer computes the heater output; off: the roaster's own PID follows SV
+    float pidKp      = 1.5f;  // % heat per degC, 0.1..10 (roast_control.h PidConfig)
+    int pidTi        = 60;    // integral time, s (0: no integral)
+    int pidTd        = 0;     // derivative time, s
+    bool pidFF       = true;  // model feedforward
     void load();
     void save() const;
 };
@@ -117,6 +122,14 @@ private:
     bool _floorLogged    = false;  // the floor's first use is in the log
     float _lastSv        = NAN;
     roast::SvConfig svConfig() const;
+    roast::PidConfig pidConfig() const;
+    roast::PidState _pid;
+    bool _cardPid      = false;  // this roast: heater from the Cardputer PID (decided at charge)
+    int _lastHeatRaw   = -1;
+    uint32_t _pidMs    = 0;
+    uint32_t _heatSentMs = 0;
+    void pidTick(const roast::PidAim& aim);
+    roast::PidAim pidAim(int t) const;
     roast::SvResult svAt(int t) const;  // what to write as SV at curve second t (lookahead, first-crack floor)
 
     // ---- alerts
@@ -197,6 +210,7 @@ private:
     void resaveEdited();         // the summary's edits rewrote the .json and .alog
     bool saveBusy();             // the roast on the summary is not in Dropbox yet (and has not failed)
     bool syncingNow();           // a Dropbox job is moving data: the status corner says "Syncing" instead of battery
+    bool saveFailed();           // the summary's roast save ended with an error (status corner: "Sync failed")
     bool startJob(roast::sync::Job job, const std::string& arg);
     void pollSync();
     bool keySync(int code);

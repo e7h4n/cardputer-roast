@@ -64,6 +64,7 @@ struct PreviewBle : roast::RoasterLink {
     uint32_t command(const std::vector<roast::RegWrite>& w) override { return sim->command(w); }
     roast::TxStatus txStatus(uint32_t id) override { return sim->txStatus(id); }
     void setTarget(uint16_t raw) override { sim->setTarget(raw); }
+    void setHeat(uint16_t raw) override { sim->setHeat(raw); }
     void clearQueue() override { sim->clearQueue(); }
 };
 roast::RoasterLink* roast::CreateBleLink() { return new PreviewBle(); }
@@ -163,8 +164,8 @@ static float bt()
 
 // Replays batch A of 2026-11-12 (R0012) on the simulator: curve 50 / dry 4:30 150 / FC 7:30 199 / drop 10:00 210,
 // F at 8:01, drop at 8:56, with the curve-follow rules given on the command line, and shoots the chart.
-//   preview <dir> fcA <fcFloor 0|1> <lookahead s> <tag> [cap x10, default 80]
-static int fcScenario(int floorOn, int lookahead, const std::string& tag, int cap10)
+//   preview <dir> fcA <fcFloor 0|1> <lookahead s> <tag> [cap x10, default 80] [Cardputer PID 0|1, default 1]
+static int fcScenario(int floorOn, int lookahead, const std::string& tag, int cap10, int cardPid)
 {
     std::string dir = std::string(ROAST_SD_ROOT) + "/roast/curves";
     mkdir((std::string(ROAST_SD_ROOT) + "/roast").c_str(), 0755);
@@ -181,6 +182,7 @@ static int fcScenario(int floorOn, int lookahead, const std::string& tag, int ca
     s.SetInt("fcFloor", floorOn);
     s.SetInt("svLook", lookahead);
     s.SetInt("floorCap10", cap10);
+    s.SetInt("cardPid", cardPid);
     auto& cv = GetHAL().canvas;
     cv.setColorDepth(16);
     if (!cv.createSprite(240, 135)) return 1;
@@ -232,7 +234,7 @@ int main(int argc, char** argv)
 #ifdef ROAST_SD_ROOT
         mkdir(ROAST_SD_ROOT, 0755);
 #endif
-        return fcScenario(atoi(argv[3]), atoi(argv[4]), argv[5], argc > 6 ? atoi(argv[6]) : 80);
+        return fcScenario(atoi(argv[3]), atoi(argv[4]), argv[5], argc > 6 ? atoi(argv[6]) : 80, argc > 7 ? atoi(argv[7]) : 1);
     }
     mkdir(g_out.c_str(), 0755);
 #ifdef ROAST_SD_ROOT

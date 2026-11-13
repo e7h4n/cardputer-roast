@@ -98,13 +98,35 @@ float Session::rorAt(int idx) const
     return fabsf((_samples[idx].bt10 - _samples[idx - 29].bt10) / 10.0f) / 0.5f;
 }
 
+void Session::setControl(float heat, float ff, float p, float i, float d)
+{
+    _ctl[0] = heat;
+    _ctl[1] = ff;
+    _ctl[2] = p;
+    _ctl[3] = i;
+    _ctl[4] = d;
+    _ctlSet = true;
+}
+
+void Session::writeControl()
+{
+    if (_ctlSet)
+        fprintf(_csv, ",%.1f,%.1f,%.1f,%.1f,%.1f\n", _ctl[0], _ctl[1], _ctl[2], _ctl[3], _ctl[4]);
+    else
+        fputs(",,,,,\n", _csv);
+    _ctlSet = false;
+}
+
 void Session::addSample(const Sample& in)
 {
     Sample s = in;
     if (_samples.size() >= kMaxSamples) {
         // Never grow past the reservation (a vector doubling would need ~38 KB and abort). Keep logging to SD only.
-        if (_csv) fprintf(_csv, "%d,%.1f,%.1f,%.1f,%.1f,,%d,%d\n", s.t, s.bt10 / 10.0, s.tgt10 / 10.0, s.heat10 / 10.0,
-                          s.fan10 / 10.0, s.pid, s.mtime);
+        if (_csv) {
+            fprintf(_csv, "%d,%.1f,%.1f,%.1f,%.1f,,%d,%d", s.t, s.bt10 / 10.0, s.tgt10 / 10.0, s.heat10 / 10.0,
+                    s.fan10 / 10.0, s.pid, s.mtime);
+            writeControl();
+        }
         return;
     }
     _samples.push_back(s);
@@ -114,8 +136,9 @@ void Session::addSample(const Sample& in)
         const Sample& x = _samples.back();
         char ror[12] = "";
         if (x.ror10 != INT16_MIN) snprintf(ror, sizeof(ror), "%.1f", x.ror10 / 10.0);
-        fprintf(_csv, "%d,%.1f,%.1f,%.1f,%.1f,%s,%d,%d\n", x.t, x.bt10 / 10.0, x.tgt10 / 10.0, x.heat10 / 10.0,
+        fprintf(_csv, "%d,%.1f,%.1f,%.1f,%.1f,%s,%d,%d", x.t, x.bt10 / 10.0, x.tgt10 / 10.0, x.heat10 / 10.0,
                 x.fan10 / 10.0, ror, x.pid, x.mtime);
+        writeControl();
         if (++_sinceFlush >= 10) flush();
     }
 }
@@ -195,7 +218,7 @@ bool Session::openLog(const std::string& id)
     if (!_csv) return false;
     fprintf(_csv, "# roast %s curve=%s green_g=%.1f bean=%s\n", id.c_str(), curveName.c_str(), _greenG,
             _bean.c_str());
-    fprintf(_csv, "t,bt,target,heat,fan,ror,pid,machine_t\n");
+    fprintf(_csv, "t,bt,target,heat,fan,ror,pid,machine_t,heat_cmd,ff,p,i,d\n");
     for (auto& a : _actions) fprintf(_csv, "#action,%d,%s\n", a.t, a.text.c_str());
     flush();
     return true;

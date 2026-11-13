@@ -11,6 +11,7 @@
  *   net            Wi-Fi & Dropbox setup state (no credentials): "NET open=... wifi=... dropbox=... heap=..."
  *   sync           sync job state: "SYNC job=... running=... ok=... step=... error=..."
  *   boot roast     test only: restart into Roast once without the Wi-Fi/Dropbox requirement or the boot sync
+ *   link drop <s>  test only: end the roaster connection as a radio loss would; reconnect after <s> seconds
  */
 #include "roast_debug.h"
 #include <hal/hal.h>
@@ -219,6 +220,14 @@ void DebugPollMain()
             }
         }
         printf(ok ? "OK key\n" : "ERR key\n");
+    } else if (line.rfind("link drop ", 0) == 0) {
+        int s = atoi(line.c_str() + 10);
+        if (!g_activeLink || s <= 0 || s > 120) {
+            printf("ERR link drop <1..120 s>\n");
+        } else {
+            g_activeLink->debugDisconnect((uint32_t)s * 1000);
+            printf("OK link drop %d s\n", s);
+        }
     } else if (line == "regs") {  // read-only dump of the active link's register cache
         if (!g_activeLink) {
             printf("REGS none\n");

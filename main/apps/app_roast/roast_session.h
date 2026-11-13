@@ -80,6 +80,8 @@ public:
         return _active;
     }
     void addSample(const Sample& s);
+    /// Cardputer PID terms for the next sample's CSV row (heat_cmd,ff,p,i,d); only on SD, not kept in memory.
+    void setControl(float heat, float ff, float p, float i, float d);
     const std::vector<Sample>& samples() const
     {
         return _samples;
@@ -188,6 +190,9 @@ private:
     std::string _id;
     FILE* _csv       = nullptr;
     int _sinceFlush  = 0;
+    bool _ctlSet     = false;
+    void writeControl();
+    float _ctl[5]    = {};
     std::vector<float> _curveTable;
     AudioInfo _audio;
 };

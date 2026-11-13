@@ -90,12 +90,34 @@ public:
         _targetPending = true;
         _targetRaw     = raw;
     }
+    void setHeat(uint16_t raw) override
+    {
+        Lock l(_mtx);
+        _heatPending = true;
+        _heatRaw     = raw;
+    }
+    void debugDisconnect(uint32_t holdMs) override
+    {
+        uint16_t conn;
+        {
+            Lock l(_mtx);
+            _holdOffUntil = now_ms() + holdMs;
+            conn          = _conn;
+        }
+        if (conn != 0xFFFF) ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
+    }
+    void cancelHeat() override
+    {
+        Lock l(_mtx);
+        _heatPending = false;
+    }
     void clearQueue() override
     {
         Lock l(_mtx);
         for (auto& c : _cmds) _txResult[c.id] = TxStatus::Failed;
         _cmds.clear();
         _targetPending = false;
+        _heatPending   = false;
     }
 
     // NimBLE glue (public for static trampolines)
@@ -143,6 +165,7 @@ private:
     bool _wantScan      = false;
     std::atomic<bool> _connecting{false};
     uint32_t _scanRestartAt = 0;
+    uint32_t _holdOffUntil  = 0;  // debugDisconnect: no rescan before this
 
     std::string _devName;
     std::string _err;
@@ -156,6 +179,8 @@ private:
     uint32_t _nextTx    = 1;
     bool _targetPending = false;
     uint16_t _targetRaw = 0;
+    bool _heatPending   = false;
+    uint16_t _heatRaw   = 0;
     uint32_t _cycle     = 0;
 
     static void workerEntry(void* arg);
@@ -517,6 +542,7 @@ void BleLink::connectionLost(const char* why)
         _err           = why;
         _wantScan      = _running;
         _scanRestartAt = now_ms() + 500;
+        if ((int32_t)(_holdOffUntil - _scanRestartAt) > 0) _scanRestartAt = _holdOffUntil;
         _rx.clear();
     }
 }
@@ -870,6 +896,23 @@ void BleLink::workerLoop()
         }
         if (haveTarget) {
             writeReg(9, target, 2, 1500);
+            waitGap(200);
+            pumpCommands();
+        }
+
+        // Heater output from the Cardputer PID (latest value wins)
+        bool haveHeat = false;
+        uint16_t heat = 0;
+        {
+            Lock l(_mtx);
+            if (_heatPending) {
+                haveHeat     = true;
+                heat         = _heatRaw;
+                _heatPending = false;
+            }
+        }
+        if (haveHeat) {
+            writeReg(11, heat, 2, 1500);
             waitGap(200);
             pumpCommands();
         }
