@@ -634,9 +634,13 @@ void AppRoast::pidTick(const PidAim& aim)
     float bt   = fresh ? _snap.bt() : NAN;
     PidTerms o = PidStep(_pid, aim, bt, dt, pidConfig());
     int raw    = (int)lroundf(o.heat * 10);
-    if (raw != _lastHeatRaw) {
+    // Also re-send an unchanged value every 5 s: the roaster cut its heater ~17-19 s into a Bluetooth loss (empty
+    // run, 2026-11-13), and if that timeout counts writes rather than the connection, a steady output must not
+    // trip it.
+    if (raw != _lastHeatRaw || now - _heatSentMs >= 5000) {
         _link->setHeat((uint16_t)raw);
         _lastHeatRaw = raw;
+        _heatSentMs  = now;
     }
     _session.setControl(o.heat, o.ff, o.p, o.i, o.d);
 }

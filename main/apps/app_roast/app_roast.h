@@ -127,6 +127,7 @@ private:
     bool _cardPid      = false;  // this roast: heater from the Cardputer PID (decided at charge)
     int _lastHeatRaw   = -1;
     uint32_t _pidMs    = 0;
+    uint32_t _heatSentMs = 0;
     void pidTick(const roast::PidAim& aim);
     roast::PidAim pidAim(int t) const;
     roast::SvResult svAt(int t) const;  // what to write as SV at curve second t (lookahead, first-crack floor)
