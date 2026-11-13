@@ -8,6 +8,7 @@
 #include <apps/app_roast/app_roast.h>
 #include <apps/app_roast/roast_debug.h>
 #include <apps/app_roast/roast_link.h>
+#include <hal/utils/settings/settings.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -160,9 +161,79 @@ static float bt()
     return l ? l->snapshot().bt() : 0;
 }
 
+// Replays batch A of 2026-11-12 (R0012) on the simulator: curve 50 / dry 4:30 150 / FC 7:30 199 / drop 10:00 210,
+// F at 8:01, drop at 8:56, with the curve-follow rules given on the command line, and shoots the chart.
+//   preview <dir> fcA <fcFloor 0|1> <lookahead s> <tag> [cap x10, default 80]
+static int fcScenario(int floorOn, int lookahead, const std::string& tag, int cap10)
+{
+    std::string dir = std::string(ROAST_SD_ROOT) + "/roast/curves";
+    mkdir((std::string(ROAST_SD_ROOT) + "/roast").c_str(), 0755);
+    mkdir(dir.c_str(), 0755);
+    if (FILE* f = fopen((dir + "/A.json").c_str(), "w")) {
+        fputs("{\"name\": \"A\", \"batch_g\": 100, \"total_s\": 600, \"points\": [{\"t\": 0, \"c\": 50, \"tag\": \"CHARGE\"}, "
+              "{\"t\": 270, \"c\": 150, \"tag\": \"DRY\"}, {\"t\": 450, \"c\": 199, \"tag\": \"FCs\"}, "
+              "{\"t\": 600, \"c\": 210, \"tag\": \"DROP\"}]}\n",
+              f);
+        fclose(f);
+    }
+    Settings s("roast", true);
+    s.SetString("curve", "A");
+    s.SetInt("fcFloor", floorOn);
+    s.SetInt("svLook", lookahead);
+    s.SetInt("floorCap10", cap10);
+    auto& cv = GetHAL().canvas;
+    cv.setColorDepth(16);
+    if (!cv.createSprite(240, 135)) return 1;
+    AppRoast app;
+    g_app = &app;
+    app.onOpen();
+    step(5500);  // boot sync, link up -> Prep
+    press("s");
+    step(4000);
+    press("enter");  // charge at t = 0
+    uint32_t t0 = g_ms;
+    auto at = [&](int sec) { while ((int)((g_ms - t0) / 1000) < sec) step(50); };
+    at(481);
+    press("f");
+    at(511);
+    press("tab");
+    shot((tag + "_fc30").c_str());
+    press("tab");
+    at(536);
+    press("d", 50);
+    press("d");
+    step(1000);
+    press("tab");
+    shot((tag + "_drop").c_str());
+    step(30000);
+    press("enter");  // finish: writes the log
+    step(500);
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     g_out = argc > 1 ? argv[1] : "shots";
+    if (argc > 2 && std::string(argv[2]) == "syncfail") {  // boot sync failure screen
+        setenv("ROAST_PREVIEW_SYNC_FAIL", "1", 1);
+        mkdir(g_out.c_str(), 0755);
+        auto& cv = GetHAL().canvas;
+        cv.setColorDepth(16);
+        if (!cv.createSprite(240, 135)) return 1;
+        AppRoast app;
+        g_app = &app;
+        app.onOpen();
+        step(2000);
+        shot("boot_sync_failed");
+        return 0;
+    }
+    if (argc > 5 && std::string(argv[2]) == "fcA") {
+        mkdir(g_out.c_str(), 0755);
+#ifdef ROAST_SD_ROOT
+        mkdir(ROAST_SD_ROOT, 0755);
+#endif
+        return fcScenario(atoi(argv[3]), atoi(argv[4]), argv[5], argc > 6 ? atoi(argv[6]) : 80);
+    }
     mkdir(g_out.c_str(), 0755);
 #ifdef ROAST_SD_ROOT
     mkdir(ROAST_SD_ROOT, 0755);
@@ -173,8 +244,10 @@ int main(int argc, char** argv)
 
     AppRoast app;
     g_app = &app;
-    app.onOpen();
+    app.onOpen();  // boot: curve sync from Dropbox first, then (after the restart) the roaster link
     step(600);
+    shot("boot_sync");
+    step(1500);
     shot("connect");
     step(2500);  // link comes up
     shot("prep");
@@ -216,12 +289,34 @@ int main(int argc, char** argv)
     press("right");
     shot("rules_edit");
     press("esc");
-    for (int i = 0; i < 12; i++) press("down", 60);
+    for (int i = 0; i < 30; i++) press("down", 60);
     shot("rules_bottom");
     press("esc");
 
     press("h");
     shot("keys");
+    press("esc");
+
+    // Wi-Fi & Dropbox setup: the rules row, then a whole (simulated) pairing
+    press("o");
+    for (int i = 0; i < 15; i++) press("down", 60);
+    shot("rules_sync");
+    press("enter");
+    step(600);
+    shot("network_code");
+    step(500);
+    shot("network_pairing");
+    step(2700);
+    shot("network_wifi");
+    step(1200);
+    shot("network_dropbox_busy");
+    step(3000);
+    shot("network_done");
+    press("esc");
+    step(3000);  // back on Connect, then Prep once the (preview) roaster answers
+    press("o");
+    for (int i = 0; i < 15; i++) press("down", 60);
+    shot("rules_sync_saved");
     press("esc");
 
     press("s");
@@ -278,15 +373,28 @@ int main(int argc, char** argv)
     press("x");
     shot("summary_confirm_stop");
     press("x");
-    shot("summary");
+    shot("summary");  // fan off: the save to Dropbox starts in 1.5 s, in the background
+    step(1600);
+    shot("summary_saving");
     press("tab");
-    shot("summary_chart");
+    shot("summary_chart_saving");  // the summary stays usable while it saves
     press("tab");
     press("enter");
+    shot("summary_exit_blocked");  // cannot close before the save is done
+    step(3500);
+    press("w");
+    type("86");
+    press("enter");  // an edit re-saves the .json and .alog
+    step(200);
+    shot("summary_resave");
+    step(1600);
+    shot("summary_saved");
+    press("enter");  // done: close, restart
+    step(3500);
     shot("prep_after");
 
     press("o");
-    for (int i = 0; i < 12; i++) press("down", 60);
+    for (int i = 0; i < 30; i++) press("down", 60);
     press("enter");
     shot("prep_simulator");
     press("esc");

@@ -5,6 +5,14 @@
 #include "app_roast.h"
 #include "roast_debug.h"
 #include "roast_audio.h"
+#include "net/roast_net.h"
+#include <esp_system.h>
+#if __has_include(<esp_attr.h>)
+#include <esp_attr.h>
+#endif
+#ifndef RTC_NOINIT_ATTR
+#define RTC_NOINIT_ATTR
+#endif
 #include <apps/utils/audio/audio.h>
 #include <hal/utils/settings/settings.h>
 #include <mooncake_log.h>
@@ -40,6 +48,10 @@ void RoastRules::load()
     heatDrop  = s.GetInt("heatDrop10", (int)lroundf(heatDrop * 10)) / 10.0f;
     curveOffset = s.GetInt("curveOff10", (int)lroundf(curveOffset * 10)) / 10.0f;
     micGain     = std::max(0, std::min(rec::kMaxGainDb, (int)s.GetInt("micGain", micGain)));
+    svLookahead = std::max(0, std::min(20, (int)s.GetInt("svLook", svLookahead)));
+    fcFloor     = s.GetInt("fcFloor", fcFloor ? 1 : 0) != 0;
+    floorDelta  = std::max(0, std::min(50, (int)s.GetInt("floorD10", (int)lroundf(floorDelta * 10)))) / 10.0f;
+    floorCap    = std::max(10, std::min(80, (int)s.GetInt("floorCap10", (int)lroundf(floorCap * 10)))) / 10.0f;
 }
 
 void RoastRules::save() const
@@ -59,6 +71,10 @@ void RoastRules::save() const
     s.SetInt("heatDrop10", (int)lroundf(heatDrop * 10));
     s.SetInt("curveOff10", (int)lroundf(curveOffset * 10));
     s.SetInt("micGain", micGain);
+    s.SetInt("svLook", svLookahead);
+    s.SetInt("fcFloor", fcFloor ? 1 : 0);
+    s.SetInt("floorD10", (int)lroundf(floorDelta * 10));
+    s.SetInt("floorCap10", (int)lroundf(floorCap * 10));
 }
 
 /* ---------------------------------- app ---------------------------------- */
@@ -106,7 +122,24 @@ void AppRoast::onOpen()
         }
     });
     _blockedByKeyboardApp = GetHAL().bleKeyboardInited();
-    if (!_blockedByKeyboardApp) startLink(false);
+    // Wi-Fi and Dropbox are required. Boot syncs the curves from Dropbox (must succeed) and restarts once with a
+    // clean heap; that second boot (flagged in RTC memory) skips the sync and connects to the roaster.
+    char ssid[33];
+    // Read the boot marker once and clear it, whichever way this boot goes (a stale "skip sync" must not survive
+    // into the boot after setup).
+    bool bypass = consumeBypass();
+    bool skip   = consumeSkipSync();
+    if (bypass) {  // test only: USB console `boot roast`
+        if (!_blockedByKeyboardApp) startLink(false);
+        toast("Test boot: no Dropbox sync", WARN, 4000);
+    } else if (!roast_net_saved_wifi(ssid) || !roast_net_saved_dropbox()) {
+        _netRequired = true;
+        openNetwork();
+    } else if (skip) {
+        if (!_blockedByKeyboardApp) startLink(false);
+    } else {
+        startJob(sync::Job::Curves, "");
+    }
     _dirty = true;
 }
 
@@ -116,6 +149,8 @@ void AppRoast::onClose()
     if (_keySlot >= 0) GetHAL().keyboard.onKeyEvent.disconnect(_keySlot);
     _keySlot = -1;
     stopRecording();
+    if (_netOpen) roast_net_close();
+    _netOpen = false;
     if (_session.active()) {
         std::string err;
         _session.finalize(&err);
@@ -171,11 +206,16 @@ void AppRoast::onRunning()
     }
     pumpBeep();
     pollRecording();
+    pollSync();
+    pollSave();
     if (_phase == Phase::Roasting || _phase == Phase::Cooling) tickRoast();
 
     // Leaving the app is only allowed when the machine is not heating.
     if (GetHAL().homeButton.wasClicked()) {
-        if (_phase == Phase::Roasting) {
+        if ((_screen == Screen::Sync && !sync::Get().finished) || saveBusy()) {
+            // leaving now would cut an upload in half (or skip the roast's save altogether)
+            toast(_fanRunning ? "Stop the fan first (X X)" : "Syncing", WARN);
+        } else if (_phase == Phase::Roasting) {
             toast("Roasting: drop before exit", ui::DROP);
         } else {
             if (!quietRoast()) audio::play_random_tone();
@@ -292,7 +332,7 @@ void AppRoast::charge()
 
     std::vector<RegWrite> w;
     if (_hasCurve) {
-        uint16_t t0 = (uint16_t)lroundf(_curve.at(0) * 10);
+        uint16_t t0 = (uint16_t)lroundf(ComputeSv(_curve, 0, NAN, false, svConfig()).sv * 10);
         w.push_back({9, t0});
         w.push_back({2, 0});
         w.push_back({15, 1});
@@ -309,6 +349,8 @@ void AppRoast::charge()
     _dropMs       = 0;
     _satRun       = 0;
     _satWarned = _heatDropWarned = _rorWarned = _autoDropped = false;
+    _svFloored = _floorLogged = false;
+    _lastSv                   = NAN;
     _autoDropWhy.clear();
     _session.reset(_hasCurve ? &_curve : nullptr, _rules.greenG, _bean);
     _session.openLog(NextLogId());
@@ -440,17 +482,20 @@ void AppRoast::toggleManual()
     }
     int t = roastT();
     if (!_manual) {
-        // PID off, then hold the heater at its current output.
-        _heatSet = _snap.has(11) ? std::round(_snap.heat()) : 80.0f;
+        // PID off, then hold the heater at its average over the last 30 s: one reading can catch the PID mid-swing.
+        float nowHeat = _snap.has(11) ? _snap.heat() : 80.0f;
+        _heatSet      = HoldHeat(_session.samples(), t, 30, nowHeat);
         _link->command({{15, 0}, {11, (uint16_t)lroundf(_heatSet * 10)}});
         _manual = true;
-        char b[48];
-        snprintf(b, sizeof(b), "manual heat %.0f%%", _heatSet);
+        char b[64];
+        snprintf(b, sizeof(b), "manual heat %.1f%% (30 s avg, now %.1f%%)", _heatSet, nowHeat);
         _session.addAction(t, b);
-        toast(std::string(b) + "  ←→ adjust", ui::HEAT, 3000);
+        snprintf(b, sizeof(b), "manual %.1f%% (30 s avg)", _heatSet);
+        toast(std::string(b) + "  ←→", ui::HEAT, 3000);
     } else {
-        uint16_t tgt = (uint16_t)lroundf(curveTargetAt(t) * 10);
+        uint16_t tgt = (uint16_t)lroundf(svAt(curveT()).sv * 10);
         _link->command({{9, tgt}, {15, 1}});
+        _lastTargetRaw = tgt;
         _manual = false;
         _session.addAction(t, "PID on curve");
         toast("PID on curve", ui::GO);
@@ -491,6 +536,26 @@ bool AppRoast::confirm(int key, const std::string& msg, bool quiet)
     return false;
 }
 
+/* ------------------------------ curve follow ------------------------------ */
+SvConfig AppRoast::svConfig() const
+{
+    SvConfig c;
+    c.lookahead  = _rules.svLookahead;
+    c.fcFloor    = _rules.fcFloor;
+    c.floorDelta = _rules.floorDelta;
+    c.floorCap   = _rules.floorCap;
+    return c;
+}
+
+SvResult AppRoast::svAt(int t) const
+{
+    SvConfig c = svConfig();
+    int start  = FcFloorStart(_curve.tagTime(PointTag::FCs), _session.markT(Mark::FCs), c.floorLead);
+    bool in    = _phase == Phase::Roasting && start >= 0 && t >= start;
+    float bt   = _snap.has(4) ? _snap.bt() : NAN;
+    return ComputeSv(_curve, t, bt, in, c);
+}
+
 /* ------------------------------ roast ticks ------------------------------ */
 void AppRoast::tickRoast()
 {
@@ -499,9 +564,22 @@ void AppRoast::tickRoast()
     _lastSampleT = t;
     _dirty       = true;
 
-    // 1) target for the machine PID
+    // 1) target (SV) for the machine PID: curve with lookahead, floored at BT + delta around first crack
+    float sv = NAN;
+    if (_hasCurve) {
+        SvResult r = svAt(curveT());
+        sv         = r.sv;
+        _svFloored = _phase == Phase::Roasting && r.floored;
+        if (_svFloored && !_floorLogged) {
+            char b[64];
+            snprintf(b, sizeof(b), "FC floor on: SV %.1f (BT %+.1f, curve %.1f)", r.sv, _rules.floorDelta, r.ahead);
+            _session.addAction(t, b);
+            _floorLogged = true;
+        }
+    }
+    _lastSv = sv;
     if (_phase == Phase::Roasting && _hasCurve && linkReady()) {
-        int raw = (int)lroundf(curveTargetAt(curveT()) * 10);
+        int raw = (int)lroundf(sv * 10);
         if (raw != _lastTargetRaw) {
             _link->setTarget((uint16_t)raw);
             _lastTargetRaw = raw;
@@ -512,7 +590,7 @@ void AppRoast::tickRoast()
     Sample s;
     s.t      = (int16_t)t;
     s.bt10   = _snap.has(4) ? _snap.reg[4] : (_session.samples().empty() ? 0 : _session.samples().back().bt10);
-    s.tgt10  = _hasCurve ? (int16_t)lroundf(curveTargetAt(curveT()) * 10) : 0;
+    s.tgt10  = _hasCurve ? (int16_t)lroundf(sv * 10) : 0;  // the SV actually written (lookahead, floor)
     s.heat10 = _snap.reg[11];
     s.fan10  = _snap.reg[12];
     s.mtime  = _snap.reg[2];
@@ -581,6 +659,9 @@ void AppRoast::enterSummary()
     _screen   = Screen::Summary;
     _phase    = Phase::Done;
     _dirty    = true;
+    _saveStarted = _saveReported = false;
+    _saveAt                      = 0;
+    if (!_fanRunning) planSave();  // X X on the cooling page: the fan is already off
 }
 
 void AppRoast::finishRoast()
@@ -678,6 +759,12 @@ void AppRoast::onKey(const Keyboard::KeyEvent_t& e)
         case Screen::Help:
             if (code == KEY_ESC || code == KEY_ENTER || code == KEY_H) _screen = _backScreen;
             break;
+        case Screen::Network:
+            keyNetwork(code);
+            break;
+        case Screen::Sync:
+            keySync(code);
+            break;
     }
 }
 
@@ -685,6 +772,10 @@ bool AppRoast::keyConnect(int code)
 {
     if (code == KEY_D) {
         setSimulator(true);
+        return true;
+    }
+    if (code == KEY_O) {  // rules, including Wi-Fi & Dropbox setup, also while the roaster is off
+        openSettings();
         return true;
     }
     if (code == KEY_ENTER || code == KEY_R) {
@@ -829,9 +920,7 @@ bool AppRoast::keyPrep(int code, bool shift)
             openBatch(1);
             return true;
         case KEY_O:
-            _setSel     = 0;
-            _setEditing = false;
-            _screen     = Screen::Settings;
+            openSettings();
             return true;
         case KEY_TAB:
             if (_hasCurve)
@@ -938,6 +1027,7 @@ bool AppRoast::keySummary(int code)
                 stopMachine();
                 _phase = Phase::Done;
                 toast("Fan stopped", INK);
+                planSave();
             }
             return true;
         case KEY_W:
@@ -947,6 +1037,7 @@ bool AppRoast::keySummary(int code)
                     _session.setRoastedWeight(g);
                     std::string err;
                     _saveMsg = _session.finalize(&err) ? "Updated: roast/logs/" + _session.logId() : err;
+                    resaveEdited();
                 }
             });
             return true;
@@ -955,15 +1046,35 @@ bool AppRoast::keySummary(int code)
                 _session.setNote(v);
                 std::string err;
                 _saveMsg = _session.finalize(&err) ? "Updated: roast/logs/" + _session.logId() : err;
+                resaveEdited();
             });
             return true;
         case KEY_TAB:
             _view ^= 1;
             return true;
         case KEY_ENTER:
-        case KEY_ESC:
+        case KEY_ESC: {
+            // The roast is saved to Dropbox while the summary stays open; it can only be closed once that is done
+            // (or has failed: nothing is retried). Then Roast restarts with a clean heap.
+            bool needsSave = _sdOk && !_session.logId().empty();
+            if (!needsSave) {
+                finishRoast();
+                return true;
+            }
+            if (_fanRunning) {
+                toast("Stop the fan first (X X)", WARN, 3000);
+                return true;
+            }
+            if (saveBusy()) {
+                toast("Syncing", WARN, 1500);
+                return true;
+            }
+            sync::Finish();
+            for (int i = 0; i < 300 && !sync::Get().finished; i++) GetHAL().delay(10);  // idle: ends at once
             finishRoast();
+            restartApp(true);
             return true;
+        }
         default:
             return false;
     }
@@ -1021,6 +1132,21 @@ bool AppRoast::keyCurves(int code)
             _view    = 0;
             _screen  = Screen::Editor;
             return true;
+        case KEY_S:  // sync now: same as at boot (Dropbox's curve folder replaces the card's)
+            if (networkIdle("sync")) restartApp(false);
+            return true;
+        case KEY_BACKSPACE: {  // delete: on Dropbox, then on the card
+            if (_listSel == 0) return true;
+            const Curve& c = _curves[_listSel - 1];
+            if (c.builtin) {
+                toast("Built-in curves cannot be deleted", WARN);
+                return true;
+            }
+            if (!networkIdle("delete")) return true;
+            if (!confirm(3000, "Del again to delete " + c.name + " (also on Dropbox)")) return true;
+            startJob(sync::Job::DeleteCurve, c.path);
+            return true;
+        }
         case KEY_ESC:
             _screen = Screen::Prep;
             return true;
@@ -1271,6 +1397,7 @@ bool AppRoast::keyEditor(const Keyboard::KeyEvent_t& e, int code)
                       });
             break;
         case KEY_S: {
+            if (!networkIdle("save")) break;  // saving uploads the curve: the roaster link closes meanwhile
             if (!_sdOk) _sdOk = GetHAL().sdCardMount();
             if (!_sdOk) {
                 toast("No SD: curve kept until reboot", WARN, 3000);
@@ -1287,9 +1414,8 @@ bool AppRoast::keyEditor(const Keyboard::KeyEvent_t& e, int code)
                     if (_curves[i].path == _curve.path) selectCurve((int)i);
                 _edDirty = false;
                 _noCurve = false;
-                toast("Saved and selected", GO);
-                _view   = 0;
-                _screen = Screen::Prep;
+                _view    = 0;
+                startJob(sync::Job::PushCurve, _curve.path);  // overwrite on Dropbox, then restart
             } else {
                 toast(err, DROP, 3000);
             }
@@ -1356,8 +1482,21 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     rowF("start fan", &_rules.startFan, nullptr, 20, 100, 1, "%");
     rowF("cold below", &_rules.coldBT, nullptr, 20, 80, 1, "°");
     rowF("curve offset", &_rules.curveOffset, nullptr, -30, 30, 0.5f, "°");
+    group("CURVE FOLLOW", CURVE);
+    rowI("SV lookahead", &_rules.svLookahead, nullptr, 0, 20, 1, " s");
+    RuleRow floorRow;
+    floorRow.label  = "FC floor";
+    floorRow.toggle = &_rules.fcFloor;
+    v.push_back(floorRow);
+    rowF("floor above BT", &_rules.floorDelta, nullptr, 0, 5, 0.5f, "°");
+    rowF("floor cap", &_rules.floorCap, nullptr, 1, 8, 0.5f, "°");
     group("AUDIO", DROP);  // every roast is recorded (when there is an SD card); only the gain is a setting
     rowI("mic gain", &_rules.micGain, nullptr, 0, rec::kMaxGainDb, 3, " dB");
+    group("SYNC", CURVE);
+    RuleRow netRow;
+    netRow.label   = "network";
+    netRow.network = true;
+    v.push_back(netRow);
     group("MODE", SIM);
     RuleRow sim;
     sim.label     = "simulator";
@@ -1390,6 +1529,15 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
                     setSimulator(!(_link && _link->isSimulated()));
                     return true;
                 }
+                if (r.network) {
+                    openNetwork();
+                    return true;
+                }
+                if (r.toggle) {
+                    *r.toggle = !*r.toggle;
+                    _rules.save();
+                    return true;
+                }
                 _setEditing = true;
                 _setStage   = 0;
                 _setBuf.clear();
@@ -1398,7 +1546,7 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
                 return true;
             case KEY_ESC:
                 _rules.save();
-                _screen = Screen::Prep;
+                _screen = _setBack;
                 return true;
             default:
                 return false;
@@ -1498,6 +1646,246 @@ void AppRoast::keyInput(const Keyboard::KeyEvent_t& e, int code)
     } else if (c >= 32 && c < 127) {
         _input.buf += c;
     }
+}
+
+/* ------------------------------ Dropbox sync ------------------------------ */
+// RTC memory survives esp_restart(): a marker here makes the next boot skip the curve sync (we just synced or
+// just pushed a change).
+static RTC_NOINIT_ATTR uint32_t s_bootFlag;
+static constexpr uint32_t kSkipSync = 0x53594E43;  // "SYNC"
+
+static constexpr uint32_t kBypass = 0x42595053;  // "BYPS": test boot from the USB console
+
+void roast::DebugBootRoast()
+{
+    s_bootFlag = kBypass;
+    esp_restart();
+}
+
+bool AppRoast::consumeBypass()
+{
+    if (s_bootFlag != kBypass) return false;
+    s_bootFlag = 0;
+    return true;
+}
+
+bool AppRoast::consumeSkipSync()
+{
+    bool skip  = s_bootFlag == kSkipSync;
+    s_bootFlag = 0;
+    return skip;
+}
+
+void AppRoast::restartApp(bool skipBootSync)
+{
+    s_bootFlag = skipBootSync ? kSkipSync : 0;
+    _rules.save();
+    toast("Restarting…", INK, 5000);
+    render();
+    GetHAL().delay(150);
+    esp_restart();
+    // Desktop preview only (esp_restart returns there): carry on as the next boot would.
+    s_bootFlag  = 0;
+    _toastUntil = 0;
+    if (skipBootSync) {
+        startLink(false);
+        _screen = Screen::Connect;
+    } else {
+        startJob(sync::Job::Curves, "");
+    }
+}
+
+bool AppRoast::networkIdle(const char* what)
+{
+    if (_phase != Phase::Idle || _fanRunning) {
+        toast(std::string("Stop the fan to ") + what + ": it needs Dropbox", WARN, 3000);
+        return false;
+    }
+    return true;
+}
+
+void AppRoast::planSave()
+{
+    if (!_sdOk || _session.logId().empty() || _saveStarted) return;
+    _saveAt = GetHAL().millis() + 1500;  // the fan-stop command reaches the roaster before the link closes
+}
+
+void AppRoast::pollSave()
+{
+    if (_screen != Screen::Summary && _screen != Screen::Help) return;
+    if (!_saveStarted && _saveAt && GetHAL().millis() >= _saveAt && !_fanRunning) {
+        _saveAt = 0;
+        // Close the roaster link (BLE + Wi-Fi + TLS do not fit together); keep the roast's data for the summary.
+        if (_link) {
+            g_activeLink = nullptr;
+            _link->clearQueue();
+            _link->end();
+            _link.reset();
+        }
+        GetHAL().setRoastBleActive(false);
+        _linkState = _prevLinkState = LinkState::Off;
+        _saveStarted = sync::Start(sync::Job::SaveRoast, _session.logId());
+        if (!_saveStarted) toast("Dropbox save could not start", DROP, 3000);
+        _dirty = true;
+    }
+    if (_saveStarted && !_saveReported) {
+        sync::Status st = sync::Get();
+        if (st.finished && !st.ok) {  // only a failure is worth a word: success is the normal case
+            _saveReported = true;
+            toast("Not saved: " + st.error, DROP, 6000);
+        }
+    }
+}
+
+bool AppRoast::syncingNow()
+{
+    if (_saveAt) return true;  // the roast's save starts in a moment
+    sync::Status st = sync::Get();
+    return st.running && !st.idle;
+}
+
+bool AppRoast::saveBusy()
+{
+    if (_phase != Phase::Done || !_sdOk || _session.logId().empty()) return false;
+    if (!_saveStarted) return true;  // not started yet (fan still on, or about to start)
+    sync::Status st = sync::Get();
+    return !(st.finished || st.idle);
+}
+
+void AppRoast::resaveEdited()
+{
+    if (!_saveStarted) return;  // not started yet: the first upload takes the edited files anyway
+    sync::Resave(".json");
+    sync::Resave(".alog");
+    _saveReported = false;  // report again when this lands
+}
+
+bool AppRoast::startJob(sync::Job job, const std::string& arg)
+{
+    // BLE + Wi-Fi + TLS do not fit together: close the roaster link first (the app restarts afterwards).
+    if (_link) {
+        g_activeLink = nullptr;
+        _link->clearQueue();
+        _link->end();
+        _link.reset();
+    }
+    GetHAL().setRoastBleActive(false);
+    _linkState = _prevLinkState = LinkState::Off;
+    _session.release();  // the roast's samples are saved; free them for TLS
+    _screen = Screen::Sync;
+    _dirty  = true;
+    if (!sync::Start(job, arg)) {
+        toast("Sync could not start", DROP, 3000);
+        return false;
+    }
+    return true;
+}
+
+void AppRoast::pollSync()
+{
+    if (_screen != Screen::Sync) return;
+    sync::Status st = sync::Get();
+    if (st.finished && st.ok) restartApp(true);  // done: clean heap, no second sync
+}
+
+bool AppRoast::keySync(int code)
+{
+    sync::Status st = sync::Get();
+    if (!st.finished) return true;  // nothing to do while it runs: no cancel, no retry
+    bool boot = st.job == sync::Job::Curves;
+    if (code == KEY_ENTER) {  // boot sync must succeed: Enter tries again; other jobs: carry on without it
+        restartApp(!boot);
+        return true;
+    }
+    if (code == KEY_O) {
+        openNetwork();
+        return true;
+    }
+    if (code == KEY_ESC) {
+        if (boot)
+            close();
+        else
+            restartApp(true);
+        return true;
+    }
+    return false;
+}
+
+/* ------------------------- Wi-Fi & Dropbox setup ------------------------- */
+void AppRoast::openSettings()
+{
+    _setBack    = _screen == Screen::Connect ? Screen::Connect : Screen::Prep;
+    _setSel     = 0;
+    _setEditing = false;
+    refreshNetSummary();
+    _screen = Screen::Settings;
+}
+
+void AppRoast::refreshNetSummary()
+{
+    char ssid[33];
+    bool wifi    = roast_net_saved_wifi(ssid);
+    bool dropbox = roast_net_saved_dropbox();
+    if (!wifi && !dropbox)
+        _netSummary = "set up Wi-Fi & Dropbox";
+    else
+        _netSummary = std::string(wifi ? ssid : "no Wi-Fi") + (dropbox ? " · Dropbox" : " · no Dropbox");
+}
+
+// Setup needs NimBLE for itself (and the memory BLE + Wi-Fi + TLS take), so the roaster link closes meanwhile.
+void AppRoast::openNetwork()
+{
+    if (_phase != Phase::Idle || _fanRunning) {
+        toast("Stop the fan before network setup", WARN);
+        return;
+    }
+    _netWasSim = _link && _link->isSimulated();
+    if (_link) {
+        g_activeLink = nullptr;
+        _link->clearQueue();
+        _link->end();
+        _link.reset();
+    }
+    GetHAL().setRoastBleActive(false);
+    _linkState = _prevLinkState = LinkState::Off;
+    _netOpen = roast_net_open();
+    if (!_netOpen) toast("Setup could not start", DROP, 3000);
+    _screen = Screen::Network;
+}
+
+void AppRoast::closeNetwork()
+{
+    bool started = _netOpen;
+    if (_netOpen) roast_net_close();
+    _netOpen = false;
+    if (!started && _netRequired) {  // nothing saved yet and setup did not start: boot again (it reopens setup)
+        restartApp(false);
+        return;
+    }
+    if (started) {
+        // BLE + Wi-Fi + TLS leave the heap fragmented (measured: largest block 15 KB afterwards), too little for the
+        // roast log (19 KB) and a recording. Restart into Roast with a clean heap; esp_restart() boots this app again,
+        // not the Launcher. Rules and the network setup are already saved in NVS.
+        _rules.save();
+        toast("Restarting…", INK, 5000);
+        render();
+        GetHAL().delay(150);
+        esp_restart();
+    }
+    refreshNetSummary();
+    startLink(_netWasSim);
+    _screen = Screen::Connect;  // pollLink() moves on to Prep when the roaster answers
+}
+
+bool AppRoast::keyNetwork(int code)
+{
+    if (code != KEY_ESC) return false;
+    if (_netOpen && roast_net_busy()) {
+        toast("Dropbox is busy: wait a moment", WARN);
+        return true;
+    }
+    closeNetwork();
+    return true;
 }
 
 /* ------------------------------- recording ------------------------------- */

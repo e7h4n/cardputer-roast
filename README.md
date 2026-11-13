@@ -33,6 +33,11 @@ opens in Artisan. It runs as an app under the community [Launcher](https://githu
 - **Recording.** The built-in microphone records the whole roast, from charge to the end of the log, to a `.wav`
   beside the log. The summary JSON places every mark (dry, first crack, drop) in the recording, for listening back
   to first crack or building a crack-detection dataset.
+- **Wi-Fi & Dropbox pairing.** Paired from the [Coffee Watch setup page](https://e7h4n.github.io/coffee-watch/)
+  in Chrome over authenticated Bluetooth, like the watch: Wi-Fi network, then your own Dropbox app (App folder access).
+  Both are required.
+- **Dropbox sync.** Curves live in Dropbox: synced at every boot, and every curve saved or deleted on the device is
+  written to Dropbox at once. Each roast (logs and recording) is saved to Dropbox from its summary once the fan is off.
 - **Simulator.** A built-in thermal model for practising without a machine; a yellow SIM tag shows when it is on.
 - **Colour-keyed UI.** Colour = what it controls: fan blue, heat orange, curve/PID violet, marks yellow/brown, drop
   and alarms red, "go" green. The bottom row always shows the keys that work right now.
@@ -114,9 +119,8 @@ starts at F). After first crack it outlines the drop window. Exit is locked unti
 - The recording stops with the log: Enter or X X on the cooling page, 4 minutes after the drop, or on exit.
 
 The summary shows total time, development percentage and weight loss, the whole roast on the phase bar, first crack
-and the rise to drop, RoR at first crack and 30 s later, peak heater output and curve-following error. The bottom
-line shows the recording's length, with "clipped" when the microphone overloaded (lower *mic gain*) and "cut" when
-the SD card failed during the roast.
+and the rise to drop, RoR at first crack and 30 s later, peak heater output and curve-following error. The
+recording's length, clipping and inserted silence are in the summary JSON (`audio`), not on screen.
 
 ### Recording
 Every roast is recorded when an SD card is present; there is no switch. A red **REC** tag in the status corner
@@ -133,7 +137,71 @@ stalls for longer than the write buffer, the lost samples are replaced by the sa
 lists each such gap.
 
 *Mic gain* (0–30 dB in 3 dB steps, default 18 dB) is the codec's analog gain. The default is an estimate; if the
-summary says "clipped", lower it.
+JSON's `clipped_samples` is more than a handful, lower it.
+
+### Wi-Fi & Dropbox
+**O** (also from the Connect page) › *network* opens the setup screen. It closes the roaster link first (setup needs
+Bluetooth for itself), so it is only available with the fan off. **Esc** closes setup and restarts Roast (a few
+seconds), which reconnects to the roaster with a clean heap: Bluetooth, Wi-Fi and TLS leave it too fragmented for a
+roast log and a recording.
+
+1. In Chrome on a computer or Android phone, open https://e7h4n.github.io/coffee-watch/ and press **Connect watch**.
+2. Pick `CardputerRoast-XXXX`. When the system pairing dialog asks, type the six-digit code on the Cardputer.
+3. Enter a 2.4 GHz Wi-Fi network. It counts (and is saved) only once the Cardputer has an IP address.
+4. Link Dropbox: in the [App Console](https://www.dropbox.com/developers/apps) create an app with Scoped access and
+   App folder access, enable `files.content.write`, `files.content.read` and `files.metadata.read`, enter its App key
+   and App secret, allow access on Dropbox and paste the code it shows. The Cardputer exchanges the code for a
+   refresh token itself and saves it; the page then shows *Authorization saved*. It does not test an upload here
+   (with Bluetooth up there is not enough memory for a second HTTPS session): close setup, and the boot sync, which
+   runs without Bluetooth, is the first real use of the account. If it is wrong, the sync fails and says why.
+   *Check Dropbox upload* on the page only refreshes the token.
+   You can reuse the Coffee Watch Dropbox app: both devices then share one app folder.
+
+The protocol, packets and status are the Coffee Watch ones ([spec](https://github.com/e7h4n/coffee-watch/blob/main/spec/dropbox.md)),
+ported from its firmware. Credentials go only over the authenticated, encrypted Bluetooth link, are stored in NVS
+(`rn_wifi`, `rn_dropbox`; plain flash, no flash encryption) and are never logged or readable over Bluetooth. Wi-Fi,
+Bluetooth setup and the TLS buffers run only while this screen is open. Removing Dropbox on the page erases it from
+the Cardputer; revoke access under Connected apps in your Dropbox settings.
+
+The rules page shows the saved network and whether Dropbox is linked. Once Dropbox setup has set the clock (SNTP),
+new log ids are dated (`YYYYMMDD-HHMMSS`, UTC) instead of `R####`, until the next power-off.
+
+### Dropbox sync
+Wi-Fi and Dropbox are required: until both are set up, Roast opens the setup screen at boot. Everything below lives in
+the Dropbox app's folder (Dropbox › Apps › *app name*). Every transfer is checked against Dropbox's `content_hash`;
+nothing is retried: a failure stops with its reason on screen.
+
+| When | What | Direction |
+|---|---|---|
+| Every boot, and **S** in the curve library | `Roast Curves/` → `roast/curves/`: the card ends up exactly like the folder at that moment (missing or different files downloaded, others deleted). Must succeed: on failure Roast stays on that screen (**Enter** tries again, **O** network setup, **Esc** exit). | Dropbox → card |
+| A curve saved in the editor (**S**) | That one file, overwritten on Dropbox. | card → Dropbox |
+| A curve deleted in the library (**Del** twice) | That one file, deleted on Dropbox, then on the card. | card → Dropbox |
+| On the summary, once the fan is off | `roast/logs/<id>.csv/.json/.alog/.wav` → `Roast Logs/`, overwritten, in the background: the summary stays usable (weight, note, chart). An edit there re-saves the .json and .alog. The summary can be closed only when everything is saved (or the save failed). Afterwards the record is not synced again; Roast has no history view. | card → Dropbox |
+
+Last writer wins: the device pushes its own edits immediately, and the next sync replaces the card's curves with
+Dropbox's. The Cardputer has no PSRAM, and BLE, Wi-Fi and TLS do not fit together, so each of these closes the roaster
+link while it runs and Roast restarts afterwards (a few seconds; the boot after a sync or a push skips the curve
+sync). That is why saving or deleting a curve and saving a roast need the fan off (**X X** first). The recording
+of a 15-minute roast is about 60 MB and takes minutes to upload. While anything syncs, the status corner says
+**Syncing** in place of the battery; the sync screen shows details only when it failed.
+
+### Curve following: lookahead and the first-crack floor
+Roast does not run a PID itself. Once a second it writes the roaster's target (SV, register 9); the roaster's own PID
+(P/I/D in registers 21–23, never written) sets the heater. Two rules shape that target (`roast_control.h`):
+
+- **SV lookahead** (0–20 s, default 8): SV = curve(t + lookahead). The PID acts late (heater → air → beans), so it
+  aims where the curve will be. Artisan follows a background curve the same way. Past the curve's end the last value
+  holds.
+- **FC floor** (default on): from the curve's first-crack time minus 20 s (or the F mark, if earlier) until the drop,
+  SV is never below BT + *floor above BT* (default 1 °C), so the PID does not cut heat just to get back onto the line
+  while the crack absorbs heat (the rate of rise collapsed after first crack in the 2026-11-12 roasts). The floor is
+  capped at curve(t) + *floor cap*. In the simulator a loose cap lets BT climb far above the plan after the crack
+  (+8 °C cap: about +8.6 °C at the drop, RoR back up to ~20); +3 °C kept it to about +3 °C. Drop-now and the safety
+  drop are unchanged. The first time the floor lifts SV it is logged as an action; the Roast page then shows
+  "FC floor SV …" in place of the target.
+
+The log's `target` column records the SV actually written. **P** (manual heat) holds the heater at its mean over the
+last 30 s rather than one reading.
 
 ### Fan floors
 The roaster's own minimum fan register reads 50 %. A short press of ↓ stops at **50 %** and again at **40 %**.
@@ -156,6 +224,10 @@ shown underneath, and range rules (window, rise) take the lower then the upper e
 | Start fan | 53 % |
 | Cold temperature | 40 °C |
 | Curve offset | 0 °C |
+| SV lookahead | 8 s |
+| FC floor | on |
+| Floor above BT | 1 °C |
+| Floor cap (above the curve) | 8 °C |
 | Mic gain | 18 dB |
 
 The bottom bar turns green inside the drop window, red past the development limit or at the
@@ -304,6 +376,13 @@ CI uploads the same screenshots as the `ui-preview` artifact.
 The UI uses Space Grotesk (SIL OFL 1.1, `tools/fonts/OFL.txt`) as anti-aliased VLW fonts compiled into the
 firmware. `python3 tools/fonts/make_vlw.py` regenerates `main/apps/app_roast/fonts/roast_fonts_data.h` (Pillow).
 
+## Host tests and the simulator sweep
+```sh
+IDF_PATH=... tools/tests/run.sh                                   # roast_control unit tests (also in CI)
+tools/preview/build.sh && tools/preview/build_sweep.sh && build_preview/fc_sweep   # floor/cap/lookahead sweep
+build_preview/preview shots fcA <floor 0|1> <lookahead> <tag> [cap x10]           # batch A replay, chart shots
+```
+
 ## USB serial debug console
 The app listens on the USB serial port. `tools/rdbg.py` drives it:
 ```sh
@@ -316,7 +395,8 @@ The console accepts:
 - full-screen (240×135) screenshots;
 - `quiet`, `ping` and `regs`;
 - SD listing (`ls`), file dump (`cat`), file removal under `/sdcard/roast/` (`rm`) and card info (`sdinfo`);
-- `rec` (recorder state and levels) and `b64 <file> <offset> <length>` (a file range in base64).
+- `rec` (recorder state and levels) and `b64 <file> <offset> <length>` (a file range in base64);
+- `net` (Wi-Fi & Dropbox setup state and heap; no credentials).
 
 `tools/pull_audio.py <id> [seconds]` pulls the start of a recording over USB and prints peak and RMS level and the
 share of inserted silence for every second, with the marks from the JSON. It manages about 1 s of audio per

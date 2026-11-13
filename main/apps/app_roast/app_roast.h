@@ -12,6 +12,8 @@
 #include "roast_link.h"
 #include "roast_curve.h"
 #include "roast_session.h"
+#include "roast_control.h"
+#include "roast_sync.h"
 #include "roast_theme.h"
 
 struct RoastRules {
@@ -29,6 +31,10 @@ struct RoastRules {
     float heatDrop   = 5.0f;  // heater drop around first crack that triggers a hint
     float curveOffset = 0.0f; // shift the whole curve (myERoast tempCompensation), -30..30
     int micGain      = 18;    // microphone PGA gain, 0..30 dB in 3 dB steps
+    int svLookahead  = 8;     // SV = curve(t + this), 0..20 s (roast_control.h)
+    bool fcFloor     = true;  // around first crack, SV >= BT + floorDelta (capped at curve + 8)
+    float floorDelta = 1.0f;  // 0..5 degC
+    float floorCap   = 8.0f;  // the floor never exceeds curve(t) + this, 1..8 degC
     void load();
     void save() const;
 };
@@ -43,7 +49,7 @@ public:
     void onClose() override;
 
 private:
-    enum class Screen : uint8_t { Connect, Prep, Roast, Cool, Summary, Curves, Editor, Settings, Help };
+    enum class Screen : uint8_t { Connect, Prep, Roast, Cool, Summary, Curves, Editor, Settings, Help, Network, Sync };
     enum class Phase : uint8_t { Idle, FanOn, Roasting, Cooling, Done };
     enum class Tone : uint8_t { Key, Info, Good, Warn };
 
@@ -71,6 +77,8 @@ private:
         float lo = 0, hi = 0, step = 1;
         const char* unit = "";
         bool simToggle = false;
+        bool* toggle   = nullptr;  // on/off row
+        bool network   = false;    // opens the Wi-Fi & Dropbox setup screen
     };
     std::vector<RuleRow> ruleRows();
 
@@ -105,6 +113,11 @@ private:
     uint32_t _fanSetMs   = 0;
     float _heatSet       = 0;
     int _lastTargetRaw   = -1;
+    bool _svFloored      = false;  // last SV came from the first-crack floor
+    bool _floorLogged    = false;  // the floor's first use is in the log
+    float _lastSv        = NAN;
+    roast::SvConfig svConfig() const;
+    roast::SvResult svAt(int t) const;  // what to write as SV at curve second t (lookahead, first-crack floor)
 
     // ---- alerts
     int _satRun          = 0;
@@ -164,6 +177,38 @@ private:
     void fanDown(float step);
     void pollFanBarrier();
     std::string _saveMsg;
+
+    // ---- Wi-Fi & Dropbox setup (net/roast_net.h): pairs with the Coffee Watch setup page over Bluetooth
+    bool _netOpen    = false;  // setup running: the roaster link is closed meanwhile
+    bool _netWasSim  = false;  // reopen the simulator rather than BLE when setup closes
+    Screen _setBack  = Screen::Prep;  // where Esc on the rules page returns
+    std::string _netSummary;          // rules page value: saved network and Dropbox state
+    void openNetwork();
+    void closeNetwork();
+
+    // ---- Dropbox sync (roast_sync.h): runs with the roaster link closed, then Roast restarts
+    bool _netRequired = false;  // Wi-Fi or Dropbox not set up yet: setup is the only way forward
+    // The roast is saved to Dropbox from the summary, in the background, once the fan is off (the link closes then).
+    uint32_t _saveAt   = 0;      // when to start (lets the fan-stop command reach the roaster first); 0 = not planned
+    bool _saveStarted  = false;
+    bool _saveReported = false;  // the outcome was toasted
+    void planSave();
+    void pollSave();
+    void resaveEdited();         // the summary's edits rewrote the .json and .alog
+    bool saveBusy();             // the roast on the summary is not in Dropbox yet (and has not failed)
+    bool syncingNow();           // a Dropbox job is moving data: the status corner says "Syncing" instead of battery
+    bool startJob(roast::sync::Job job, const std::string& arg);
+    void pollSync();
+    bool keySync(int code);
+    void renderSync();
+    void restartApp(bool skipBootSync);
+    bool consumeSkipSync();
+    bool consumeBypass();  // esp_restart(); boot sync runs again unless skipBootSync
+    bool networkIdle(const char* what);  // fan off and nothing running: a network job may close the link
+    void refreshNetSummary();
+    bool keyNetwork(int code);
+    void renderNetwork();
+    void openSettings();
 
     // ---- audio recording (roast_audio.h): charge -> end of the log
     bool _recording      = false;
