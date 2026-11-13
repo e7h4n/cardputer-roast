@@ -631,13 +631,13 @@ static bool json_ascii(const char *s, char *out, size_t cap)
 #undef PUT
 }
 
-bool rn_dbx_open(char *err, size_t n)
+bool rn_dbx_open(bool listing, char *err, size_t n)
 {
     if (task) {
         seterr(err, n, "setup is open");
         return false;
     }
-    response_cap = RESPONSE_SYNC;
+    response_cap = listing ? RESPONSE_SYNC : RESPONSE_SETUP;
     response     = calloc(1, response_cap);
     access_token = calloc(1, TOKEN_MAX);
     if (!response || !access_token) {

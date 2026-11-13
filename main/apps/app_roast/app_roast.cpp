@@ -200,12 +200,14 @@ void AppRoast::onRunning()
     pumpBeep();
     pollRecording();
     pollSync();
+    pollSave();
     if (_phase == Phase::Roasting || _phase == Phase::Cooling) tickRoast();
 
     // Leaving the app is only allowed when the machine is not heating.
     if (GetHAL().homeButton.wasClicked()) {
-        if (_screen == Screen::Sync && !sync::Get().finished) {
-            toast("Syncing: wait for it to finish", WARN);  // leaving now would cut an upload in half
+        if ((_screen == Screen::Sync && !sync::Get().finished) || saveBusy()) {
+            // leaving now would cut an upload in half (or skip the roast's save altogether)
+            toast(_fanRunning ? "Stop the fan (X X): the roast is saved to Dropbox" : "Saving to Dropbox: wait", WARN);
         } else if (_phase == Phase::Roasting) {
             toast("Roasting: drop before exit", ui::DROP);
         } else {
@@ -650,6 +652,9 @@ void AppRoast::enterSummary()
     _screen   = Screen::Summary;
     _phase    = Phase::Done;
     _dirty    = true;
+    _saveStarted = _saveReported = false;
+    _saveAt                      = 0;
+    if (!_fanRunning) planSave();  // X X on the cooling page: the fan is already off
 }
 
 void AppRoast::finishRoast()
@@ -1014,7 +1019,8 @@ bool AppRoast::keySummary(int code)
             if (_fanRunning && confirm(KEY_X, "", true)) {
                 stopMachine();
                 _phase = Phase::Done;
-                toast("Fan stopped", INK);
+                toast("Fan stopped: saving to Dropbox", INK);
+                planSave();
             }
             return true;
         case KEY_W:
@@ -1024,6 +1030,7 @@ bool AppRoast::keySummary(int code)
                     _session.setRoastedWeight(g);
                     std::string err;
                     _saveMsg = _session.finalize(&err) ? "Updated: roast/logs/" + _session.logId() : err;
+                    resaveEdited();
                 }
             });
             return true;
@@ -1032,6 +1039,7 @@ bool AppRoast::keySummary(int code)
                 _session.setNote(v);
                 std::string err;
                 _saveMsg = _session.finalize(&err) ? "Updated: roast/logs/" + _session.logId() : err;
+                resaveEdited();
             });
             return true;
         case KEY_TAB:
@@ -1039,16 +1047,25 @@ bool AppRoast::keySummary(int code)
             return true;
         case KEY_ENTER:
         case KEY_ESC: {
-            // Closing the summary saves the record to Dropbox (with any weight or note set here); after that it is
-            // not synced again. The upload needs the roaster link closed, so the fan must be off.
-            if (_fanRunning) {
-                toast("Stop the fan (X X) to save to Dropbox", WARN, 3000);
+            // The roast is saved to Dropbox while the summary stays open; it can only be closed once that is done
+            // (or has failed: nothing is retried). Then Roast restarts with a clean heap.
+            bool needsSave = _sdOk && !_session.logId().empty();
+            if (!needsSave) {
+                finishRoast();
                 return true;
             }
-            std::string id = _session.logId();
-            bool saved     = _sdOk && !id.empty();
+            if (_fanRunning) {
+                toast("Stop the fan (X X): the roast is saved to Dropbox", WARN, 3000);
+                return true;
+            }
+            if (saveBusy()) {
+                toast("Saving to Dropbox: wait", WARN, 2500);
+                return true;
+            }
+            sync::Finish();
+            for (int i = 0; i < 300 && !sync::Get().finished; i++) GetHAL().delay(10);  // idle: ends at once
             finishRoast();
-            if (saved) startJob(sync::Job::SaveRoast, id);
+            restartApp(true);
             return true;
         }
         default:
@@ -1663,6 +1680,58 @@ bool AppRoast::networkIdle(const char* what)
         return false;
     }
     return true;
+}
+
+void AppRoast::planSave()
+{
+    if (!_sdOk || _session.logId().empty() || _saveStarted) return;
+    _saveAt = GetHAL().millis() + 1500;  // the fan-stop command reaches the roaster before the link closes
+}
+
+void AppRoast::pollSave()
+{
+    if (_screen != Screen::Summary && _screen != Screen::Help) return;
+    if (!_saveStarted && _saveAt && GetHAL().millis() >= _saveAt && !_fanRunning) {
+        _saveAt = 0;
+        // Close the roaster link (BLE + Wi-Fi + TLS do not fit together); keep the roast's data for the summary.
+        if (_link) {
+            g_activeLink = nullptr;
+            _link->clearQueue();
+            _link->end();
+            _link.reset();
+        }
+        GetHAL().setRoastBleActive(false);
+        _linkState = _prevLinkState = LinkState::Off;
+        _saveStarted = sync::Start(sync::Job::SaveRoast, _session.logId());
+        if (!_saveStarted) toast("Dropbox save could not start", DROP, 3000);
+        _dirty = true;
+    }
+    if (_saveStarted && !_saveReported) {
+        sync::Status st = sync::Get();
+        if (st.finished && !st.ok) {
+            _saveReported = true;
+            toast("Dropbox save failed: " + st.error, DROP, 6000);
+        } else if (st.idle && !_saveReported) {
+            _saveReported = true;
+            toast("Saved to Dropbox", GO, 2000);
+        }
+    }
+}
+
+bool AppRoast::saveBusy()
+{
+    if (_phase != Phase::Done || !_sdOk || _session.logId().empty()) return false;
+    if (!_saveStarted) return true;  // not started yet (fan still on, or about to start)
+    sync::Status st = sync::Get();
+    return !(st.finished || st.idle);
+}
+
+void AppRoast::resaveEdited()
+{
+    if (!_saveStarted) return;  // not started yet: the first upload takes the edited files anyway
+    sync::Resave(".json");
+    sync::Resave(".alog");
+    _saveReported = false;  // report again when this lands
 }
 
 bool AppRoast::startJob(sync::Job job, const std::string& arg)

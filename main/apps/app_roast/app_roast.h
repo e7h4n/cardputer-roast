@@ -188,6 +188,14 @@ private:
 
     // ---- Dropbox sync (roast_sync.h): runs with the roaster link closed, then Roast restarts
     bool _netRequired = false;  // Wi-Fi or Dropbox not set up yet: setup is the only way forward
+    // The roast is saved to Dropbox from the summary, in the background, once the fan is off (the link closes then).
+    uint32_t _saveAt   = 0;      // when to start (lets the fan-stop command reach the roaster first); 0 = not planned
+    bool _saveStarted  = false;
+    bool _saveReported = false;  // the outcome was toasted
+    void planSave();
+    void pollSave();
+    void resaveEdited();         // the summary's edits rewrote the .json and .alog
+    bool saveBusy();             // the roast on the summary is not in Dropbox yet (and has not failed)
     bool startJob(roast::sync::Job job, const std::string& arg);
     void pollSync();
     bool keySync(int code);

@@ -373,14 +373,24 @@ int main(int argc, char** argv)
     press("x");
     shot("summary_confirm_stop");
     press("x");
-    shot("summary");
+    shot("summary");  // fan off: the save to Dropbox starts in 1.5 s, in the background
+    step(1600);
+    shot("summary_saving");
     press("tab");
-    shot("summary_chart");
+    shot("summary_chart_saving");  // the summary stays usable while it saves
     press("tab");
-    press("enter");  // closing the summary saves the roast to Dropbox
-    step(600);
-    shot("save_roast");
-    step(4500);  // upload, restart, link
+    press("enter");
+    shot("summary_exit_blocked");  // cannot close before the save is done
+    step(3500);
+    press("w");
+    type("86");
+    press("enter");  // an edit re-saves the .json and .alog
+    step(200);
+    shot("summary_resave");
+    step(1600);
+    shot("summary_saved");
+    press("enter");  // done: close, restart
+    step(3500);
     shot("prep_after");
 
     press("o");

@@ -906,7 +906,32 @@ void AppRoast::renderSummary()
     bool updated        = _saveMsg.rfind("Updated", 0) == 0;
     bool saved          = updated || _saveMsg.rfind("Saved", 0) == 0;
     const AudioInfo& au = _session.audio();
-    int right           = _fanRunning ? W - 6 - (tw("fan still on", F10()) + 8) : W - 4;
+    // right end: "fan still on", or the Dropbox save (it runs in the background once the fan is off)
+    std::string pillText;
+    uint32_t pillCol = FAN;
+    if (_fanRunning) {
+        pillText = "fan still on";
+    } else if (_sdOk && !_session.logId().empty()) {
+        sync::Status st = sync::Get();
+        if (!_saveStarted) {
+            pillText = "Dropbox…";
+            pillCol  = FAINT;
+        } else if (st.finished && !st.ok) {
+            pillText = "not saved";
+            pillCol  = DROP;
+        } else if (st.idle || (st.finished && st.ok)) {
+            pillText = "in Dropbox";
+            pillCol  = GO;
+        } else {
+            std::string f = st.file;
+            size_t dot    = f.rfind('.');
+            std::string ext = dot == std::string::npos ? f : f.substr(dot + 1);
+            int pct         = st.total ? (int)(100.0 * st.done / st.total) : 0;
+            pillText        = "saving " + ext + " " + std::to_string(pct) + "%";
+            pillCol         = CURVE;
+        }
+    }
+    int right = pillText.empty() ? W - 4 : W - 6 - (tw(pillText, F10()) + 8);
     std::string a;
     uint32_t ac = DIM;
     if (au.valid) {
@@ -932,9 +957,9 @@ void AppRoast::renderSummary()
     } else if (!_saveMsg.empty()) {
         text(4, 111, clipTo(_saveMsg, right - 4, F10()), F10(), DROP, Datum::middle_left);
     }
-    if (_fanRunning) {
-        int w = tw("fan still on", F10()) + 8;
-        pill(W - 4 - w, 105, "fan still on", FAN);
+    if (!pillText.empty()) {
+        int w = tw(pillText, F10()) + 8;
+        pill(W - 4 - w, 105, pillText, pillCol);
     }
     if (confirmPending(KEY_X))
         confirmRow("X", "press X again to stop the fan");

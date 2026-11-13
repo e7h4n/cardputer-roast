@@ -152,18 +152,45 @@ bool deleteCurve(const std::string& local)
     return true;
 }
 
+std::vector<std::string> s_pending;  // SaveRoast: extensions still to upload, in order
+bool s_finish = false;
+
 bool saveRoast(const std::string& id)
 {
+    update([](Status& s) { s.idle = false; });
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    s_pending.clear();
     for (const char* ext : {".csv", ".json", ".alog", ".wav"}) {  // the recording last: it is the big one
-        std::string local = std::string(kLogDir) + "/" + id + ext;
         struct stat st;
-        if (stat(local.c_str(), &st) != 0) continue;
+        if (stat((std::string(kLogDir) + "/" + id + ext).c_str(), &st) == 0) s_pending.push_back(ext);
+    }
+    xSemaphoreGive(s_mtx);
+    for (;;) {
+        std::string ext;
+        xSemaphoreTake(s_mtx, portMAX_DELAY);
+        if (!s_pending.empty()) {
+            ext = s_pending.front();
+            s_pending.erase(s_pending.begin());
+            s_st.idle = false;
+        } else {
+            s_st.idle = true;
+            if (s_finish) {
+                xSemaphoreGive(s_mtx);
+                return true;
+            }
+        }
+        xSemaphoreGive(s_mtx);
+        if (ext.empty()) {  // waiting for an edit to re-save, or for the summary to close
+            if (Get().step != "saved") step("saved");
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+        std::string local = std::string(kLogDir) + "/" + id + ext;
         step("uploading", id + ext);
         std::string remote = std::string(kLogsFolder) + "/" + id + ext;
         if (!rn_dbx_upload(local.c_str(), remote.c_str(), progress, nullptr, s_err, sizeof s_err)) return fail(s_err);
         update([](Status& s) { s.uploaded++; });
     }
-    return true;
 }
 
 void run(void*)
@@ -174,7 +201,7 @@ void run(void*)
         fail(s_err);
     } else {
         step("signing in to Dropbox");
-        if (!rn_dbx_open(s_err, sizeof s_err)) {
+        if (!rn_dbx_open(s_job == Job::Curves, s_err, sizeof s_err)) {
             fail(s_err);
         } else {
             switch (s_job) {
@@ -211,8 +238,9 @@ bool Start(Job job, const std::string& arg)
 {
     if (!s_mtx) s_mtx = xSemaphoreCreateMutex();
     if (Get().running) return false;
-    s_job = job;
-    s_arg = arg;
+    s_job    = job;
+    s_arg    = arg;
+    s_finish = false;
     update([&](Status& s) {
         s         = Status();
         s.running = true;
@@ -228,6 +256,26 @@ bool Start(Job job, const std::string& arg)
         return false;
     }
     return true;
+}
+
+void Resave(const std::string& ext)
+{
+    if (!s_mtx) return;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    if (s_st.running && s_job == Job::SaveRoast &&
+        std::find(s_pending.begin(), s_pending.end(), ext) == s_pending.end()) {
+        s_pending.push_back(ext);
+        s_st.idle = false;
+    }
+    xSemaphoreGive(s_mtx);
+}
+
+void Finish()
+{
+    if (!s_mtx) return;
+    xSemaphoreTake(s_mtx, portMAX_DELAY);
+    s_finish = true;
+    xSemaphoreGive(s_mtx);
 }
 
 Status Get()
