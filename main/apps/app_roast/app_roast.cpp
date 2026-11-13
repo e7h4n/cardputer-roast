@@ -125,13 +125,17 @@ void AppRoast::onOpen()
     // Wi-Fi and Dropbox are required. Boot syncs the curves from Dropbox (must succeed) and restarts once with a
     // clean heap; that second boot (flagged in RTC memory) skips the sync and connects to the roaster.
     char ssid[33];
-    if (consumeBypass()) {  // test only: USB console `boot roast`
+    // Read the boot marker once and clear it, whichever way this boot goes (a stale "skip sync" must not survive
+    // into the boot after setup).
+    bool bypass = consumeBypass();
+    bool skip   = consumeSkipSync();
+    if (bypass) {  // test only: USB console `boot roast`
         if (!_blockedByKeyboardApp) startLink(false);
         toast("Test boot: no Dropbox sync", WARN, 4000);
     } else if (!roast_net_saved_wifi(ssid) || !roast_net_saved_dropbox()) {
         _netRequired = true;
         openNetwork();
-    } else if (consumeSkipSync()) {
+    } else if (skip) {
         if (!_blockedByKeyboardApp) startLink(false);
     } else {
         startJob(sync::Job::Curves, "");
@@ -1728,7 +1732,7 @@ void AppRoast::pollSave()
         sync::Status st = sync::Get();
         if (st.finished && !st.ok) {
             _saveReported = true;
-            toast("Dropbox save failed: " + st.error, DROP, 6000);
+            toast("Not saved: " + st.error, DROP, 6000);
         } else if (st.idle && !_saveReported) {
             _saveReported = true;
             toast("Saved to Dropbox", GO, 2000);

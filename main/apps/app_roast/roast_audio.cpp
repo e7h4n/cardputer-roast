@@ -49,6 +49,9 @@ constexpr int kDmaFrames          = 511;  // stereo 16-bit frames per DMA descri
 constexpr int kHeaderBytes        = 512;  // RIFF + fmt + JUNK + data: samples start on a sector boundary
 constexpr uint32_t kHeaderEveryMs = 10000;
 constexpr int kSlotProbeChunks    = 8;  // ~128 ms of audio decides which I2S slot carries the microphone
+// The ES8311 powers up with a full-scale pop that settles in ~250 ms (measured: clipped for 35 ms, at the noise floor
+// by 250 ms). The first 300 ms are written as silence and left out of the peak and clipping statistics.
+constexpr uint32_t kSettleSamples = kSampleRate * 3 / 10;
 constexpr int kMaxGaps            = 64;
 constexpr uint8_t kCodecAddr      = 0x18;  // ES8311
 constexpr uint32_t kI2cHz         = 400000;
@@ -79,6 +82,7 @@ struct Rec {
     int64_t probeEnergy[2] = {0, 0};
     int peakHist[32]   = {};
     int peakIdx        = 0;
+    uint32_t captured  = 0;  // samples read from I2S since the start
     // shared with the UI task
     std::atomic<bool> active{false}, failed{false}, stopReq{false};
     std::atomic<uint32_t> written{0}, clipped{0};
@@ -278,7 +282,7 @@ void take_chunk(size_t bytes)
     int chunkMax = 0;
     uint32_t clip = 0;
     for (int i = 0; i < frames; i++) {
-        int16_t v  = s_stereo[2 * i + sl];
+        int16_t v  = R.captured++ < kSettleSamples ? 0 : s_stereo[2 * i + sl];  // codec power-up pop
         s_mono[i]  = v;
         int a      = v < 0 ? -(int)v : v;
         chunkMax   = std::max(chunkMax, a);
@@ -395,6 +399,7 @@ bool Start(const std::string& path, int gainDb, std::string* err)
     R.curFill  = 0;
     R.queued = R.dropped = R.dropAt = R.dropTotal = 0;
     R.probeChunks                                 = 0;
+    R.captured                                    = 0;
     R.probeEnergy[0] = R.probeEnergy[1] = 0;
     memset(R.peakHist, 0, sizeof(R.peakHist));
     R.peakIdx = 0;

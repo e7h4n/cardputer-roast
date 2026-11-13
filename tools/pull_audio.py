@@ -8,9 +8,21 @@ roughly 1 s of audio per 1-2 s. For whole roasts, take the SD card out instead.
 Prints, per second: peak and RMS in dBFS, and how much of it is exact zeros (the silence the recorder inserts while a
 tone plays or after an SD stall). Uses the same port rules as rdbg.py (RDBG_PORT to override).
 """
-import argparse, base64, json, math, os, re, struct, sys, time
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rdbg import open_port  # noqa: E402
+import argparse, base64, glob, json, math, os, re, struct, sys, time
+import serial
+
+
+def open_port():
+    # Same rules as rdbg.py, kept local (importing rdbg would run its command line). Keep the OS default DTR/RTS:
+    # forcing both low resets the ESP32-S3, and under the Launcher a reset boots straight into the app.
+    ports = [os.environ['RDBG_PORT']] if os.environ.get('RDBG_PORT') else \
+        sorted(glob.glob('/dev/cu.usbmodem*')) + sorted(glob.glob('/dev/ttyACM*'))
+    if not ports:
+        sys.exit('no /dev/cu.usbmodem* or /dev/ttyACM* port (set RDBG_PORT)')
+    s = serial.Serial()
+    s.port, s.baudrate, s.timeout = ports[0], 115200, 0.2
+    s.open()
+    return s
 
 CHUNK = 3072
 
@@ -23,8 +35,11 @@ def ask(s, line, prefix, timeout=5.0):
         while b'\n' in buf:
             row, buf = buf.split(b'\n', 1)
             row = row.strip()
-            if row.startswith(prefix.encode()) or row.startswith(b'ERR'):
-                return row.decode(errors='replace')
+            # device log lines can run into the reply without a newline: match anywhere in the line
+            for key in (prefix.encode() + b' ', b'ERR'):
+                i = row.find(key)
+                if i >= 0:
+                    return row[i:].decode(errors='replace')
     raise TimeoutError(line)
 
 

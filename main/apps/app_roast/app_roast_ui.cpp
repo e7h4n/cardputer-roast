@@ -1346,7 +1346,7 @@ void AppRoast::renderNetwork()
     dot(8, 102, 3, dc);
     text(15, 96, "Dropbox", F12(), INK);
     text(78, 97, clipTo(d, W - 82, F11()), F11(), ds == "failed" ? DROP : (dc == GO ? INK : DIM));
-    keybar({{"Esc", FAINT, _netOpen && roast_net_busy() ? "wait…" : "close · back to the roaster"}});
+    keybar({{"Esc", FAINT, _netOpen && roast_net_busy() ? "wait…" : (_netRequired ? "close (restarts)" : "close · back to the roaster")}});
 }
 
 /* ================================================================== help */
