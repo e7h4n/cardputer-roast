@@ -49,13 +49,22 @@ struct SvResult {
 /// SV at roast second t. `inWindow`: inside the first-crack window (and not dropped). bt may be NAN.
 SvResult ComputeSv(const Curve& c, int t, float bt, bool inWindow, const SvConfig& cfg);
 
-/// Heater -> bean model, fitted on R0012-R0014 (fan 53-54 %, 100 and 200 g; bean temperature within 2.2-2.6 degC
-/// RMS over the whole roast): the inlet air settles at ambient + gain * heat, the beans approach the air at `rate`
-/// per second (time constant ~57 s), and the response starts ~5 s after a heater change.
+/// Heater -> bean model, fitted on R0012-R0014 and the 2026-11-14 Syrina D roast (fan 53-54 %, 100 and 200 g): the
+/// inlet air settles at ambient + gain * heat, the beans approach the air at `rate` per second (time constant ~49 s)
+/// plus their own heating above ~156 degC, and the response starts ~5 s after a heater change.
 struct PlantModel {
-    float ambient = 26.0f;    // degC
-    float gain    = 2.2f;     // degC of air per % heat
-    float rate    = 0.0175f;  // 1/s
+    float ambient   = 26.0f;    // degC
+    float gain      = 2.133f;   // degC of air per % heat
+    float rate      = 0.0204f;  // 1/s
+    // The beans heat faster than the heater alone explains from ~156 degC on (R0012-R0014 and the 2026-11-14
+    // Syrina D roast; exothermic reactions, better heat transfer as they dry and expand, or the probe: not told apart).
+    // Near first crack it is worth 4-5 % heat; without it the feedforward gave too much and the beans ran ahead.
+    float extra     = 0.253f / 60;  // degC/s per degC above extraFrom
+    float extraFrom = 156.2f;       // degC
+    float selfHeat(float bt) const  // degC/s
+    {
+        return bt > extraFrom ? extra * (bt - extraFrom) : 0;
+    }
 };
 
 /// Cardputer PID: heat = ff + Kp (e + integral(e dt) / Ti + Td (rate - dBT/dt)), e = target - BT. D acts on the
@@ -122,11 +131,10 @@ float CurveRate(const Curve& c, int t);
 /// only once BT had fallen back onto the line, by then the rate of rise had already collapsed.
 float FcAnchorOffset(const Curve& c, int tF, float btAtF, float cap);
 
-/// What the Cardputer PID aims at, at curve second t:
-///  - before the first-crack window: the curve now; feedforward from the curve `lookahead` s ahead;
-///  - in the window before F (from the curve's FC time - 20 s): hold, BT above the curve counts as on it, up to
-///    curve + cap (beyond that the PI cuts, as BT is running away);
-///  - from F on (`fcMarked`): the curve shifted by `fcOffset`, target and feedforward alike.
+/// What the Cardputer PID aims at, at curve second t: the curve now; feedforward from the curve `lookahead` s ahead.
+/// From F on (`fcMarked`, curves without a development plan): the curve shifted by `fcOffset`. There is no hold before
+/// F any more (BT above the curve counted as on it): on 2026-11-14 it let BT run 2 degC ahead into the crack.
+/// (`windowStart`, `bt` and `cap` are unused since.)
 PidAim CardputerAim(const Curve& c, int t, float bt, int windowStart, bool fcMarked, float fcOffset, int lookahead,
                     float cap);
 

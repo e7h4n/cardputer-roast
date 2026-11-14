@@ -233,21 +233,33 @@ On Syrina D 100g as planned for the competition (first crack 7:05 / 200.1, 45 s 
 | 15 s late | 35–37 s, to 208.5–209.4 | 20–26 s, at **208.5**, RoR at the planned 11.1–11.5 |
 
 In all nine cases (crack with no heat effect, absorbing, or releasing heat) the rate of rise follows the plan as
-well or better (mean |RoR − plan| 0.00–0.51 against 0.03–0.99).
+well or better (mean |RoR − plan| 0.00–0.58 against 0.02–1.04).
+
+**The first real roast (2026-11-14, Syrina D, 100 g)** on that firmware went too fast: BT ran 1.5–2 °C ahead of the
+curve from 6:00, F at 7:09 at 202.9, and the development averaged 15.5 °C/min (RoR 17 at the drop) instead of 11.2;
+it dropped on temperature after 24 s. Whole bean 71.2, ground ~87 (RD 16.7): the outside much darker than the
+inside. Two causes, both fixed: near first crack the beans heat faster than the heater model said (now in the model,
+see *Feedforward*), and the hold before F let BT run ahead uncorrected (removed). Replayed on a plant fitted to that
+roast (`tools/pid`, `syrina_1114`), the old firmware reproduces it (F 7:09, drop after 24 s, 13.5 °C/min); this one
+reaches the crack 0.4 °C ahead instead of 2.3 and holds 11.2 °C/min to the drop. Those beans crack at ~203 °C,
+though, so a 208.5 °C limit still leaves only ~30 s at 11.2 °C/min: that is the curve's to change.
 
 ### Curve following: the Cardputer PID
 By default the Cardputer sets the heater itself (Rules › CURVE FOLLOW › *PID on Cardputer*). At charge it switches
 the roaster's own PID off (register 15 = 0) and then writes the heater output (register 11) once a second
 (`roast_control.h`, `PidStep`):
 
-    heat = feedforward + P × (e + ∫e dt / Ti) − P × Td × dBT/dt,   e = curve(t) − BT
+    heat = feedforward + P × (e + ∫e dt / Ti + Td × (planned rate − dBT/dt)),   e = target(t) − BT
 
-- **Feedforward** comes from a heater → bean model fitted on the 2026-11-12 roasts (R0012–R0014, fan 53–54 %,
-  100 g and 200 g). The inlet air settles at about 26 °C + 2.2 °C per % heat, and the beans approach it with a
-  ~57 s time constant, starting ~5 s after a heater change. The model gives the heat the curve needs at
-  curve(t + lookahead) with the curve's slope there, so the PI only trims. Replayed through the fitted roaster
-  PID, the model reproduces batch A within 1.7 °C RMS. It is one model for both batch sizes; the integral covers
-  the rest. A rule of thumb from it: 1 % heat ≈ 2.4 °C/min of RoR.
+- **Feedforward** comes from a heater → bean model fitted on R0012–R0014 (2026-11-12) and the 2026-11-14 Syrina D
+  roast (fan 53–54 %, 100 g and 200 g). The inlet air settles at about 26 °C + 2.13 °C per % heat, and the beans
+  approach it with a ~49 s time constant, starting ~5 s after a heater change. On top of that they heat themselves
+  from ~156 °C on, by 0.25 °C/min per degree: ~11 °C/min at first crack, worth 4–5 % heat (exothermic reactions,
+  better heat transfer as the beans dry and expand, or the probe: the data do not tell them apart). Without that
+  term the feedforward gave too much heat near first crack and the beans ran ahead (the 2026-11-14 roast). The
+  model gives the heat the curve needs at curve(t + lookahead) with the curve's slope there, so the PI only trims.
+  Replayed through the fitted roaster PID, it reproduces batch A within 1.2 °C RMS. Beans differ (the 11-14
+  Syrina heated itself harder): the integral covers the rest. A rule of thumb: 1 % heat ≈ 2.6 °C/min of RoR.
 - **PI(D)**, measured against the curve *now*:
   - Defaults: P 1.5 %/°C, I time 60 s, D time 0, *D after F* 0.
   - D acts on the rate-of-rise shortfall: the curve's slope now minus BT's slope (5 s filter). The curve's slope
@@ -258,18 +270,13 @@ the roaster's own PID off (register 15 = 0) and then writes the heater output (r
   - At charge the controller starts from 0 % with no integral. When P hands back from manual, it picks up the
     heat being held (bumpless).
 - **First crack.**
-  - *Before F*, from the curve's FC time − 20 s: hold. BT above the curve (up to *floor cap*) counts as no error,
-    so the heater is not cut while the beans run ahead.
+  - *Before F* the curve is followed as everywhere else. (A hold, BT above the curve counting as no error, was
+    removed after the 2026-11-14 roast: it let BT run 2 °C ahead into the crack.)
   - *At F*: the development (above) becomes the target, and the controller is re-primed so the heater does not
     jump. A curve without first crack and drop points is shifted to BT instead (within ± *floor cap*).
-  - *After F*, optional (*D after F*, off by default): D adds heat as soon as the rate of rise falls behind the
-    plan. Whether the crack absorbs heat is not established: the literature disputes where roasting turns
-    exothermic (at first crack, near 200 °C, above 150 °C, or per coffee), and a crack heat sink fitted on
-    R0012–R0014 comes out at zero (the beans if anything heat faster than the heater model says). In `tools/pid`
-    `fc_crack` (Syrina D 100g) the shift alone lowers the mean |RoR − plan| from F to the drop in all six cases
-    (crack absorbing 0.08 / 0.12 °C/s: 1.00 → 0.88, 1.52 → 1.33; releasing 0.05 / 0.10: 0.84 → 0.71,
-    1.84 → 1.50; beans ahead 1.08 → 1.02; heater pinned 1.17). D 10 s on top helps only when the crack absorbs
-    heat (0.60, 0.94) and does worse when it releases heat (0.98, 1.68).
+  - *After F*, optional (*D after F*, off by default): D acts on the rate of rise against the development rate.
+    In the 2026-11-14 replay it made the development a little faster rather than steadier (11.4 and 11.8 °C/min
+    against 11.2 without), so it stays off.
   - With the heater already at 100 % no controller can lift the rate of rise. That has to be planned in the curve;
     the "heater pinned" alert shows it.
 - **Stale reading:** if BT is more than 3 s old, the output is held.
@@ -289,14 +296,14 @@ earlier builder.
 
 | | RMS | BT at drop | min RoR after FC |
 |---|---|---|---|
-| Roaster PID, no lookahead, no floor | 3.2 °C | 205.1 | 4.0 |
-| Roaster PID, lookahead 8 s + FC floor +1 °C | 2.1 °C | 206.4 | 4.3 |
-| **Cardputer PID** (development from F) | **0.77 °C** | 205.6 | 4.4 |
-| Roaster PID, lookahead + floor, model 15 % off, dead time 7 s | 3.2 °C | 207.1 | 4.4 |
-| Cardputer PID, model 15 % off, dead time 7 s | 1.5 °C | 206.0 | 4.4 |
+| Roaster PID, no lookahead, no floor | 3.2 °C | 204.5 | 3.2 |
+| Roaster PID, lookahead 8 s + FC floor +1 °C | 1.9 °C | 207.9 | 5.4 |
+| **Cardputer PID** (development from F) | **0.53 °C** | 205.4 | 4.4 |
+| Roaster PID, lookahead + floor, model 15 % off, dead time 7 s | 3.4 °C | 208.2 | 5.2 |
+| Cardputer PID, model 15 % off, dead time 7 s | 1.7 °C | 206.0 | 4.0 |
 
 The roaster's own PID (registers 20–23: cycle 1000 ms, P 6, I 1, D 8) fits as heat = 0.50 e + 0.036 ∫e dt + 12 %
-(R² 0.995–0.998 on all three roasts): an integral time of ~14 s against a ~57 s bean time constant, so it reacts
+(R² 0.995–0.998 on all three roasts): an integral time of ~14 s against a ~50 s bean time constant, so it reacts
 late and then overshoots.
 
 **Roaster PID** (*PID on Cardputer* off): Roast writes the roaster's target (SV, register 9) once a second and the

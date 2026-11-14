@@ -18,7 +18,7 @@
 using namespace roast;
 
 struct Plant {
-    float gain = 2.2f, rate = 0.0175f, ambient = 26.0f, endo = 0, onset = 200;
+    float gain = 2.133f, rate = 0.0204f, ambient = 26.0f, endo = 0, onset = 200;
     int dead = 5;
     float bt = 25.0f, air = 26.0f;
     int crackAt = -1, t = 0;
@@ -30,7 +30,7 @@ struct Plant {
         air += (ambient + gain * late - air) * (1 - std::exp(-1.0f));
         if (crackAt < 0 && bt >= onset) crackAt = t;
         float sink = crackAt >= 0 ? endo * std::exp(-(t - crackAt) / 40.0f) : 0;
-        bt += (air - bt) * rate - sink;
+        bt += (air - bt) * rate + (bt > 156.2f ? 0.253f / 60 * (bt - 156.2f) : 0) - sink;
         t++;
     }
 };
@@ -121,7 +121,8 @@ static Out run(bool isNew, Plant pl, const Curve& c)
             a = CardputerAim(c, t, bt, winStart, false, 0, 8, 8);
         } else {  // main: hold from the window on, through the crack
             bool in  = t >= FcFloorStart(c.tagTime(PointTag::FCs), o.f, 20);
-            a        = CardputerAim(c, t, bt, in ? 0 : -1, false, 0, 8, 8);
+            a        = CardputerAim(c, t, bt, -1, false, 0, 8, 8);
+            if (in && bt > a.target) a.target = std::min(bt, a.target + 8.0f);
             a.rate   = 0;
         }
         float heat = std::round(PidStep(ps, a, bt, 1.0f, pc).heat * 10) / 10;

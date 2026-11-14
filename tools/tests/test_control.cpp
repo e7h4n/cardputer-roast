@@ -51,8 +51,8 @@ static Sample S(int t, float heat)
 
 
 // Heater -> bean plant as fitted on R0012-R0014 (roast_control.h PlantModel), with a dead time; one step per second.
-struct Plant {
-    float gain = 2.2f, rate = 0.0175f, ambient = 26.0f;
+struct Plant {  // as fitted (roast_control.h PlantModel), self-heating included
+    float gain = 2.133f, rate = 0.0204f, ambient = 26.0f, extra = 0.253f / 60, from = 156.2f;
     int dead   = 5;
     float bt = 100, air = 100;
     std::vector<float> hist;
@@ -61,7 +61,7 @@ struct Plant {
         hist.push_back(heat);
         float late = hist.size() > (size_t)dead ? hist[hist.size() - 1 - dead] : 0;
         air += (ambient + gain * late - air) * (1 - std::exp(-1.0f));
-        bt += (air - bt) * rate;
+        bt += (air - bt) * rate + (bt > from ? extra * (bt - from) : 0);
     }
 };
 
@@ -163,10 +163,13 @@ int main()
 
     // --- Cardputer PID: feedforward from the model
     PlantModel pm;
-    NEAR(FeedForwardHeat(200, 5 / 60.0f, pm), (200 + (5 / 60.0f) / 0.0175f - 26) / 2.2f);  // ~81 % at FC, RoR 5
+    // at first crack, RoR 5: the beans' own heating (~11 degC/min at 200) leaves ~79 % (the real roast held ~81 %)
+    NEAR(FeedForwardHeat(200, 5 / 60.0f, pm), (200 + (5 / 60.0f - pm.selfHeat(200)) / pm.rate - 26) / pm.gain);
+    CHECK(FeedForwardHeat(200, 5 / 60.0f, pm) > 75 && FeedForwardHeat(200, 5 / 60.0f, pm) < 83);
+    NEAR(pm.selfHeat(150), 0.0f);
     NEAR(FeedForwardHeat(26, 0, pm), 0.0f);
     NEAR(FeedForwardHeat(500, 0, pm), 100.0f);                     // clamped
-    NEAR(FeedForwardHeat(150, NAN, pm), (150 - 26) / 2.2f);        // no slope: hold
+    NEAR(FeedForwardHeat(150, NAN, pm), (150 - 26) / pm.gain);     // no slope: hold (no self-heating at 150)
     NEAR(CurveRate(line(), 300), 1 / 6.0f);
     NEAR(CurveRate(line(), 0), 1 / 6.0f);                          // one-sided at the start
 
@@ -244,11 +247,12 @@ int main()
         printf("  PID on fitted plant: worst |BT - curve| %.2f degC, largest heater step %.2f %%\n", err, jump);
         CHECK(err < 0.5f);
         CHECK(jump < 1.0f);
-        // model wrong by 20 % (gain and rate) and 8 s dead time: still within 3 degC and no oscillation
+        // model wrong by 20 % (gain and rate, self-heating 50 % stronger) and 8 s dead time: within 3 degC, no oscillation
         Plant off;
-        off.gain = 2.64f;
-        off.rate = 0.014f;
-        off.dead = 8;
+        off.gain  = 2.56f;
+        off.rate  = 0.0163f;
+        off.extra = 0.38f / 60;
+        off.dead  = 8;
         follow(pc, off, &err, &jump);
         printf("  PID on mismatched plant: worst |BT - curve| %.2f degC, largest heater step %.2f %%\n", err, jump);
         CHECK(err < 3.0f);
@@ -273,11 +277,9 @@ int main()
         NEAR(a.ffTemp, c.at(308));
         NEAR(a.rate, 1 / 6.0f);
         CHECK(!a.floored && !a.afterF);
-        a = CardputerAim(c, 440, c.at(440) + 2, win, false, 0, 8, 8);  // window, BT 2 above: hold (no error)
-        NEAR(a.target, c.at(440) + 2);
-        CHECK(a.floored);
-        a = CardputerAim(c, 440, c.at(440) + 12, win, false, 0, 8, 8);  // runaway: held at most curve + cap
-        NEAR(a.target, c.at(440) + 8);
+        a = CardputerAim(c, 440, c.at(440) + 2, win, false, 0, 8, 8);  // window, BT 2 above: no hold any more
+        NEAR(a.target, c.at(440));
+        CHECK(!a.floored);
         a = CardputerAim(c, 440, c.at(440) - 2, win, false, 0, 8, 8);  // below: the curve
         NEAR(a.target, c.at(440));
         CHECK(!a.floored);

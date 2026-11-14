@@ -47,7 +47,7 @@ float FeedForwardHeat(float sv, float svRate, const PlantModel& m)
 {
     if (std::isnan(sv) || m.gain <= 0 || m.rate <= 0) return 0;
     float rate = std::isnan(svRate) ? 0 : svRate;
-    float air  = sv + rate / m.rate;  // the air temperature at which the beans rise at `rate`
+    float air  = sv + (rate - m.selfHeat(sv)) / m.rate;  // the air temperature at which the beans rise at `rate`
     return std::max(0.0f, std::min(100.0f, (air - m.ambient) / m.gain));
 }
 
@@ -142,10 +142,9 @@ PidAim CardputerAim(const Curve& c, int t, float bt, int windowStart, bool fcMar
     }
     a.target = c.at(t);
     a.ffTemp = c.at(t + la);
-    if (windowStart >= 0 && t >= windowStart && !std::isnan(bt) && bt > a.target) {  // hold until F
-        a.target  = std::min(bt, a.target + cap);
-        a.floored = true;
-    }
+    (void)windowStart;  // no hold before F any more: it let BT run 2 degC ahead into the crack (2026-11-14)
+    (void)bt;
+    (void)cap;
     return a;
 }
 

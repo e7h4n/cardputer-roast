@@ -17,7 +17,7 @@ using namespace roast;
 
 // Fitted on R0012-R0014 (roast_control.h PlantModel); one step per second.
 struct Plant {
-    float gain = 2.2f, rate = 0.0175f, ambient = 26.0f, airTau = 1.0f, endo = 0.05f;
+    float gain = 2.133f, rate = 0.0204f, ambient = 26.0f, airTau = 1.0f, endo = 0;
     int dead = 5;
     float bt = 25.2f, air = 26.0f;
     std::vector<float> hist;
@@ -26,8 +26,8 @@ struct Plant {
         hist.push_back(heat);
         float late = hist.size() > (size_t)dead ? hist[hist.size() - 1 - dead] : 0;
         air += (ambient + gain * late - air) * (1 - std::exp(-1.0f / airTau));
-        float sink = (bt > 196 && bt < 203) ? endo : 0;  // first crack: a small heat sink (assumed)
-        bt += (air - bt) * rate - sink;
+        float self = bt > 156.2f ? 0.253f / 60 * (bt - 156.2f) : 0;  // the beans' own heating (fitted)
+        bt += (air - bt) * rate + self;
     }
 };
 
