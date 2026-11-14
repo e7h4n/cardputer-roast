@@ -130,24 +130,21 @@ float FcAnchorOffset(const Curve& c, int tF, float btAtF, float cap);
 PidAim CardputerAim(const Curve& c, int t, float bt, int windowStart, bool fcMarked, float fcOffset, int lookahead,
                     float cap);
 
-/// Development after the F mark: the curve's plan (at most `dur` s, `rise` degrees, `dropBT`), started from where
-/// the beans actually cracked. It aims at the tighter of the two temperature limits (BT at F + rise, dropBT) at the
-/// development time. The rate of rise starts at the curve's slope at F (no step; at least the mean needed) and falls
-/// linearly (DevCurve): never rising (no flick), never below 40 % of the start (no crash; then a limit comes early).
+/// Development after the F mark: from where the beans cracked (tF, BT), rise at the curve's development speed;
+/// Roast drops when the development time is over or the drop temperature is reached (DevDropDue).
 struct DevTrack {
     bool active = false;
     int tF      = 0;     // curve second of the F mark
     float btF   = NAN;   // BT at F
     DevPlan plan;
-    DevShape shape;
-    float target(int t) const;  // degC at curve second t (keeps rising past the limits, so BT crosses them)
+    float target(int t) const;  // degC at curve second t
     float rate(int t) const;    // degC/s
 };
 DevTrack DevStart(const Curve& c, int tF, float btF);  // inactive when the curve has no plan or BT is unknown
 
-/// Why the roast should drop now (any one is enough): the development time, the rise since F, or the drop
-/// temperature. Before F (d inactive): the drop temperature or the curve's drop time.
-enum class DropWhy : uint8_t { None, Time, Rise, Temp };
+/// Why the roast should drop now: the development time is over, or the drop temperature is reached. Before F (d
+/// inactive): the drop temperature or the curve's drop time.
+enum class DropWhy : uint8_t { None, Time, Temp };
 DropWhy DevDropDue(const DevTrack& d, const DevPlan& plan, int t, float bt);
 
 /// Heater output (%) to hold when switching to manual: mean of the samples in (now - window, now]; `fallback`

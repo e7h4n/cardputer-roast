@@ -582,7 +582,7 @@ void AppRoast::renderDash()
     // hero: bean temperature
     bool stale = !linkReady();
     DevPlan plan = _hasCurve ? _curve.devPlan() : DevPlan();
-    bool alarm   = bt >= (plan.valid ? plan.dropBT : _rules.maxDropBT);
+    bool alarm   = plan.valid && bt >= plan.dropBT;
     text(W - 4, 16, fmt1(bt), F47(), stale ? FAINT : (alarm ? DROP : INK), Datum::top_right);
     // target / deviation
     float tgt = curveTargetAt(curveT());
@@ -632,19 +632,14 @@ void AppRoast::renderDash()
         int wx0 = st.X(fc), wx1 = st.X(fc + _dev.plan.dur);
         cv().drawRect(wx0, yb - 2, std::max(2, wx1 - wx0 + 1), 9, GO);
         char b[64];
-        snprintf(b, sizeof(b), "dev %s/%s · %+.1f/%.1f°", mmss(dev).c_str(), mmss(_dev.plan.dur).c_str(), dT, _dev.plan.rise);
+        snprintf(b, sizeof(b), "dev %s/%s · %+.1f° · %.1f/min", mmss(dev).c_str(), mmss(_dev.plan.dur).c_str(), dT,
+                 _dev.plan.speed * 60);
         text(4, yb + 6, b, F10(), INK);
         text(W - 5, yb + 6, "max " + fmt1(_dev.plan.dropBT) + "°", F10(), GO, Datum::top_right);
-    } else if (fc >= 0) {
-        int dev  = t - fc;
-        float dT = bt - _session.markBT(Mark::FCs);
-        int wx0 = st.X(fc + _rules.devMin), wx1 = st.X(fc + _rules.devMax);
-        cv().drawRect(wx0, yb - 2, std::max(2, wx1 - wx0 + 1), 9, GO);
-        char b[64];
-        snprintf(b, sizeof(b), "dev %s · %+.1f° · %.0f%%", mmss(dev).c_str(), dT, t > 0 ? 100.0 * dev / t : 0.0);
+    } else if (fc >= 0) {  // no plan: time and rise since F
+        char b[48];
+        snprintf(b, sizeof(b), "dev %s · %+.1f°", mmss(t - fc).c_str(), bt - _session.markBT(Mark::FCs));
         text(4, yb + 6, b, F10(), INK);
-        text(W - 5, yb + 6, "window " + std::to_string(_rules.devMin) + "–" + std::to_string(_rules.devMax) + " s",
-             F10(), GO, Datum::top_right);
     } else {
         if (dry >= 0)
             text(4, yb + 6, "dry " + mmss(dry), F10(), DRY);
@@ -674,29 +669,16 @@ bool AppRoast::renderAlertBar()
         bar(DROP, b);
         return true;
     }
-    int fc   = _session.markT(Mark::FCs);
-    int dev  = fc >= 0 ? t - fc : -1;
-    float dT = fc >= 0 ? bt - _session.markBT(Mark::FCs) : 0;
-    bool plan = _hasCurve && _curve.devPlan().valid;  // the curve sets the drop (DEVELOPMENT); the window rules do not
-    if (plan && _dev.active) {
+    int fc  = _session.markT(Mark::FCs);
+    int dev = fc >= 0 ? t - fc : -1;
+    if (_hasCurve && _dev.active) {  // the coming automatic drop: development time or drop temperature
         int left    = _dev.plan.dur - (curveT() - _dev.tF);
-        float riseL = _dev.plan.rise - (bt - _dev.btF), tempL = _dev.plan.dropBT - bt;
-        if (left <= 10 || riseL <= 1.0f || tempL <= 1.0f) {
-            snprintf(b, sizeof(b), "%s · %s · %+.1f/%.1f°", _rules.planDrop ? "auto-drop soon" : "plan reached soon",
-                     mmss(std::max(0, left)).c_str(), bt - _dev.btF, _dev.plan.rise);
-            bar(_rules.planDrop ? GO : DROP, b, "D D");
+        float tempL = _dev.plan.dropBT - bt;
+        if (left <= 10 || tempL <= 1.0f) {
+            snprintf(b, sizeof(b), "auto-drop · %s · %.1f/%.1f°", mmss(std::max(0, left)).c_str(), bt, _dev.plan.dropBT);
+            bar(GO, b, "D D");
             return true;
         }
-    }
-    if (!plan && bt >= _rules.maxDropBT) {
-        snprintf(b, sizeof(b), "%.0f° reached · drop now", _rules.maxDropBT);
-        bar(DROP, b, "D D");
-        return true;
-    }
-    if (!plan && fc >= 0 && dev >= _rules.devMax) {
-        snprintf(b, sizeof(b), "dev %s · drop now", mmss(dev).c_str());
-        bar(DROP, b, "D D");
-        return true;
     }
     if (_heatDropWarned && fc >= 0 && dev <= 75 && !_manual) {
         bar(WARN, "heat falling after FC · P manual", nullptr, INK);
@@ -704,16 +686,6 @@ bool AppRoast::renderAlertBar()
     }
     if (_satWarned && _satRun > 0) {
         snprintf(b, sizeof(b), "heat at max %.0f%% for %d s", _snap.heat(), _satRun);
-        bar(WARN, b, nullptr, INK);
-        return true;
-    }
-    if (!plan && fc >= 0 && dev >= _rules.devMin && dT >= _rules.dtMin) {
-        snprintf(b, sizeof(b), "drop window · %s · %+.1f°", mmss(dev).c_str(), dT);
-        bar(GO, b, "D D");
-        return true;
-    }
-    if (!plan && fc >= 0 && dT >= _rules.dtMax && dev < _rules.devMin) {
-        snprintf(b, sizeof(b), "%+.1f° already · drop at %d s", dT, _rules.devMin);
         bar(WARN, b, nullptr, INK);
         return true;
     }
@@ -1087,20 +1059,22 @@ void AppRoast::renderEditor()
         text(137, y, cs, F11(), cc, Datum::top_right);
         y += 12;
     }
-    // the development the curve sets (first crack -> drop): Roast drops at whichever limit comes first
+    // the development the curve sets (first crack -> drop): how long, how fast, how hot at most
     DevPlan pl = _curve.devPlan();
     if (pl.valid) {
         y += 4;
         text(4, y, "development", F10(), DIM);
-        text(4, y + 11, mmss(pl.dur) + " · +" + fmt1(pl.rise) + "° · " + fmt1(pl.dropBT) + "°", F11(), GO);
-        int fcT       = _curve.tagTime(PointTag::FCs);
-        float endRise = _curve.at(_curve.endTime()) - _curve.tagTemp(PointTag::FCs);
-        if (_curve.endTime() < pl.dropT - 1)  // the rate of rise would have to crash to fill the time
-            text(4, y + 24, "+" + fmt1(pl.rise) + "° already at " + mmss(_curve.endTime() - fcT), F10(), WARN);
-        else if (endRise < pl.rise - 0.2f)
-            text(4, y + 24, "reaches only +" + fmt1(endRise) + "°: RoR at 1st crack too low", F10(), WARN);
+        text(4, y + 11, mmss(pl.dur) + " · " + fmt1(pl.speed * 60) + "°/min · " + fmt1(pl.dropBT) + "°", F11(), GO);
+        int fcT    = _curve.tagTime(PointTag::FCs);
+        float rise = 0;  // the rate of rise going up into first crack: development faster than the roast gets there
+        for (int s = std::max(10, fcT - 60); s + 10 <= fcT; s++) {
+            float a = _curve.at(s) - _curve.at(s - 10), b2 = _curve.at(s + 10) - _curve.at(s);
+            rise    = std::max(rise, (b2 - a) * 6);
+        }
+        if (rise > 0.3f)
+            text(4, y + 24, "RoR has to rise into the crack", F10(), WARN);
         else
-            text(4, y + 24, "drops at the first limit", F10(), DIM);
+            text(4, y + 24, "then drops at time or temp", F10(), DIM);
     }
     // mini chart with the selected node
     const int cx0 = 145, cy0 = 17, cx1 = W - 4, cy1 = 112;

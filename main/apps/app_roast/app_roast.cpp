@@ -34,11 +34,6 @@ static const char* TAG = "Roast";
 void RoastRules::load()
 {
     Settings s("roast", false);
-    devMin    = s.GetInt("devMin", devMin);
-    devMax    = s.GetInt("devMax", devMax);
-    dtMin     = s.GetInt("dtMin10", (int)lroundf(dtMin * 10)) / 10.0f;
-    dtMax     = s.GetInt("dtMax10", (int)lroundf(dtMax * 10)) / 10.0f;
-    maxDropBT = s.GetInt("maxDrop10", (int)lroundf(maxDropBT * 10)) / 10.0f;
     safetyBT  = s.GetInt("safety10", (int)lroundf(safetyBT * 10)) / 10.0f;
     afterEnd  = s.GetInt("afterEnd", afterEnd);
     rorLow    = s.GetInt("rorLow10", (int)lroundf(rorLow * 10)) / 10.0f;
@@ -58,17 +53,11 @@ void RoastRules::load()
     pidTd       = std::max(0, std::min(30, (int)s.GetInt("pidTd", pidTd)));
     pidFcTd     = std::max(0, std::min(30, (int)s.GetInt("pidFcTd", pidFcTd)));
     pidFF       = s.GetInt("pidFF", pidFF ? 1 : 0) != 0;
-    planDrop    = s.GetInt("planDrop", planDrop ? 1 : 0) != 0;
 }
 
 void RoastRules::save() const
 {
     Settings s("roast", true);
-    s.SetInt("devMin", devMin);
-    s.SetInt("devMax", devMax);
-    s.SetInt("dtMin10", (int)lroundf(dtMin * 10));
-    s.SetInt("dtMax10", (int)lroundf(dtMax * 10));
-    s.SetInt("maxDrop10", (int)lroundf(maxDropBT * 10));
     s.SetInt("safety10", (int)lroundf(safetyBT * 10));
     s.SetInt("afterEnd", afterEnd);
     s.SetInt("rorLow10", (int)lroundf(rorLow * 10));
@@ -88,7 +77,6 @@ void RoastRules::save() const
     s.SetInt("pidTd", pidTd);
     s.SetInt("pidFcTd", pidFcTd);
     s.SetInt("pidFF", pidFF ? 1 : 0);
-    s.SetInt("planDrop", planDrop ? 1 : 0);
 }
 
 /* ---------------------------------- app ---------------------------------- */
@@ -638,9 +626,9 @@ PidAim AppRoast::pidAim(int t) const
     return CardputerAim(_curve, t, bt, roast ? start : -1, roast && fcT >= 0, _fcOffset, c.lookahead, c.floorCap);
 }
 
-// F set or cleared. With a curve that has first crack and drop points, development is planned from here: from
-// where the beans actually cracked, at most the curve's development time / rise / drop temperature (DevStart);
-// Roast drops at the first one reached (tickRoast). Without such a curve the rest of the curve is shifted to BT.
+// F set or cleared. With a curve that has first crack and drop points, development starts here: from where the
+// beans actually cracked, at the curve's development speed (DevStart); Roast drops when the development time is over
+// or the drop temperature is reached (tickRoast). Without such a curve the rest of the curve is shifted to BT.
 // The Cardputer PID is re-primed so the heater does not jump.
 void AppRoast::fcAnchor(bool marked)
 {
@@ -652,9 +640,8 @@ void AppRoast::fcAnchor(bool marked)
     if (_cardPid && !_manual) PidPrime(_pid, _pid.out, pidAim(t), bt, pidConfig());
     char b[96];
     if (marked && _dev.active)
-        snprintf(b, sizeof(b), "development from %.1f: at most %s, +%.1f, %.1f (RoR %.1f -> %.1f)", bt,
-                 FormatMmSs(_dev.plan.dur).c_str(), _dev.plan.rise, _dev.plan.dropBT, _dev.shape.r0 * 60,
-                 _dev.shape.r1 * 60);
+        snprintf(b, sizeof(b), "development from %.1f: %.1f/min for %s, at most %.1f", bt, _dev.plan.speed * 60,
+                 FormatMmSs(_dev.plan.dur).c_str(), _dev.plan.dropBT);
     else if (marked)
         snprintf(b, sizeof(b), "FC anchor: curve %+.1f from here (BT %.1f)", _fcOffset, bt);
     else
@@ -776,24 +763,21 @@ void AppRoast::tickRoast()
         drop(" (auto: timeout)");
         return;
     }
-    // the curve's development: whichever of its time, rise and drop temperature comes first (before F: the drop
-    // temperature only)
-    if (_hasCurve && _rules.planDrop) {
+    // the curve's development: drop when its time is over (from F) or its drop temperature is reached; before F at
+    // the drop temperature or the curve's drop time
+    if (_hasCurve) {
         DevPlan plan = _curve.devPlan();
         DropWhy why  = DevDropDue(_dev, plan, curveT(), bt);
         if (why != DropWhy::None) {
             char b[64];
-            float dT = _dev.active ? bt - _dev.btF : NAN;
-            if (why == DropWhy::Time)
-                snprintf(b, sizeof(b), " (auto: development %s, %+.1f)", FormatMmSs(plan.dur).c_str(), dT);
-            else if (why == DropWhy::Rise)
-                snprintf(b, sizeof(b), " (auto: rise %+.1f in %s)", dT, FormatMmSs(curveT() - _dev.tF).c_str());
+            if (why == DropWhy::Time && _dev.active)
+                snprintf(b, sizeof(b), " (auto: development %s, %+.1f)", FormatMmSs(plan.dur).c_str(), bt - _dev.btF);
+            else if (why == DropWhy::Time)
+                snprintf(b, sizeof(b), " (auto: curve drop time %s)", FormatMmSs(plan.dropT).c_str());
             else
                 snprintf(b, sizeof(b), " (auto: %.1f reached)", plan.dropBT);
             _autoDropped = true;
-            _autoDropWhy = why == DropWhy::Time ? "Development time reached"
-                           : why == DropWhy::Rise ? "Development rise reached"
-                                                  : "Drop temperature reached";
+            _autoDropWhy = why == DropWhy::Temp ? "Drop temperature reached" : "Development time reached";
             drop(b);
             return;
         }
@@ -1601,15 +1585,6 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
         r.unit  = unit;
         v.push_back(r);
     };
-    group("DEVELOPMENT", GO);  // from the curve: first crack -> drop sets the time, rise and drop temperature
-    RuleRow planRow;
-    planRow.label  = "drop at plan";
-    planRow.toggle = &_rules.planDrop;
-    v.push_back(planRow);
-    group("DROP WINDOW (NO PLAN)", GO);  // roasts without a curve that has first crack and drop points
-    rowI("dev after FC", &_rules.devMin, &_rules.devMax, 20, 400, 1, " s");
-    rowF("rise after FC", &_rules.dtMin, &_rules.dtMax, 0, 30, 0.5f, "°");
-    rowF("drop now at", &_rules.maxDropBT, nullptr, 150, 250, 1, "°");
     group("SAFETY", DROP);
     rowF("auto-drop at", &_rules.safetyBT, nullptr, 150, 260, 1, "°");
     rowI("after curve end", &_rules.afterEnd, nullptr, 0, 900, 10, " s");

@@ -17,11 +17,6 @@
 #include "roast_theme.h"
 
 struct RoastRules {
-    int devMin       = 75;    // s after first crack: drop window opens
-    int devMax       = 85;    // s after first crack: drop now
-    float dtMin      = 5.0f;  // degC rise since first crack to open the window
-    float dtMax      = 6.0f;  // degC rise that already counts as enough
-    float maxDropBT  = 206.f; // drop immediately at this bean temperature
     float safetyBT   = 225.f; // app drops by itself above this
     int afterEnd     = 120;   // app drops by itself this long after the curve ends
     float rorLow     = 5.0f;  // RoR warning 30 s after first crack
@@ -41,7 +36,6 @@ struct RoastRules {
     int pidTd        = 0;     // derivative time before F, s
     int pidFcTd      = 0;     // derivative time from F on, s (rate-of-rise shortfall; off: tools/pid fc_crack)
     bool pidFF       = true;  // model feedforward
-    bool planDrop    = true;  // drop at the curve's development limits (time, rise, temperature), whichever first
     void load();
     void save() const;
 };

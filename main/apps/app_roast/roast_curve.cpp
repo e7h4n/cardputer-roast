@@ -148,14 +148,12 @@ void Curve::sortPoints()
 // default the preset's). Other tags and untagged points in older files are ignored.
 //  - Charge -> first crack: the vendor's dark-roast preset (a smooth curve, rate of rise falling ~27 -> 10
 //    degC/min), stretched in time so its first crack (480 s) lands on ours and in temperature so it starts at the
-//    charge temperature and passes through ours.
-//  - First crack -> drop: the rate of rise starts where the preset part ends (no step) and falls linearly so that
-//    the beans rise drop - FC degrees in drop - FC seconds. It never rises: when that would need a rising rate it
-//    stays flat (and ends below the drop temperature at the drop time); when it would fall below kDevRorMin it
-//    reaches the drop temperature early and holds it.
+//    charge temperature and passes through ours. Before first crack its rate of rise blends smoothly into the
+//    development speed (over a minute, longer for a bigger change), so the curve has no corner at first crack.
+//  - First crack -> drop: a straight line, the development speed (drop - FC degrees over drop - FC seconds).
 // Without FCs (or DROP) the whole preset is stretched onto the one point there is.
 // Unlike the myERoast app (piecewise-linear corrections between marks, which put a rate-of-rise step at every
-// mark: on Syrina D 100g -4.5 degC/min at first crack), this has no corners.
+// mark: on Syrina D 100g -4.5 degC/min at first crack) this has no corners.
 // ---------------------------------------------------------------------------------------------------------
 namespace {
 double presetAt(double tau)
@@ -176,57 +174,8 @@ struct Stretch {
         double k   = (p1 - p0) != 0 ? (c1 - t0Temp) / (p1 - p0) : 1;
         return t0Temp + (presetAt(tau) - p0) * k;
     }
-    double rate(double t) const  // degC/s
-    {
-        return (at(t + 0.5) - at(t - 0.5));
-    }
 };
 }  // namespace
-
-DevShape DevCurve(double r0, double dur, double rise)
-{
-    DevShape d;
-    d.r0 = std::max(0.0, r0);
-    if (dur <= 0 || rise <= 0) {
-        d.r1 = d.r0;
-        d.reach = 0;
-        return d;
-    }
-    double r1    = 2 * rise / dur - d.r0;
-    double floor = std::max(kDevRorMin, kDevRorFloor * d.r0);
-    if (r1 > d.r0) {  // would need a rising rate: hold it; ends below the target at `dur`
-        d.r1    = d.r0;
-        d.reach = dur;
-        d.full  = false;
-    } else if (r1 < floor) {  // would need a crash: fall only to the floor and reach `rise` early
-        d.r1    = std::min(floor, d.r0);
-        d.reach = d.r0 + d.r1 > 0 ? 2 * rise / (d.r0 + d.r1) : dur;
-        if (d.reach > dur) d.reach = dur;
-    } else {
-        d.r1    = r1;
-        d.reach = dur;
-    }
-    d.dur  = dur;
-    d.rise = rise;
-    return d;
-}
-
-double DevShape::at(double s, bool extend) const
-{
-    if (s <= 0 || reach <= 0) return 0;
-    double u = std::min(s, reach);
-    double v = r0 * u + (r1 - r0) * u * u / (2 * reach);
-    if (full) v = std::min(v, rise);
-    if (extend && s > reach) v += r1 * (s - reach);
-    return v;
-}
-
-double DevShape::rate(double s) const
-{
-    if (s < 0) return r0;
-    if (reach <= 0 || s >= reach) return r1;
-    return r0 + (r1 - r0) * s / reach;
-}
 
 void Curve::build()
 {
@@ -248,24 +197,42 @@ void Curve::build()
             cD = p.c;
         }
     }
-    if (tF > 0 && std::isnan(cF)) cF = Stretch{charge, presetAt(kPresetDark_FCs_t), (double)kPresetDark_FCs_t, (double)tF,
-                                               presetAt(0), presetAt(kPresetDark_FCs_t)}.at(tF);
+    double p0 = presetAt(0), pF = presetAt(kPresetDark_FCs_t);
+    if (tF > 0 && std::isnan(cF)) cF = Stretch{charge, pF, (double)kPresetDark_FCs_t, (double)tF, p0, pF}.at(tF);
     if (tD > 0 && std::isnan(cD)) tD = -1;
     int total = tD > 0 ? tD : (tF > 0 ? tF : -1);
     if (total <= 0 || total > 1800) return;
-    double p0 = presetAt(0);
+    table.resize(total + 1);
     if (tF > 0) {
-        Stretch pre{charge, cF, (double)kPresetDark_FCs_t, (double)tF, p0, presetAt(kPresetDark_FCs_t)};
-        DevShape d;
-        if (tD > tF) {  // when a limit comes before the drop time (the rate would have to crash), the curve ends there
-            d     = DevCurve(pre.rate(tF), tD - tF, cD - cF);
-            total = std::min(tD, tF + (int)std::ceil(d.reach));
+        Stretch pre{charge, cF, (double)kPresetDark_FCs_t, (double)tF, p0, pF};
+        std::vector<double> step(tF + 1, 0);  // per-second rise of the stretched preset
+        for (int t = 1; t <= tF; t++) step[t] = pre.at(t) - pre.at(t - 1);
+        if (tD > tF) {  // blend the last minute into the development speed, keep passing through first crack
+            double v = (cD - cF) / (tD - tF), want = v, k = 1;
+            // blend window: at least a minute, longer for a bigger change (<= 1.5 degC/min between 10 s windows)
+            double gap = std::fabs(step[tF] - v) * 60;  // degC/min
+            int w      = std::max(1, std::min(tF / 2, std::max(60, (int)std::ceil(20 * gap))));
+            std::vector<double> r(tF + 1, 0);
+            for (int it = 0; it < 4; it++) {
+                double sum = 0;
+                for (int t = 1; t <= tF; t++) {
+                    double s = (t - (tF - w)) / (double)w;
+                    double b = s <= 0 ? 0 : (s >= 1 ? 1 : s * s * (3 - 2 * s));
+                    r[t]     = step[t] * (1 - b) + want * b;
+                    sum += r[t];
+                }
+                k    = sum != 0 ? (cF - charge) / sum : 1;
+                want = v / k;  // after scaling by k the slope at first crack is v
+            }
+            double acc = charge;
+            table[0]   = (float)charge;
+            for (int t = 1; t <= tF; t++) table[t] = (float)(acc += k * r[t]);
+            for (int t = tF + 1; t <= tD; t++) table[t] = (float)(cF + v * (t - tF));
+        } else {
+            for (int t = 0; t <= tF; t++) table[t] = (float)pre.at(t);
         }
-        table.resize(total + 1);
-        for (int t = 0; t <= std::min(tF, total); t++) table[t] = (float)pre.at(t);
-        for (int t = tF + 1; t <= total; t++) table[t] = (float)(cF + d.at(t - tF));
-    } else {
-        table.resize(total + 1);  // only a drop point: the whole preset onto it
+        table[tF] = (float)cF;
+    } else {  // only a drop point: the whole preset onto it
         Stretch all{charge, cD, (double)kPresetDark_DROP_t, (double)tD, p0, presetAt(kPresetDark_DROP_t)};
         for (int t = 0; t <= tD; t++) table[t] = (float)all.at(t);
     }
@@ -281,6 +248,7 @@ DevPlan Curve::devPlan() const
     p.valid  = true;
     p.dur    = tD - tF;
     p.rise   = cD - cF;
+    p.speed  = p.rise / p.dur;
     p.dropBT = cD + offset;
     p.dropT  = tD;
     return p;
@@ -301,9 +269,9 @@ static Curve make_builtin(const char* name, const char* note, int batch, std::ve
 std::vector<Curve> BuiltinCurves()
 {
     std::vector<Curve> v;
-    v.push_back(make_builtin("Gotiti 200g Light V3", "At most 65 s and +8 C after FC, max 207 C; untested", 200,
+    v.push_back(make_builtin("Gotiti 200g Light V3", "Development 65 s at 7.4 C/min, max 207 C; untested", 200,
                              {{0, 50, PointTag::Charge}, {470, 199, PointTag::FCs}, {535, 207, PointTag::Drop}}));
-    v.push_back(make_builtin("Gotiti 200g Pullback", "At most 85 s and +11 C after FC, max 211 C; untested", 200,
+    v.push_back(make_builtin("Gotiti 200g Pullback", "Development 85 s at 7.8 C/min, max 211 C; untested", 200,
                              {{0, 50, PointTag::Charge}, {470, 200, PointTag::FCs}, {555, 211, PointTag::Drop}}));
     v.push_back(make_builtin("Dry run (no beans)", "Low temperature check of PID and manual heat, 3 min", 0,
                              {{0, 50, PointTag::Charge}, {120, 100, PointTag::FCs}, {180, 110, PointTag::Drop}}));

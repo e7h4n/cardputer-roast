@@ -21,11 +21,11 @@ opens in Artisan. It runs as an app under the community [Launcher](https://githu
 - **Curve following.** A PID on the Cardputer (or, if you choose, the roaster's own) follows a curve set by two
   points, first crack and drop (built-in samples, your own curves, or Artisan/myERoast `.alog` files). No curve =
   heat by hand.
-- **Development by plan.** The curve's first crack → drop sets the development: at most that time, that rise and
-  that drop temperature. After F, Roast follows it from where the beans actually cracked and drops at the first
-  limit reached. Y (yellowing) and G (first crack end) are marks for the log.
+- **Development by plan.** The curve's first crack → drop sets the development: how long, how fast (rate of rise)
+  and how hot at most. After F, Roast rises at that rate from where the beans actually cracked and drops when the
+  time is over or the temperature is reached. Y (yellowing) and G (first crack end) are marks for the log.
 - **Alerts and safety nets.** Colour bars for the coming drop, heater pinned or falling after first crack, low RoR
-  and BLE loss. The roast itself is silent: alerts are on screen only. Besides the plan's limits, Roast drops by
+  and BLE loss. The roast itself is silent: alerts are on screen only. Besides the development, Roast drops by
   itself at the safety temperature or long after the curve has ended.
 - **Fan control with floors.** Fan ±1 % or ±0.1 %; going below 50 % and 40 % needs a deliberate long press.
 - **Manual heat.** P switches between PID and manual heat at any time; ← → step the heater.
@@ -111,7 +111,7 @@ The page walks through four steps: curve → batch → fan → charge.
 | Tab | Numbers / chart (bean black, target violet, RoR grey, heater orange area). |
 
 The phase bar runs through the whole roast: drying (sage) → Maillard (yellow, starts at Y) → development (brown,
-starts at F). After first crack it outlines the drop window. Exit is locked until the drop.
+starts at F). After first crack it outlines the development (its time; the bar under it shows time, rise and rate). Exit is locked until the drop.
 
 ### Cooling and summary
 - Cooling shows the fan, the cooling rate and how far the beans are from the cold temperature.
@@ -192,41 +192,48 @@ the summary blocked; read it from the SD card or over USB (`tools/pull_audio.py`
 A curve is two points, **first crack** and **drop** (time and temperature), plus the charge temperature (default
 50 °C). Yellowing is not a curve point: Y marks it during the roast, for the log. Older files keep working: their
 `FCs` and `DROP` points are used, everything else (`DRY`, `FCe`, `SCs`, `SCe`, untagged points, `total_s`) is
-ignored. `roast_curve.cpp` builds the 1 Hz target:
+ignored.
+
+The two points set the **development**, the part that matters most:
+
+| | from the curve | e.g. Syrina D 100g |
+|---|---|---|
+| how long | drop time − first-crack time | 45 s |
+| how fast | (drop − first-crack temperature) ÷ that time | 11.2 °C/min |
+| how hot at most | drop temperature | 208.5 °C |
+
+**When F is pressed**, the target rises at that rate from the beans' temperature at F, and **Roast drops when the
+time is over or BT reaches the drop temperature**, whichever comes first. This is not a setting. A crack later or
+hotter than planned therefore drops early on temperature (in the simulation below, 20–26 s after F instead of
+45 s); one cooler than planned runs the full time and ends below the drop temperature. Without F, Roast drops at
+the drop temperature or at the curve's drop time. Pressing F twice clears it and goes back to the curve. Both
+controllers follow the development (the roaster PID through SV). A bar says "auto-drop" in the last 10 s or 1 °C.
+
+`roast_curve.cpp` builds the 1 Hz target:
 
 - **Charge → first crack:** the vendor's dark-roast preset, a smooth curve with the rate of rise falling from ~27 to
   ~10 °C/min, stretched in time and temperature so it starts at the charge temperature and passes through first
-  crack. No corners: the myERoast-style builder added straight-line corrections at every mark, which put a
-  rate-of-rise step at each one (−4.5 °C/min at first crack on Syrina D 100g). On batches A and B that step, with
-  BT 2–3 °C behind the line, carried BT over the target and the roaster's PID cut the heater by ~5 %: the rate of
-  rise fell from ~18 to ~0 (R0012, R0013).
-- **First crack → drop:** the rate of rise starts where the preset part ends (no step) and falls linearly so that
-  the beans rise the drop − first-crack temperature in the drop − first-crack time. It never rises (no flick): a
-  plan that would need it ends below the drop temperature. It never falls below 40 % of its value at first crack
-  (no crash): a plan that would need that reaches its rise early, and the curve ends there. The editor says so.
+  crack. Before first crack its rate of rise blends smoothly into the development rate (over a minute, longer for a
+  bigger change), so there is no corner at first crack. The editor warns if the rate would have to go *up* into the
+  crack.
+- **First crack → drop:** a straight line at the development rate.
 
-**Development.** The curve's first crack → drop is a plan of three limits: at most the **development time**, at
-most the **rise** since first crack, at most the **drop temperature**. When F is pressed:
+No corners anywhere: the myERoast-style builder added straight-line corrections at every mark, which put a
+rate-of-rise step at each one (−4.5 °C/min at first crack on Syrina D 100g). On batches A and B that step, with BT
+2–3 °C behind the line, carried BT over the target and the roaster's PID cut the heater by ~5 %: the rate of rise
+fell from ~18 to ~0 (R0012, R0013).
 
-- the development is planned again from **where the beans actually cracked** (BT and time at F). It aims at the
-  tighter of the two temperature limits (BT at F + rise, or the drop temperature) at the development time;
-- the rate of rise starts at the curve's slope at F and falls linearly, never rising and never below 40 % of that
-  start (`DevStart` in `roast_control.cpp`). Both controllers follow it (the roaster PID through SV);
-- **Roast drops at the first limit reached**: time since F, rise since F, or BT (rule *drop at plan*, on). A bar
-  says "auto-drop soon" in the last 10 s or 1 °C. Without F, Roast drops at the drop temperature or at the curve's
-  drop time. Clearing F (F twice) goes back to the curve.
-
-On Syrina D 100g as planned for the competition (first crack 7:05 / 200.1, drop at most 45 s / +8.4 / 208.5), in
-`tools/pid` (`fc_crack`), against the previous firmware (the cornered curve, drop by hand at F + 45 s):
+On Syrina D 100g as planned for the competition (first crack 7:05 / 200.1, 45 s at 11.2 °C/min, at most
+208.5 °C), in `tools/pid` (`fc_crack`), against the previous firmware (the cornered curve, drop by hand at F + 45 s):
 
 | Crack | previous | this |
 |---|---|---|
-| on time | 45 s, +6.6 to 207.1 (the RoR after the corner is too low) | 45 s, +8.0 to **208.5** |
-| 15 s early | 45 s, +8.4 to 204.9 | 45 s, +8.4 to 204.8 |
-| 15 s late | 35–37 s, to 208.5–209.4 | 24–34 s, at **208.5** (the temperature limit) |
+| on time | 45 s, +6.6 to 207.1, RoR down to 8.4 | 43 s, +8.0, at **208.5**, RoR 11.1 |
+| 15 s early | 45 s, +8.4 to 204.9 | 45 s, +8.4 to 204.9 |
+| 15 s late | 35–37 s, to 208.5–209.4 | 20–26 s, at **208.5**, RoR at the planned 11.1–11.5 |
 
-In all nine cases (crack with no heat effect, absorbing, or releasing heat) the new one keeps the rate of rise on
-its plan as well or better (mean |RoR − plan| 0.00–0.54 against 0.03–0.99) with no flick after F.
+In all nine cases (crack with no heat effect, absorbing, or releasing heat) the rate of rise follows the plan as
+well or better (mean |RoR − plan| 0.00–0.51 against 0.03–0.99).
 
 ### Curve following: the Cardputer PID
 By default the Cardputer sets the heater itself (Rules › CURVE FOLLOW › *PID on Cardputer*). At charge it switches
@@ -253,8 +260,8 @@ the roaster's own PID off (register 15 = 0) and then writes the heater output (r
 - **First crack.**
   - *Before F*, from the curve's FC time − 20 s: hold. BT above the curve (up to *floor cap*) counts as no error,
     so the heater is not cut while the beans run ahead.
-  - *At F*: the development plan (above) becomes the target, and the controller is re-primed so the heater does
-    not jump. A curve without first crack and drop points is shifted to BT instead (within ± *floor cap*).
+  - *At F*: the development (above) becomes the target, and the controller is re-primed so the heater does not
+    jump. A curve without first crack and drop points is shifted to BT instead (within ± *floor cap*).
   - *After F*, optional (*D after F*, off by default): D adds heat as soon as the rate of rise falls behind the
     plan. Whether the crack absorbs heat is not established: the literature disputes where roasting turns
     exothermic (at first crack, near 200 °C, above 150 °C, or per coffee), and a crack heat sink fitted on
@@ -276,17 +283,17 @@ the roaster's own PID off (register 15 = 0) and then writes the heater output (r
 
 ![Batch A: roaster PID vs Cardputer PID](docs/pid/pid_compare_batchA.png)
 
-Batch A's curve (first crack 7:30 / 199, drop 10:00 / 210) as built now, on the fitted model (`tools/pid/run.sh`;
-BT − curve RMS from 1:00 to the drop by hand at 8:56, where the curve is at 210.0 °C; F at 8:01). The chart above
-is from the earlier builder.
+Batch A's curve (first crack 7:30 / 199, drop 10:00 / 210: 2:30 at 4.4 °C/min) as built now, on the fitted model
+(`tools/pid/run.sh`; BT − curve RMS from 1:00 to the drop by hand at 8:56; F at 8:01). The chart above is from the
+earlier builder.
 
 | | RMS | BT at drop | min RoR after FC |
 |---|---|---|---|
-| Roaster PID, no lookahead, no floor | 3.2 °C | 210.8 | 8.0 |
-| Roaster PID, lookahead 8 s + FC floor +1 °C | 2.2 °C | 212.5 | 8.7 |
-| **Cardputer PID** (development from F) | **0.71 °C** | **210.0** | 4.8 |
-| Roaster PID, lookahead + floor, model 15 % off, dead time 7 s | 3.3 °C | 213.4 | 9.5 |
-| Cardputer PID, model 15 % off, dead time 7 s | 1.5 °C | 210.8 | 4.2 |
+| Roaster PID, no lookahead, no floor | 3.2 °C | 205.1 | 4.0 |
+| Roaster PID, lookahead 8 s + FC floor +1 °C | 2.1 °C | 206.4 | 4.3 |
+| **Cardputer PID** (development from F) | **0.77 °C** | 205.6 | 4.4 |
+| Roaster PID, lookahead + floor, model 15 % off, dead time 7 s | 3.2 °C | 207.1 | 4.4 |
+| Cardputer PID, model 15 % off, dead time 7 s | 1.5 °C | 206.0 | 4.4 |
 
 The roaster's own PID (registers 20–23: cycle 1000 ms, P 6, I 1, D 8) fits as heat = 0.50 e + 0.036 ∫e dt + 12 %
 (R² 0.995–0.998 on all three roasts): an integral time of ~14 s against a ~57 s bean time constant, so it reacts
@@ -318,10 +325,6 @@ shown underneath, and range rules (window, rise) take the lower then the upper e
 
 | Setting | Default |
 |---|---|
-| Drop at the curve's development limits (*drop at plan*) | on |
-| Development time window after first crack (curves without a plan) | 75–85 s |
-| Temperature rise after first crack (curves without a plan) | +5 to +6 °C |
-| Drop-now temperature (curves without a plan) | 206 °C |
 | Safety auto-drop temperature | 225 °C |
 | Auto-drop after the curve ends | 120 s |
 | Low-RoR alert | below 5 |
@@ -335,22 +338,20 @@ shown underneath, and range rules (window, rise) take the lower then the upper e
 | Floor cap (above the curve) | 8 °C |
 | Mic gain | 18 dB |
 
-With a curve that has first crack and drop points the bottom bar turns green ("auto-drop soon") in the last 10 s or
-1 °C of the development; without one it turns green inside the drop window and red past the development limit or at
-the drop-now temperature. It turns yellow for a heater pinned at 95 % or more for 20 s, heater output falling after first
-crack, a rise reached before the window, or low RoR 30 s after first crack.
+The bottom bar turns green ("auto-drop") in the last 10 s or 1 °C of the development. It turns yellow for a heater pinned at 95 % or more for 20 s, heater output falling after first
+crack, or low RoR 30 s after first crack.
 
 On BLE loss the reading greys out and the bar turns red: the roaster keeps heating to the last target, so watch
 for it. Roast then reconnects on its own.
 
-Roast drops by itself at the curve's development limits (*drop at plan*, see
+Roast drops by itself at the end of the development (time or drop temperature, see
 [Curves and development](#curves-and-development)), and as safety nets at BT at or above the safety temperature or
 when the curve ended more than *auto-drop after end* seconds ago.
 
 ### Curve editor
-The editor has three rows: **Start** (charge temperature), **1st crack** and **Drop** (time and temperature), with
-the curve beside them and, under them, the development it plans: time, rise, drop temperature. It warns when the
-plan cannot be followed without a rising or crashing rate of rise ("reaches only +x°", "+x° already at m:ss").
+The editor has three rows: **Start** (charge temperature), **Crack** and **Drop** (time and temperature), with the
+curve beside them and, under them, the development they set: how long, how fast, how hot at most. It warns when the
+development is faster than the roast arrives at first crack ("RoR has to rise into the crack").
 
 - **Enter** (or a digit) edits the row: minutes, Enter, seconds, Enter, temperature, Enter. Tab skips the time.
   First crack must come before the drop and be cooler; the drop is at most 30:00.
@@ -383,8 +384,8 @@ Curve JSON:
   ]
 }
 ```
-- `t` is in seconds and `c` is in °C. This one plans first crack at 7:05 / 200.1 °C and at most 45 s, +8.4 °C and
-  208.5 °C of development.
+- `t` is in seconds and `c` is in °C. This one plans first crack at 7:05 / 200.1 °C and 45 s of development at
+  11.2 °C/min, at most 208.5 °C.
 - Only `CHARGE`, `FCs` and `DROP` are used; other tags, untagged points and `total_s` in older files are ignored.
 
 The summary JSON has an `audio` object when the roast was recorded:
@@ -436,7 +437,7 @@ The phone app's JavaScript was run in Node and compared with this C++ code case 
 
 | Area | Match |
 |---|---|
-| Curve generation | **No longer the same.** The phone app cuts the preset to the total time and stretches it linearly between nodes, which puts a rate-of-rise step at every node. Roast stretches the preset smoothly onto first crack and plans the development from there ([Curves and development](#curves-and-development)). |
+| Curve generation | **No longer the same.** The phone app cuts the preset to the total time and stretches it linearly between nodes, which puts a rate-of-rise step at every node. Roast stretches the preset smoothly onto first crack and continues at the development rate ([Curves and development](#curves-and-development)). |
 | RoR | \|BT − BT 29 readings earlier\| ÷ 0.5, shown after 35 s. |
 | Curve time base | Machine timer (register 2), falling back to the local timer if they differ by more than 5 s. |
 | Commands | Same registers and values for start, charge without a curve, fan ±1, drop, stop, and the per-second target write. |
@@ -446,7 +447,7 @@ Deliberate differences:
 - Turning PID off also writes the current heater value (register 11), so the output does not jump.
 - P re-enables PID mid-roast.
 - Heater steps are sent only in manual mode.
-- The curve end does not force a drop (see *auto-drop after end*); the development limits do (*drop at plan*).
+- The curve end does not force a drop (see *auto-drop after end*); the end of the development does.
 - Curves are built smoothly from first crack and drop only (see above).
 
 Not implemented:

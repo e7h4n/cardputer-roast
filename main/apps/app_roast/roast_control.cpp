@@ -157,36 +157,24 @@ DevTrack DevStart(const Curve& c, int tF, float btF)
     d.active = true;
     d.tF     = tF;
     d.btF    = btF;
-    // The tighter of the two temperature limits: a crack hotter than planned leaves less room below the drop
-    // temperature, and the rate of rise then falls so that it is reached at the development time, not long before.
-    double rise = std::max(0.1, std::min((double)d.plan.rise, (double)(d.plan.dropBT - btF)));
-    double mean = rise / d.plan.dur;
-    double r0   = std::max((double)CurveRate(c, tF), mean);  // past the curve's end its slope is 0
-    d.shape     = DevCurve(r0, d.plan.dur, rise);
     return d;
 }
 
-float DevTrack::target(int t) const  // keeps rising past the limits, so BT crosses them and the drop comes
+float DevTrack::target(int t) const
 {
-    return btF + (float)shape.at(t - tF, true);
+    return btF + plan.speed * (float)std::max(0, t - tF);
 }
 
-float DevTrack::rate(int t) const
+float DevTrack::rate(int) const
 {
-    return (float)shape.rate(t - tF);
+    return plan.speed;
 }
 
 DropWhy DevDropDue(const DevTrack& d, const DevPlan& plan, int t, float bt)
 {
-    if (std::isnan(bt)) return DropWhy::None;
-    if (d.active) {
-        if (t - d.tF >= d.plan.dur) return DropWhy::Time;
-        if (bt - d.btF >= d.plan.rise) return DropWhy::Rise;
-        if (bt >= d.plan.dropBT) return DropWhy::Temp;
-        return DropWhy::None;
-    }
-    if (!plan.valid) return DropWhy::None;
+    if (std::isnan(bt) || !plan.valid) return DropWhy::None;
     if (bt >= plan.dropBT) return DropWhy::Temp;
+    if (d.active) return t - d.tF >= d.plan.dur ? DropWhy::Time : DropWhy::None;
     return plan.dropT > 0 && t >= plan.dropT ? DropWhy::Time : DropWhy::None;  // no F: the curve's drop time
 }
 

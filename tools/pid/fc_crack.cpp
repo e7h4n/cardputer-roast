@@ -2,7 +2,7 @@
 // 45 s later at most 208.5 (curve FCs 425/200.1, Drop 470/208.5).
 //   main:  the curve as the myERoast-style builder made it (syrina_myeroast_build.csv, a -4.5 degC/min corner at
 //          first crack), the Cardputer PID holding through the crack, drop by hand at F + 45 s;
-//   new:   the smooth two-point curve, development planned from where the beans cracked, drop at the first limit.
+//   new:   the smooth two-point curve; from F the development speed (11.2 degC/min), drop at 45 s or 208.5.
 // The crack starts when BT reaches `onset`; it then absorbs (E > 0) or releases (E < 0) E * exp(-s / 40) degC/s.
 // Neither is measured: the literature disputes where roasting turns exothermic, and R0012-R0014 show no heat sink at
 // the crack. F 2 s after onset (reaction time). One step per second; uses the firmware's roast_curve.cpp and roast_control.cpp.
@@ -99,7 +99,7 @@ static Out run(bool isNew, Plant pl, const Curve& c)
                 DropWhy w = DevDropDue(dev, plan, t, bt);
                 if (w != DropWhy::None) {
                     o.drop = t;
-                    o.why  = w == DropWhy::Time ? "time" : (w == DropWhy::Rise ? "rise" : "temp");
+                    o.why  = w == DropWhy::Time ? "time" : "temp";
                 }
             } else if (t >= o.f + 45 || (bt >= 208.5f && t >= o.f + 35)) {  // the plan's manual drop
                 o.drop = t;
@@ -152,7 +152,7 @@ int main(int argc, char** argv)
         printf("missing %s/syrina_myeroast_build.csv\n", dir);
         return 1;
     }
-    printf("Syrina D 100g as planned for the competition: FC 7:05 / 200.1, drop at most 45 s / +8.4 / 208.5\n");
+    printf("Syrina D 100g as planned for the competition: FC 7:05 / 200.1, 45 s at 11.2 C/min, at most 208.5\n");
     printf("%-36s %-5s %5s %6s | %5s %-12s %5s %6s %6s | %6s %6s %6s\n", "scenario", "fw", "F", "BT F", "drop", "why", "dev",
            "rise", "BT", "minRoR", "flick", "|dRoR|");
     struct S { const char* name; float onset, endo; } sc[] = {
