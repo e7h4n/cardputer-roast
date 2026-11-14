@@ -1,5 +1,6 @@
-// Batch A (R0012, curve "new", 200 g) on the fitted roaster model: the roaster's PID (as roasted, and with the
-// lookahead + first-crack floor) against the Cardputer PID, also on a model that is 15-20 % off.
+// Batch A (R0012, curve "new": FC 7:30 / 199, drop 10:00 / 210, 200 g) on the fitted roaster model, the curve as
+// roast_curve.cpp builds it now: the roaster's PID (plain, and with the lookahead + first-crack floor) against the
+// Cardputer PID (development planned from F at 8:01), also on a model that is 15-20 % off. Drop by hand at 8:56.
 // Uses the firmware's own roast_control.cpp. Writes one CSV per run to $OUT and prints a table.
 //   tools/pid/run.sh  [logs dir with R0012.csv for the replay check]
 #include <apps/app_roast/roast_control.h>
@@ -16,7 +17,7 @@ using namespace roast;
 
 // Fitted on R0012-R0014 (roast_control.h PlantModel); one step per second.
 struct Plant {
-    float gain = 2.2f, rate = 0.0175f, ambient = 26.0f, airTau = 1.0f, endo = 0.05f;
+    float gain = 2.133f, rate = 0.0204f, ambient = 26.0f, airTau = 1.0f, endo = 0;
     int dead = 5;
     float bt = 25.2f, air = 26.0f;
     std::vector<float> hist;
@@ -25,8 +26,8 @@ struct Plant {
         hist.push_back(heat);
         float late = hist.size() > (size_t)dead ? hist[hist.size() - 1 - dead] : 0;
         air += (ambient + gain * late - air) * (1 - std::exp(-1.0f / airTau));
-        float sink = (bt > 196 && bt < 203) ? endo : 0;  // first crack: a small heat sink (assumed)
-        bt += (air - bt) * rate - sink;
+        float self = bt > 156.2f ? 0.253f / 60 * (bt - 156.2f) : 0;  // the beans' own heating (fitted)
+        bt += (air - bt) * rate + self;
     }
 };
 
@@ -76,19 +77,29 @@ static Result run(Mode m, Plant pl, const char* csv, float floorDelta = 1.0f, fl
     Result r;
     std::deque<float> bts;
     float heat = 0, last = 0, sq = 0;
+    DevTrack dev;
     int n = 0;
     for (int t = 0; t <= kDrop; t++) {
         float bt = std::round((pl.bt + ((rand() % 100) - 50) / 2000.0f) * 10) / 10;  // 0.1 degC, like register 4
         int start = FcFloorStart(c.tagTime(PointTag::FCs), t >= kFc ? kFc : -1, sc.floorLead);
         bool in   = start >= 0 && t >= start;
-        if (m == Cardputer) {
-            SvConfig now = sc;
-            now.lookahead = 0;
-            PidAim a;
-            a.target = ComputeSv(c, t, bt, in, now).sv;
-            a.ffTemp = c.at(t + sc.lookahead);
-            a.ffRate = CurveRate(c, t + sc.lookahead);
+        if (m == Cardputer) {  // as the firmware does it (app_roast.cpp pidAim / fcAnchor): development from F
+            int start = FcFloorStart(c.tagTime(PointTag::FCs), t >= kFc ? kFc : -1, sc.floorLead);
             if (t == 0) PidReset(ps, 0);
+            auto devAim = [&](int s) {
+                PidAim a;
+                a.target = dev.target(s);
+                a.ffTemp = dev.target(s + sc.lookahead);
+                a.ffRate = dev.rate(s + sc.lookahead);
+                a.rate   = dev.rate(s);
+                a.afterF = true;
+                return a;
+            };
+            if (t == kFc) {
+                dev = DevStart(c, t, bt);
+                PidPrime(ps, ps.out, devAim(t), bt, pc);
+            }
+            PidAim a = t >= kFc && dev.active ? devAim(t) : CardputerAim(c, t, bt, start, false, 0, sc.lookahead, sc.floorCap);
             heat = PidStep(ps, a, bt, 1.0f, pc).heat;
         } else {
             heat = rp.step(ComputeSv(c, t, bt, in, sc).sv, bt);
@@ -165,13 +176,12 @@ int main(int argc, char** argv)
     off.rate = 0.0149f; // -15 %
     off.dead = 7;
     struct Run { const char* name; Mode m; Plant pl; const char* file; float delta, cap; } runs[] = {
-        {"roaster PID, as roasted (L0, no floor)", RoasterAsRoasted, fit, "roaster_asroasted.csv", 1, 8},
+        {"roaster PID, no lookahead, no floor", RoasterAsRoasted, fit, "roaster_asroasted.csv", 1, 8},
         {"roaster PID, L8 + floor +1 cap 8", RoasterLookFloor, fit, "roaster_floor.csv", 1, 8},
         {"roaster PID, L8 + floor +1 cap 3", RoasterLookFloor, fit, "roaster_floor3.csv", 1, 3},
-        {"Cardputer PID, floor +1 cap 8", Cardputer, fit, "cardputer_d1.csv", 1, 8},
-        {"Cardputer PID, floor = hold (default)", Cardputer, fit, "cardputer.csv", 0, 8},
+                {"Cardputer PID (development from F)", Cardputer, fit, "cardputer.csv", 0, 8},
         {"roaster PID, L8 + floor +1 cap 3, model off", RoasterLookFloor, off, "roaster_floor3_off.csv", 1, 3},
-        {"Cardputer PID, hold, model off", Cardputer, off, "cardputer_off.csv", 0, 8},
+        {"Cardputer PID, model off", Cardputer, off, "cardputer_off.csv", 0, 8},
     };
     printf("%-44s %6s %6s %7s %7s %7s %7s %7s %7s %6s\n", "batch A (FC 8:01, drop 8:56)", "rms", "worst", "BT FC",
            "BT drop", "RoR+30", "RoRmin", "heatFC", "heatmin", "moves");

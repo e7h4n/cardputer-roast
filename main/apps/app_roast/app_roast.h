@@ -17,11 +17,6 @@
 #include "roast_theme.h"
 
 struct RoastRules {
-    int devMin       = 75;    // s after first crack: drop window opens
-    int devMax       = 85;    // s after first crack: drop now
-    float dtMin      = 5.0f;  // degC rise since first crack to open the window
-    float dtMax      = 6.0f;  // degC rise that already counts as enough
-    float maxDropBT  = 206.f; // drop immediately at this bean temperature
     float safetyBT   = 225.f; // app drops by itself above this
     int afterEnd     = 120;   // app drops by itself this long after the curve ends
     float rorLow     = 5.0f;  // RoR warning 30 s after first crack
@@ -38,7 +33,8 @@ struct RoastRules {
     bool cardPid     = true;  // the Cardputer computes the heater output; off: the roaster's own PID follows SV
     float pidKp      = 1.5f;  // % heat per degC, 0.1..10 (roast_control.h PidConfig)
     int pidTi        = 60;    // integral time, s (0: no integral)
-    int pidTd        = 0;     // derivative time, s
+    int pidTd        = 0;     // derivative time before F, s
+    int pidFcTd      = 0;     // derivative time from F on, s (rate-of-rise shortfall; off: tools/pid fc_crack)
     bool pidFF       = true;  // model feedforward
     void load();
     void save() const;
@@ -128,6 +124,9 @@ private:
     int _lastHeatRaw   = -1;
     uint32_t _pidMs    = 0;
     uint32_t _heatSentMs = 0;
+    float _fcOffset      = 0;   // curve shift from the F mark on, for curves without a development plan
+    roast::DevTrack _dev;           // development from the F mark (curve with first crack and drop points)
+    void fcAnchor(bool marked);
     void pidTick(const roast::PidAim& aim);
     roast::PidAim pidAim(int t) const;
     roast::SvResult svAt(int t) const;  // what to write as SV at curve second t (lookahead, first-crack floor)
@@ -166,13 +165,13 @@ private:
     int _heatReps        = 0;
     int _listSel = 0, _listTop = 0;
     int _setSel  = 0;
-    // curve editor: fixed nodes like the phone editor (Start, Dry, FC start, FC end, SC start, SC end, Drop, Total)
+    // curve editor: Start (temperature), first crack and drop (time and temperature); roast_curve.cpp builds the rest
     struct EdRow {
         bool on = false;
         int t   = -1;      // seconds
         float c = NAN;     // NAN = temperature not edited (node only pins the curve)
     };
-    static constexpr int kEdRows = 8;
+    static constexpr int kEdRows = 3;
     EdRow _ed[kEdRows];
     int _edRow = 0, _edCol = 0;  // col 0 enabled, 1 time, 2 temperature
     int _edStage = 0;            // 0 browse, 1 minutes, 2 seconds, 3 temperature

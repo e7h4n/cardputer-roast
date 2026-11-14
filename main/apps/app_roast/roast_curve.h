@@ -8,6 +8,7 @@
  *   /sdcard/roast/logs/                roast logs written by the app (.csv, .json, .alog)
  */
 #pragma once
+#include <cmath>
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -20,6 +21,18 @@ struct CurvePoint {
     int t       = 0;  // seconds after charge
     float c     = 0;  // target bean temperature; NAN = mark enabled but temperature not edited (anchor only)
     PointTag tag = PointTag::None;
+};
+
+/// Development plan of a curve, from its first crack and drop points: how long (`dur`), how fast (`speed`, the rise
+/// divided by the time) and how hot at most (`dropBT`). After the F mark Roast rises at `speed` from where the beans
+/// cracked, and drops when `dur` is over or `dropBT` is reached.
+struct DevPlan {
+    bool valid   = false;
+    int dur      = 0;     // s
+    float rise   = 0;     // degC (speed * dur)
+    float speed  = 0;     // degC/s
+    float dropBT = NAN;
+    int dropT    = -1;    // the curve's drop time: without an F mark Roast drops here (or at dropBT)
 };
 
 struct Curve {
@@ -45,7 +58,8 @@ struct Curve {
     float at(int t) const;
     int tagTime(PointTag tag) const;  // -1 if absent
     float tagTemp(PointTag tag) const;
-    void build();  // keypoints -> table
+    void build();  // keypoints -> table (Charge, FCs, Drop; see roast_curve.cpp)
+    DevPlan devPlan() const;
     void sortPoints();
 };
 

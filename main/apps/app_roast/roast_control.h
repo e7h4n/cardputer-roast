@@ -49,20 +49,33 @@ struct SvResult {
 /// SV at roast second t. `inWindow`: inside the first-crack window (and not dropped). bt may be NAN.
 SvResult ComputeSv(const Curve& c, int t, float bt, bool inWindow, const SvConfig& cfg);
 
-/// Heater -> bean model, fitted on R0012-R0014 (fan 53-54 %, 100 and 200 g; bean temperature within 2.2-2.6 degC
-/// RMS over the whole roast): the inlet air settles at ambient + gain * heat, the beans approach the air at `rate`
-/// per second (time constant ~57 s), and the response starts ~5 s after a heater change.
+/// Heater -> bean model, fitted on R0012-R0014 and the 2026-11-14 Syrina D roast (fan 53-54 %, 100 and 200 g): the
+/// inlet air settles at ambient + gain * heat, the beans approach the air at `rate` per second (time constant ~49 s)
+/// plus their own heating above ~156 degC, and the response starts ~5 s after a heater change.
 struct PlantModel {
-    float ambient = 26.0f;    // degC
-    float gain    = 2.2f;     // degC of air per % heat
-    float rate    = 0.0175f;  // 1/s
+    float ambient   = 26.0f;    // degC
+    float gain      = 2.133f;   // degC of air per % heat
+    float rate      = 0.0204f;  // 1/s
+    // The beans heat faster than the heater alone explains from ~156 degC on (R0012-R0014 and the 2026-11-14
+    // Syrina D roast; exothermic reactions, better heat transfer as they dry and expand, or the probe: not told apart).
+    // Near first crack it is worth 4-5 % heat; without it the feedforward gave too much and the beans ran ahead.
+    float extra     = 0.253f / 60;  // degC/s per degC above extraFrom
+    float extraFrom = 156.2f;       // degC
+    float selfHeat(float bt) const  // degC/s
+    {
+        return bt > extraFrom ? extra * (bt - extraFrom) : 0;
+    }
 };
 
-/// Cardputer PID, ISA form on the measurement: heat = ff + Kp (e + integral(e dt) / Ti) - Kp Td dBT/dt, e = SV - BT.
+/// Cardputer PID: heat = ff + Kp (e + integral(e dt) / Ti + Td (rate - dBT/dt)), e = target - BT. D acts on the
+/// rate-of-rise shortfall against the plan (the curve's slope, which has no steps), not on the error's derivative, so
+/// the F re-anchor causes no kick; with rate 0 it is the usual derivative on the measurement.
 struct PidConfig {
     float kp         = 1.5f;  // % heat per degC of error
     float ti         = 60;    // s, integral time; 0 = no integral
-    float td         = 0;     // s, derivative time (on BT, filtered over 5 s)
+    float td         = 0;     // s, derivative time before the F mark (on the rate-of-rise shortfall, BT slope 5 s)
+    float fcTd       = 0;     // s, derivative time from the F mark on (rate-of-rise shortfall). Off by default: it
+                              // helps only if the crack absorbs heat, which is not established (tools/pid fc_crack)
     bool feedforward = true;  // add the heat the model needs to follow the curve
     PlantModel model;
     float maxStep  = 3.0f;    // % per second, heater slew limit
@@ -95,7 +108,9 @@ struct PidAim {
     float target = NAN;  // degC: ComputeSv with lookahead 0
     float ffTemp = NAN;  // degC: curve(t + lookahead)
     float ffRate = 0;    // degC/s: slope there
+    float rate   = 0;    // degC/s: the plan's slope now (D acts on rate - BT rate: the rate-of-rise shortfall)
     bool floored = false;  // first-crack floor holding (BT above the curve)
+    bool afterF  = false;  // from the F mark on: D uses fcTd
 };
 
 /// Fresh start at charge: no integral yet; the output ramps up from `heatNow` at the slew limit.
@@ -109,6 +124,36 @@ PidTerms PidStep(PidState& s, const PidAim& a, float bt, float dt, const PidConf
 
 /// Slope of the curve at t (degC/s), central difference over +-5 s.
 float CurveRate(const Curve& c, int t);
+
+/// First crack, Cardputer PID: from the F mark on, the rest of the curve is followed shifted by this much
+/// (BT - curve at F, within +-cap: the "floor cap" rule), so the plan's rate of rise is followed from where the beans
+/// are. Holding the curve's absolute temperature through the crack either cut heat (BT ahead of the line) or reacted
+/// only once BT had fallen back onto the line, by then the rate of rise had already collapsed.
+float FcAnchorOffset(const Curve& c, int tF, float btAtF, float cap);
+
+/// What the Cardputer PID aims at, at curve second t: the curve now; feedforward from the curve `lookahead` s ahead.
+/// From F on (`fcMarked`, curves without a development plan): the curve shifted by `fcOffset`. There is no hold before
+/// F any more (BT above the curve counted as on it): on 2026-11-14 it let BT run 2 degC ahead into the crack.
+/// (`windowStart`, `bt` and `cap` are unused since.)
+PidAim CardputerAim(const Curve& c, int t, float bt, int windowStart, bool fcMarked, float fcOffset, int lookahead,
+                    float cap);
+
+/// Development after the F mark: from where the beans cracked (tF, BT), rise at the curve's development speed;
+/// Roast drops when the development time is over or the drop temperature is reached (DevDropDue).
+struct DevTrack {
+    bool active = false;
+    int tF      = 0;     // curve second of the F mark
+    float btF   = NAN;   // BT at F
+    DevPlan plan;
+    float target(int t) const;  // degC at curve second t
+    float rate(int t) const;    // degC/s
+};
+DevTrack DevStart(const Curve& c, int tF, float btF);  // inactive when the curve has no plan or BT is unknown
+
+/// Why the roast should drop now: the development time is over, or the drop temperature is reached. Before F (d
+/// inactive): the drop temperature or the curve's drop time.
+enum class DropWhy : uint8_t { None, Time, Temp };
+DropWhy DevDropDue(const DevTrack& d, const DevPlan& plan, int t, float bt);
 
 /// Heater output (%) to hold when switching to manual: mean of the samples in (now - window, now]; `fallback`
 /// (the current reading) when there are none.

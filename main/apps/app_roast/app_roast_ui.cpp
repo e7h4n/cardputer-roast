@@ -581,7 +581,8 @@ void AppRoast::renderDash()
     pill(x + 6, 8, _manual ? "MAN" : "PID", _manual ? HEAT : CURVE);
     // hero: bean temperature
     bool stale = !linkReady();
-    bool alarm = bt >= _rules.maxDropBT;
+    DevPlan plan = _hasCurve ? _curve.devPlan() : DevPlan();
+    bool alarm   = plan.valid && bt >= plan.dropBT;
     text(W - 4, 16, fmt1(bt), F47(), stale ? FAINT : (alarm ? DROP : INK), Datum::top_right);
     // target / deviation
     float tgt = curveTargetAt(curveT());
@@ -594,6 +595,12 @@ void AppRoast::renderDash()
         if (_hasCurve) text(4, 45, signed1(bt - tgt) + "° vs curve", F11(), DIM);
     } else if (_hasCurve && _svFloored) {  // first-crack floor: SV held at BT + delta, above the curve
         text(4, 32, _cardPid ? std::string("FC hold: heat on plan") : "FC floor SV " + fmt1(_lastSv), F11(), CURVE);
+    } else if (_hasCurve && _dev.active) {  // after F: the development plan, from where the beans cracked
+        text(4, 32, "plan " + fmt1(_lastSv), F11(), CURVE);
+        text(4, 45, signed1(bt - _lastSv) + "°", F14(), INK);
+    } else if (_hasCurve && _session.markT(Mark::FCs) >= 0) {  // after F, no plan: the curve shifted to BT
+        text(4, 32, "after F: curve " + signed1(_fcOffset) + "°", F11(), CURVE);
+        text(4, 45, signed1(bt - _lastSv) + "°", F14(), INK);
     } else if (_hasCurve) {
         text(4, 32, "target " + fmt1(tgt), F11(), DIM);
         text(4, 45, signed1(bt - tgt) + "°", F14(), INK);
@@ -619,16 +626,20 @@ void AppRoast::renderDash()
     float span  = std::max({600.0f, (float)planEnd + 30, (float)t + 30});
     const int yb = 99;
     Strip st     = phaseStrip(yb, t, dry, fc, span, planFc, planEnd);
-    if (fc >= 0) {
-        int dev  = t - fc;
-        float dT = bt - _session.markBT(Mark::FCs);
-        int wx0 = st.X(fc + _rules.devMin), wx1 = st.X(fc + _rules.devMax);
+    if (fc >= 0 && _dev.active) {  // development plan from F: time, rise and drop temperature, whichever first
+        int dev  = curveT() - _dev.tF;
+        float dT = bt - _dev.btF;
+        int wx0 = st.X(fc), wx1 = st.X(fc + _dev.plan.dur);
         cv().drawRect(wx0, yb - 2, std::max(2, wx1 - wx0 + 1), 9, GO);
         char b[64];
-        snprintf(b, sizeof(b), "dev %s · %+.1f° · %.0f%%", mmss(dev).c_str(), dT, t > 0 ? 100.0 * dev / t : 0.0);
+        snprintf(b, sizeof(b), "dev %s/%s · %+.1f° · %.1f/min", mmss(dev).c_str(), mmss(_dev.plan.dur).c_str(), dT,
+                 _dev.plan.speed * 60);
         text(4, yb + 6, b, F10(), INK);
-        text(W - 5, yb + 6, "window " + std::to_string(_rules.devMin) + "–" + std::to_string(_rules.devMax) + " s",
-             F10(), GO, Datum::top_right);
+        text(W - 5, yb + 6, "max " + fmt1(_dev.plan.dropBT) + "°", F10(), GO, Datum::top_right);
+    } else if (fc >= 0) {  // no plan: time and rise since F
+        char b[48];
+        snprintf(b, sizeof(b), "dev %s · %+.1f°", mmss(t - fc).c_str(), bt - _session.markBT(Mark::FCs));
+        text(4, yb + 6, b, F10(), INK);
     } else {
         if (dry >= 0)
             text(4, yb + 6, "dry " + mmss(dry), F10(), DRY);
@@ -658,18 +669,16 @@ bool AppRoast::renderAlertBar()
         bar(DROP, b);
         return true;
     }
-    int fc   = _session.markT(Mark::FCs);
-    int dev  = fc >= 0 ? t - fc : -1;
-    float dT = fc >= 0 ? bt - _session.markBT(Mark::FCs) : 0;
-    if (bt >= _rules.maxDropBT) {
-        snprintf(b, sizeof(b), "%.0f° reached · drop now", _rules.maxDropBT);
-        bar(DROP, b, "D D");
-        return true;
-    }
-    if (fc >= 0 && dev >= _rules.devMax) {
-        snprintf(b, sizeof(b), "dev %s · drop now", mmss(dev).c_str());
-        bar(DROP, b, "D D");
-        return true;
+    int fc  = _session.markT(Mark::FCs);
+    int dev = fc >= 0 ? t - fc : -1;
+    if (_hasCurve && _dev.active) {  // the coming automatic drop: development time or drop temperature
+        int left    = _dev.plan.dur - (curveT() - _dev.tF);
+        float tempL = _dev.plan.dropBT - bt;
+        if (left <= 10 || tempL <= 1.0f) {
+            snprintf(b, sizeof(b), "auto-drop · %s · %.1f/%.1f°", mmss(std::max(0, left)).c_str(), bt, _dev.plan.dropBT);
+            bar(GO, b, "D D");
+            return true;
+        }
     }
     if (_heatDropWarned && fc >= 0 && dev <= 75 && !_manual) {
         bar(WARN, "heat falling after FC · P manual", nullptr, INK);
@@ -677,16 +686,6 @@ bool AppRoast::renderAlertBar()
     }
     if (_satWarned && _satRun > 0) {
         snprintf(b, sizeof(b), "heat at max %.0f%% for %d s", _snap.heat(), _satRun);
-        bar(WARN, b, nullptr, INK);
-        return true;
-    }
-    if (fc >= 0 && dev >= _rules.devMin && dT >= _rules.dtMin) {
-        snprintf(b, sizeof(b), "drop window · %s · %+.1f°", mmss(dev).c_str(), dT);
-        bar(GO, b, "D D");
-        return true;
-    }
-    if (fc >= 0 && dT >= _rules.dtMax && dev < _rules.devMin) {
-        snprintf(b, sizeof(b), "%+.1f° already · drop at %d s", dT, _rules.devMin);
         bar(WARN, b, nullptr, INK);
         return true;
     }
@@ -996,8 +995,8 @@ void AppRoast::renderEditor()
         keybar({{"Tab", CURVE, "back to edit"}, {"S", GO, "save"}});
         return;
     }
-    static const char* names[8]   = {"Start", "Dry", "FC start", "FC end", "SC start", "SC end", "Drop", "Total"};
-    static const uint32_t cols[8] = {INK, DRY, FC, FCE, FCE, FCE, DROP, INK};
+    static const char* names[3]   = {"Start", "Crack", "Drop"};
+    static const uint32_t cols[3] = {INK, FC, DROP};
     dot(7, 7, 3, CURVE);
     std::string sub = (_curve.batchG > 0 ? " · " + std::to_string(_curve.batchG) + " g" : std::string()) +
                       std::string(_edDirty ? " · edited" : "");
@@ -1044,9 +1043,7 @@ void AppRoast::renderEditor()
         // temperature
         std::string cs;
         uint32_t cc = r.on ? INK : FAINT;
-        if (i == 7) {
-            cs = "";
-        } else if (sel && _edStage == 3) {
+        if (sel && _edStage == 3) {
             int cw = std::max(24, tw(_edBuf + "0", F11()) + 4);
             rbox(138 - cw, y - 1, 139, y + 10, 2, ui::WHITE);
             cv().drawRoundRect(138 - cw, y - 1, cw + 2, 12, 2, CURVE);
@@ -1062,10 +1059,27 @@ void AppRoast::renderEditor()
         text(137, y, cs, F11(), cc, Datum::top_right);
         y += 12;
     }
+    // the development the curve sets (first crack -> drop): how long, how fast, how hot at most
+    DevPlan pl = _curve.devPlan();
+    if (pl.valid) {
+        y += 4;
+        text(4, y, "development", F10(), DIM);
+        text(4, y + 11, mmss(pl.dur) + " · " + fmt1(pl.speed * 60) + "°/min · " + fmt1(pl.dropBT) + "°", F11(), GO);
+        int fcT    = _curve.tagTime(PointTag::FCs);
+        float rise = 0;  // the rate of rise going up into first crack: development faster than the roast gets there
+        for (int s = std::max(10, fcT - 60); s + 10 <= fcT; s++) {
+            float a = _curve.at(s) - _curve.at(s - 10), b2 = _curve.at(s + 10) - _curve.at(s);
+            rise    = std::max(rise, (b2 - a) * 6);
+        }
+        if (rise > 0.3f)
+            text(4, y + 24, "RoR has to rise into the crack", F10(), WARN);
+        else
+            text(4, y + 24, "then drops at time or temp", F10(), DIM);
+    }
     // mini chart with the selected node
     const int cx0 = 145, cy0 = 17, cx1 = W - 4, cy1 = 112;
     rbox(cx0, cy0, cx1, cy1, 4, CARD);
-    int end = std::max(60, std::max(_curve.endTime(), _ed[7].t)) + 30;
+    int end = std::max(60, std::max(_curve.endTime(), _ed[2].t)) + 30;
     auto PX = [&](float t) { return cx0 + 4 + (int)((cx1 - cx0 - 8) * t / end); };
     auto PY = [&](float c) { return cy1 - 4 - (int)((cy1 - cy0 - 8) * (std::max(20.0f, std::min(235.0f, c)) - 20) / 215); };
     for (int s = 60; s < end; s += 60) cv().drawFastVLine(PX(s), cy0 + 3, cy1 - cy0 - 6, GRID);
@@ -1078,7 +1092,7 @@ void AppRoast::renderEditor()
         px = nx;
         py = ny;
     }
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < kEdRows; i++) {
         if (!_ed[i].on) continue;
         int t = i == 0 ? 0 : _ed[i].t;
         if (t < 0) continue;
@@ -1093,7 +1107,7 @@ void AppRoast::renderEditor()
     if (_edStage == 1)
         keybar({{"0-9", CURVE, "minutes"}, {"Enter", INK, "seconds"}, {"Tab", INK, "temp"}, {"Esc", FAINT, "cancel"}});
     else if (_edStage == 2)
-        keybar({{"0-9", CURVE, "seconds"}, {"Enter", INK, _edRow == 7 ? "ok" : "temp"}, {"Esc", FAINT, "cancel"}});
+        keybar({{"0-9", CURVE, "seconds"}, {"Enter", INK, "temp"}, {"Esc", FAINT, "cancel"}});
     else if (_edStage == 3)
         keybar({{"0-9", CURVE, "°C"}, {"Enter", GO, "ok"}, {"Esc", FAINT, "cancel"}});
     else

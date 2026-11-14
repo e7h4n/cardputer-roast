@@ -1,8 +1,9 @@
 /*
  * Simulated roaster for practising the UI without the machine.
- * Same register semantics as the BLE link. Thermal model and on-board PID fitted on R0012-R0014 (roast_control.h:
- * PlantModel): heater -> inlet air after a 5 s dead time and a 1 s lag, beans approach the air at 0.0175/s at
- * 53.5 % fan; more airflow dilutes the air and speeds up the transfer. The on-board PID is the fitted positional
+ * Same register semantics as the BLE link. Thermal model fitted on R0012-R0014 and the 2026-11-14 Syrina D roast
+ * (roast_control.h PlantModel): heater -> inlet air after a 5 s dead time and a 1 s lag, beans approach the air at
+ * 0.0204/s at 53.5 % fan plus their own heating above 156 degC; more airflow dilutes the air and speeds up the
+ * transfer. On-board PID fitted on R0012-R0014. The on-board PID is the fitted positional
  * form heat = 0.50 e + 0.036 integral(e dt) + 12 %.
  */
 #include "roast_link.h"
@@ -186,11 +187,11 @@ private:
         }
         double late = _hist[(_histPos + 64 - 50) % 64];
         double f    = fanFrac > 0.2 ? fanFrac : 0.2;
-        double airTarget = 26 + (_running ? late * 2.2 * (0.535 / f) : 0);
+        double airTarget = 26 + (_running ? late * 2.133 * (0.535 / f) : 0);
         _air += (airTarget - _air) * (1 - exp(-dt / 1.0));
-        double k = _running ? 0.0175 * (fanFrac / 0.535) : 0.002;
-        double endo = (_bt > 196 && _bt < 203 && _timerOn) ? 0.05 : 0;  // first crack: a small heat sink (assumed)
-        _bt += ((_air - _bt) * k - endo) * dt;
+        double k    = _running ? 0.0204 * (fanFrac / 0.535) : 0.002;
+        double self = (_running && _bt > 156.2) ? 0.253 / 60 * (_bt - 156.2) : 0;  // the beans' own heating (fitted)
+        _bt += ((_air - _bt) * k + self) * dt;
         _bt += ((rand() % 100) - 50) / 2000.0;
         if (_bt < 20) _bt = 20;
     }

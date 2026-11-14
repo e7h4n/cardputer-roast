@@ -34,11 +34,6 @@ static const char* TAG = "Roast";
 void RoastRules::load()
 {
     Settings s("roast", false);
-    devMin    = s.GetInt("devMin", devMin);
-    devMax    = s.GetInt("devMax", devMax);
-    dtMin     = s.GetInt("dtMin10", (int)lroundf(dtMin * 10)) / 10.0f;
-    dtMax     = s.GetInt("dtMax10", (int)lroundf(dtMax * 10)) / 10.0f;
-    maxDropBT = s.GetInt("maxDrop10", (int)lroundf(maxDropBT * 10)) / 10.0f;
     safetyBT  = s.GetInt("safety10", (int)lroundf(safetyBT * 10)) / 10.0f;
     afterEnd  = s.GetInt("afterEnd", afterEnd);
     rorLow    = s.GetInt("rorLow10", (int)lroundf(rorLow * 10)) / 10.0f;
@@ -56,17 +51,13 @@ void RoastRules::load()
     pidKp       = std::max(1, std::min(100, (int)s.GetInt("pidKp10", (int)lroundf(pidKp * 10)))) / 10.0f;
     pidTi       = std::max(0, std::min(600, (int)s.GetInt("pidTi", pidTi)));
     pidTd       = std::max(0, std::min(30, (int)s.GetInt("pidTd", pidTd)));
+    pidFcTd     = std::max(0, std::min(30, (int)s.GetInt("pidFcTd", pidFcTd)));
     pidFF       = s.GetInt("pidFF", pidFF ? 1 : 0) != 0;
 }
 
 void RoastRules::save() const
 {
     Settings s("roast", true);
-    s.SetInt("devMin", devMin);
-    s.SetInt("devMax", devMax);
-    s.SetInt("dtMin10", (int)lroundf(dtMin * 10));
-    s.SetInt("dtMax10", (int)lroundf(dtMax * 10));
-    s.SetInt("maxDrop10", (int)lroundf(maxDropBT * 10));
     s.SetInt("safety10", (int)lroundf(safetyBT * 10));
     s.SetInt("afterEnd", afterEnd);
     s.SetInt("rorLow10", (int)lroundf(rorLow * 10));
@@ -84,6 +75,7 @@ void RoastRules::save() const
     s.SetInt("pidKp10", (int)lroundf(pidKp * 10));
     s.SetInt("pidTi", pidTi);
     s.SetInt("pidTd", pidTd);
+    s.SetInt("pidFcTd", pidFcTd);
     s.SetInt("pidFF", pidFF ? 1 : 0);
 }
 
@@ -341,7 +333,9 @@ void AppRoast::charge()
         return;
 
     std::vector<RegWrite> w;
-    _cardPid = false;
+    _cardPid  = false;
+    _dev      = DevTrack();
+    _fcOffset = 0;
     if (_hasCurve && _rules.cardPid) {
         // Cardputer PID: the roaster's PID stays off; pidTick() writes the heater from the first second on.
         uint16_t t0 = (uint16_t)lroundf(ComputeSv(_curve, 0, NAN, false, svConfig()).sv * 10);
@@ -352,6 +346,7 @@ void AppRoast::charge()
         _cardPid       = true;
         _lastTargetRaw = t0;
         PidReset(_pid, 0);
+        _fcOffset      = 0;
         _lastHeatRaw   = -1;
         _pidMs         = 0;
     } else if (_hasCurve) {
@@ -557,11 +552,15 @@ void AppRoast::toggleMark(Mark m)
         _session.clearMark(m);
         _markMs[(int)m] = -1;
         toast(std::string("Cleared ") + MarkName(m), ui::WARN);
-        if (m == Mark::FCs) _heatDropWarned = _rorWarned = false;
+        if (m == Mark::FCs) {
+            _heatDropWarned = _rorWarned = false;
+            fcAnchor(false);
+        }
         return;
     }
     _session.setMark(m, t, bt);
     _markMs[(int)m] = (int32_t)(GetHAL().millis() - _chargeMs);
+    if (m == Mark::FCs) fcAnchor(true);
     char b[48];
     snprintf(b, sizeof(b), "%s %s · %.1f°", MarkName(m), FormatMmSs(t).c_str(), bt);
     toast(b, m == Mark::Dry ? ui::DRY : (m == Mark::FCs ? ui::FC : ui::FCE));
@@ -598,6 +597,7 @@ PidConfig AppRoast::pidConfig() const
     c.kp          = _rules.pidKp;
     c.ti          = (float)_rules.pidTi;
     c.td          = (float)_rules.pidTd;
+    c.fcTd        = (float)_rules.pidFcTd;
     c.feedforward = _rules.pidFF;
     return c;
 }
@@ -608,19 +608,45 @@ PidConfig AppRoast::pidConfig() const
 // roaster PID only. With +1 the integral kept pushing BT up and the drop came 4-5 degC over the curve (tools/pid).
 PidAim AppRoast::pidAim(int t) const
 {
-    SvConfig c = svConfig();
-    c.lookahead  = 0;
-    c.floorDelta = 0;  // floor = hold: BT above the curve gives no error, so the PI neither cuts nor pushes
-    int start   = FcFloorStart(_curve.tagTime(PointTag::FCs), _session.markT(Mark::FCs), c.floorLead);
-    bool in     = _phase == Phase::Roasting && start >= 0 && t >= start;
-    float bt    = _snap.has(4) ? _snap.bt() : NAN;
-    PidAim a;
-    SvResult r = ComputeSv(_curve, t, bt, in, c);
-    a.target   = r.sv;
-    a.floored  = r.floored;
-    a.ffTemp = _curve.at(t + _rules.svLookahead);
-    a.ffRate = CurveRate(_curve, t + _rules.svLookahead);
-    return a;
+    SvConfig c   = svConfig();
+    int fcT      = _session.markT(Mark::FCs);
+    int start    = FcFloorStart(_curve.tagTime(PointTag::FCs), fcT, c.floorLead);
+    bool roast   = _phase == Phase::Roasting;
+    float bt     = _snap.has(4) ? _snap.bt() : NAN;
+    if (roast && _dev.active) {
+        int la = std::max(0, std::min(20, c.lookahead));
+        PidAim a;
+        a.target = _dev.target(t);
+        a.ffTemp = _dev.target(t + la);
+        a.ffRate = _dev.rate(t + la);
+        a.rate   = _dev.rate(t);
+        a.afterF = true;
+        return a;
+    }
+    return CardputerAim(_curve, t, bt, roast ? start : -1, roast && fcT >= 0, _fcOffset, c.lookahead, c.floorCap);
+}
+
+// F set or cleared. With a curve that has first crack and drop points, development starts here: from where the
+// beans actually cracked, at the curve's development speed (DevStart); Roast drops when the development time is over
+// or the drop temperature is reached (tickRoast). Without such a curve the rest of the curve is shifted to BT.
+// The Cardputer PID is re-primed so the heater does not jump.
+void AppRoast::fcAnchor(bool marked)
+{
+    if (!_hasCurve || _phase != Phase::Roasting) return;
+    float bt  = _snap.has(4) ? _snap.bt() : _session.lastBT();
+    int t     = curveT();
+    _dev      = marked ? DevStart(_curve, t, bt) : DevTrack();
+    _fcOffset = marked && !_dev.active ? FcAnchorOffset(_curve, t, bt, _rules.floorCap) : 0;
+    if (_cardPid && !_manual) PidPrime(_pid, _pid.out, pidAim(t), bt, pidConfig());
+    char b[96];
+    if (marked && _dev.active)
+        snprintf(b, sizeof(b), "development from %.1f: %.1f/min for %s, at most %.1f", bt, _dev.plan.speed * 60,
+                 FormatMmSs(_dev.plan.dur).c_str(), _dev.plan.dropBT);
+    else if (marked)
+        snprintf(b, sizeof(b), "FC anchor: curve %+.1f from here (BT %.1f)", _fcOffset, bt);
+    else
+        snprintf(b, sizeof(b), "FC cleared: back to the curve");
+    _session.addAction(roastT(), b);
 }
 
 // Cardputer PID, once a roast second: heater output from the curve and BT.
@@ -675,6 +701,9 @@ void AppRoast::tickRoast()
             _session.addAction(t, b);
             _floorLogged = true;
         }
+    } else if (_hasCurve && _dev.active && _phase == Phase::Roasting) {  // roaster PID, after F: the development
+        sv         = _dev.target(curveT() + std::max(0, std::min(20, _rules.svLookahead)));
+        _svFloored = false;
     } else if (_hasCurve) {
         SvResult r = svAt(curveT());
         sv         = r.sv;
@@ -733,6 +762,25 @@ void AppRoast::tickRoast()
         _autoDropWhy = "Curve ended long ago";
         drop(" (auto: timeout)");
         return;
+    }
+    // the curve's development: drop when its time is over (from F) or its drop temperature is reached; before F at
+    // the drop temperature or the curve's drop time
+    if (_hasCurve) {
+        DevPlan plan = _curve.devPlan();
+        DropWhy why  = DevDropDue(_dev, plan, curveT(), bt);
+        if (why != DropWhy::None) {
+            char b[64];
+            if (why == DropWhy::Time && _dev.active)
+                snprintf(b, sizeof(b), " (auto: development %s, %+.1f)", FormatMmSs(plan.dur).c_str(), bt - _dev.btF);
+            else if (why == DropWhy::Time)
+                snprintf(b, sizeof(b), " (auto: curve drop time %s)", FormatMmSs(plan.dropT).c_str());
+            else
+                snprintf(b, sizeof(b), " (auto: %.1f reached)", plan.dropBT);
+            _autoDropped = true;
+            _autoDropWhy = why == DropWhy::Temp ? "Drop temperature reached" : "Development time reached";
+            drop(b);
+            return;
+        }
     }
 
     // 5) heater saturation
@@ -1234,9 +1282,8 @@ bool AppRoast::keyCurves(int code)
         case KEY_N:  // new curve from the phone app's dark-roast preset
             _curve        = Curve();
             _curve.name   = "new";
-            _curve.totalT = 880;
-            _curve.pts    = {{301, NAN, PointTag::Dry}, {480, NAN, PointTag::FCs}, {556, NAN, PointTag::FCe},
-                             {644, NAN, PointTag::SCs}, {880, NAN, PointTag::Drop}};
+            _curve.totalT = 540;
+            _curve.pts    = {{0, 50, PointTag::Charge}, {450, 200, PointTag::FCs}, {540, 210, PointTag::Drop}};
             _curve.offset = _rules.curveOffset;
             _curve.build();
             _hasCurve = true;
@@ -1273,31 +1320,30 @@ bool AppRoast::keyCurves(int code)
 }
 
 /* ------------------------------ curve editor ------------------------------ */
-// rows: 0 Start (temperature only) 1 Dry 2 FC start 3 FC end 4 SC start 5 SC end 6 Drop (always on) 7 Total (time only)
-static const PointTag kEdTag[8] = {PointTag::Charge, PointTag::Dry, PointTag::FCs, PointTag::FCe,
-                                   PointTag::SCs,    PointTag::SCe, PointTag::Drop, PointTag::None};
+// rows: 0 Start (temperature only) 1 first crack 2 drop (both always on, time and temperature). Yellowing is not a
+// curve point: Y marks it during the roast.
+static const PointTag kEdTag[3] = {PointTag::Charge, PointTag::FCs, PointTag::Drop};
 
 void AppRoast::edLoad()
 {
     for (auto& r : _ed) r = EdRow();
-    for (auto& p : _curve.pts) {
-        for (int i = 0; i < 7; i++) {
+    for (auto& p : _curve.pts)
+        for (int i = 0; i < kEdRows; i++)
             if (p.tag == kEdTag[i] || (i == 0 && p.t == 0 && p.tag == PointTag::None)) {
                 _ed[i].on = true;
                 _ed[i].t  = i == 0 ? 0 : p.t;
                 _ed[i].c  = p.c;
             }
-        }
-    }
     _ed[0].t = 0;
-    if (!_ed[6].on) {
-        _ed[6].on = true;
-        _ed[6].t  = _curve.endTime();
-    }
-    _ed[7].on = true;
-    _ed[7].t  = _curve.totalT > 0 ? _curve.totalT : _curve.endTime();
-    _edRow = 1;
-    _edCol = 0;
+    int end  = std::max(60, _curve.endTime());
+    if (_ed[2].t <= 0) _ed[2].t = end;
+    if (_ed[1].t <= 0 || _ed[1].t >= _ed[2].t) _ed[1].t = std::max(1, _ed[2].t * 5 / 6);
+    _ed[1].on = _ed[2].on = true;
+    for (int i = 1; i < kEdRows; i++)
+        if (std::isnan(_ed[i].c)) _ed[i].c = std::round(_curve.at(_ed[i].t) * 10) / 10.0f;
+    if (!(_ed[2].c > _ed[1].c)) _ed[2].c = _ed[1].c + 5;
+    _edRow   = 1;
+    _edCol   = 0;
     _edStage = 0;
     _edDirty = false;
 }
@@ -1305,46 +1351,28 @@ void AppRoast::edLoad()
 void AppRoast::edApply()
 {
     std::vector<CurvePoint> pts;
-    for (auto& p : _curve.pts)  // keep free (untagged) points from files
-        if (p.tag == PointTag::None && p.t > 0) pts.push_back(p);
     if (_ed[0].on && !std::isnan(_ed[0].c)) pts.push_back({0, _ed[0].c, PointTag::Charge});
-    for (int i = 1; i < 7; i++)
-        if (_ed[i].on && _ed[i].t >= 0) pts.push_back({_ed[i].t, _ed[i].c, kEdTag[i]});
+    pts.push_back({_ed[1].t, _ed[1].c, PointTag::FCs});
+    pts.push_back({_ed[2].t, _ed[2].c, PointTag::Drop});
     _curve.pts    = pts;
-    _curve.totalT = _ed[7].t;
+    _curve.totalT = _ed[2].t;
     _curve.build();
     _hasCurve = _curve.valid();
     _edDirty  = true;
 }
 
-// Same rule as the phone editor: a node sits strictly between its enabled neighbours; Drop <= Total <= 1800 s.
+// First crack strictly before the drop; the drop at most 30:00.
 bool AppRoast::edCheckTime(int row, int t, std::string& why)
 {
-    if (row == 7) {
-        if (t < _ed[6].t) {
-            why = "Total must be >= Drop " + FormatMmSs(_ed[6].t);
-            return false;
-        }
-        if (t > 1800) {
-            why = "Total must be <= 30:00";
-            return false;
-        }
-        return true;
+    if (row == 1 && !(t > 0 && t < _ed[2].t)) {
+        why = "First crack must be before the drop " + FormatMmSs(_ed[2].t);
+        return false;
     }
-    int lo = 0, hi = _ed[7].t;
-    for (int i = row - 1; i >= 1; i--)
-        if (_ed[i].on) {
-            lo = _ed[i].t;
-            break;
-        }
-    for (int i = row + 1; i <= 6; i++)
-        if (_ed[i].on) {
-            hi = _ed[i].t;
-            break;
-        }
-    bool ok = t > lo && (row == 6 ? t <= hi : t < hi);
-    if (!ok) why = "Must be between " + FormatMmSs(lo) + " and " + FormatMmSs(hi);
-    return ok;
+    if (row == 2 && !(t > _ed[1].t && t <= 1800)) {
+        why = "Drop must be after first crack " + FormatMmSs(_ed[1].t) + " and by 30:00";
+        return false;
+    }
+    return true;
 }
 
 bool AppRoast::keyEditor(const Keyboard::KeyEvent_t& e, int code)
@@ -1382,7 +1410,7 @@ bool AppRoast::keyEditor(const Keyboard::KeyEvent_t& e, int code)
         }
         if (code != KEY_ENTER && code != KEY_RIGHT && code != KEY_TAB) return true;
         if (_edStage == 1) {
-            if (code == KEY_TAB && _edRow != 7) {  // keep the time, go straight to the temperature
+            if (code == KEY_TAB) {  // keep the time, go straight to the temperature
                 _edStage = 3;
                 _edBuf.clear();
                 return true;
@@ -1409,15 +1437,10 @@ bool AppRoast::keyEditor(const Keyboard::KeyEvent_t& e, int code)
                     return true;
                 }
                 r.t = t;
-                if (_edRow == 6 && _ed[7].t < t) _ed[7].t = t;
                 edApply();
             }
-            if (_edRow == 7) {
-                _edStage = 0;
-            } else {
-                _edStage = 3;
-                _edBuf.clear();
-            }
+            _edStage = 3;
+            _edBuf.clear();
             return true;
         }
         if (_edStage == 3) {
@@ -1428,6 +1451,10 @@ bool AppRoast::keyEditor(const Keyboard::KeyEvent_t& e, int code)
                 toast("Temperature 0-300°C", DROP);
                 return true;
             }
+            if ((_edRow == 1 && c >= _ed[2].c) || (_edRow == 2 && c <= _ed[1].c)) {
+                toast("Drop must be hotter than first crack", DROP, 2500);
+                return true;
+            }
             r.c = std::round(c * 10) / 10.0f;
             edApply();
         }
@@ -1435,35 +1462,11 @@ bool AppRoast::keyEditor(const Keyboard::KeyEvent_t& e, int code)
     }
     // ---- browsing
     auto toggle = [&]() -> bool {  // returns true when the node is (now) on
-        if (_edRow == 6 || _edRow == 7) {
-            toast("Drop and Total are always on", WARN);
+        if (_edRow != 0) {
+            toast("First crack and drop are always on", WARN);
             return true;
         }
-        if (!r.on && _edRow > 0 && r.t < 0) {  // first enable: middle of the free gap
-            int lo = 0, hi = _ed[7].t;
-            for (int i = _edRow - 1; i >= 1; i--)
-                if (_ed[i].on) {
-                    lo = _ed[i].t;
-                    break;
-                }
-            for (int i = _edRow + 1; i <= 6; i++)
-                if (_ed[i].on) {
-                    hi = _ed[i].t;
-                    break;
-                }
-            r.t = (lo + hi) / 2;
-        }
-        if (!r.on && _edRow > 0) {
-            std::string why;
-            if (!edCheckTime(_edRow, r.t, why)) {
-                toast(std::string("Fix the time: ") + why, DROP, 2500);
-                r.on     = true;  // enable so the time can be fixed right away
-                _edStage = 1;
-                _edBuf.clear();
-                return true;
-            }
-        }
-        if (_edRow == 0 && !r.on && std::isnan(r.c)) r.c = _curve.at(0);
+        if (!r.on && std::isnan(r.c)) r.c = _curve.at(0);
         r.on = !r.on;
         edApply();
         return r.on;
@@ -1487,11 +1490,11 @@ bool AppRoast::keyEditor(const Keyboard::KeyEvent_t& e, int code)
         case KEY_ENTER:
             startEdit("");
             break;
-        case KEY_BACKSPACE:  // temperature back to "not edited" (follows the preset)
-            if (r.on && _edRow > 0 && _edRow < 7) {
-                r.c = NAN;
+        case KEY_BACKSPACE:  // start temperature back to the preset's
+            if (_edRow == 0 && r.on) {
+                r.on = false;
                 edApply();
-                toast("Temperature follows the preset", CURVE);
+                toast("Start follows the preset", CURVE);
             }
             break;
         case KEY_N:
@@ -1582,10 +1585,6 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
         r.unit  = unit;
         v.push_back(r);
     };
-    group("DROP WINDOW", GO);
-    rowI("dev after FC", &_rules.devMin, &_rules.devMax, 20, 400, 1, " s");
-    rowF("rise after FC", &_rules.dtMin, &_rules.dtMax, 0, 30, 0.5f, "°");
-    rowF("drop now at", &_rules.maxDropBT, nullptr, 150, 250, 1, "°");
     group("SAFETY", DROP);
     rowF("auto-drop at", &_rules.safetyBT, nullptr, 150, 260, 1, "°");
     rowI("after curve end", &_rules.afterEnd, nullptr, 0, 900, 10, " s");
@@ -1604,6 +1603,7 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     rowF("P", &_rules.pidKp, nullptr, 0.1f, 10, 0.1f, "%/°");
     rowI("I time", &_rules.pidTi, nullptr, 0, 600, 5, " s");
     rowI("D time", &_rules.pidTd, nullptr, 0, 30, 1, " s");
+    rowI("D after F", &_rules.pidFcTd, nullptr, 0, 30, 1, " s");
     RuleRow ffRow;
     ffRow.label  = "feedforward";
     ffRow.toggle = &_rules.pidFF;

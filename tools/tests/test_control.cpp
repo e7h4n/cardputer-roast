@@ -51,8 +51,8 @@ static Sample S(int t, float heat)
 
 
 // Heater -> bean plant as fitted on R0012-R0014 (roast_control.h PlantModel), with a dead time; one step per second.
-struct Plant {
-    float gain = 2.2f, rate = 0.0175f, ambient = 26.0f;
+struct Plant {  // as fitted (roast_control.h PlantModel), self-heating included
+    float gain = 2.133f, rate = 0.0204f, ambient = 26.0f, extra = 0.253f / 60, from = 156.2f;
     int dead   = 5;
     float bt = 100, air = 100;
     std::vector<float> hist;
@@ -61,7 +61,7 @@ struct Plant {
         hist.push_back(heat);
         float late = hist.size() > (size_t)dead ? hist[hist.size() - 1 - dead] : 0;
         air += (ambient + gain * late - air) * (1 - std::exp(-1.0f));
-        bt += (air - bt) * rate;
+        bt += (air - bt) * rate + (bt > from ? extra * (bt - from) : 0);
     }
 };
 
@@ -163,10 +163,13 @@ int main()
 
     // --- Cardputer PID: feedforward from the model
     PlantModel pm;
-    NEAR(FeedForwardHeat(200, 5 / 60.0f, pm), (200 + (5 / 60.0f) / 0.0175f - 26) / 2.2f);  // ~81 % at FC, RoR 5
+    // at first crack, RoR 5: the beans' own heating (~11 degC/min at 200) leaves ~79 % (the real roast held ~81 %)
+    NEAR(FeedForwardHeat(200, 5 / 60.0f, pm), (200 + (5 / 60.0f - pm.selfHeat(200)) / pm.rate - 26) / pm.gain);
+    CHECK(FeedForwardHeat(200, 5 / 60.0f, pm) > 75 && FeedForwardHeat(200, 5 / 60.0f, pm) < 83);
+    NEAR(pm.selfHeat(150), 0.0f);
     NEAR(FeedForwardHeat(26, 0, pm), 0.0f);
     NEAR(FeedForwardHeat(500, 0, pm), 100.0f);                     // clamped
-    NEAR(FeedForwardHeat(150, NAN, pm), (150 - 26) / 2.2f);        // no slope: hold
+    NEAR(FeedForwardHeat(150, NAN, pm), (150 - 26) / pm.gain);     // no slope: hold (no self-heating at 150)
     NEAR(CurveRate(line(), 300), 1 / 6.0f);
     NEAR(CurveRate(line(), 0), 1 / 6.0f);                          // one-sided at the start
 
@@ -244,11 +247,12 @@ int main()
         printf("  PID on fitted plant: worst |BT - curve| %.2f degC, largest heater step %.2f %%\n", err, jump);
         CHECK(err < 0.5f);
         CHECK(jump < 1.0f);
-        // model wrong by 20 % (gain and rate) and 8 s dead time: still within 3 degC and no oscillation
+        // model wrong by 20 % (gain and rate, self-heating 50 % stronger) and 8 s dead time: within 3 degC, no oscillation
         Plant off;
-        off.gain = 2.64f;
-        off.rate = 0.014f;
-        off.dead = 8;
+        off.gain  = 2.56f;
+        off.rate  = 0.0163f;
+        off.extra = 0.38f / 60;
+        off.dead  = 8;
         follow(pc, off, &err, &jump);
         printf("  PID on mismatched plant: worst |BT - curve| %.2f degC, largest heater step %.2f %%\n", err, jump);
         CHECK(err < 3.0f);
@@ -263,6 +267,125 @@ int main()
         CHECK(errNo > err);
     }
 
+
+    // --- first crack, Cardputer PID: hold until F, then the curve shifted to where the beans are
+    {
+        Curve c = line();  // 100 + t/6
+        int win = 430;
+        PidAim a = CardputerAim(c, 300, 140.0f, win, false, 0, 8, 8);  // before the window: the curve now
+        NEAR(a.target, c.at(300));
+        NEAR(a.ffTemp, c.at(308));
+        NEAR(a.rate, 1 / 6.0f);
+        CHECK(!a.floored && !a.afterF);
+        a = CardputerAim(c, 440, c.at(440) + 2, win, false, 0, 8, 8);  // window, BT 2 above: no hold any more
+        NEAR(a.target, c.at(440));
+        CHECK(!a.floored);
+        a = CardputerAim(c, 440, c.at(440) - 2, win, false, 0, 8, 8);  // below: the curve
+        NEAR(a.target, c.at(440));
+        CHECK(!a.floored);
+        float off = FcAnchorOffset(c, 450, c.at(450) + 2.5f, 8);  // F with BT 2.5 above the curve
+        NEAR(off, 2.5f);
+        NEAR(FcAnchorOffset(c, 450, c.at(450) + 20, 8), 8.0f);    // capped
+        NEAR(FcAnchorOffset(c, 450, c.at(450) - 3, 8), -3.0f);    // late crack: below the curve too
+        NEAR(FcAnchorOffset(c, 450, NAN, 8), 0.0f);
+        a = CardputerAim(c, 470, c.at(470) + 5, win, true, off, 8, 8);  // after F: shifted, no hold
+        NEAR(a.target, c.at(470) + 2.5f);
+        NEAR(a.ffTemp, c.at(478) + 2.5f);
+        CHECK(a.afterF && !a.floored);
+    }
+    {  // re-prime at F keeps the heater where it was (no jump), and D after F answers a rate-of-rise dip
+        Curve c = line();
+        PidConfig pf;
+        pf.maxStep = 100;
+        pf.fcTd    = 10;  // off by default; on here to check it
+        PidState st;
+        PidAim before = CardputerAim(c, 449, c.at(449) - 1.0f, 430, false, 0, 8, 8);
+        PidPrime(st, 80, before, c.at(449) - 1.0f, pf);
+        float bt  = c.at(450) - 1.0f;
+        PidAim at = CardputerAim(c, 450, bt, 430, true, FcAnchorOffset(c, 450, bt, 8), 8, 8);
+        PidPrime(st, st.out, at, bt, pf);
+        NEAR(st.out, 80.0f);
+        PidState flat = st, dip = st;
+        PidStep(flat, at, bt, 1.0f, pf);
+        PidStep(dip, at, bt, 1.0f, pf);
+        PidTerms onPlan = PidStep(flat, at, bt + 1 / 6.0f, 1.0f, pf);  // rising at the plan's rate
+        PidTerms slow   = PidStep(dip, at, bt, 1.0f, pf);              // stalled: the crack
+        CHECK(slow.d > onPlan.d);
+        CHECK(slow.heat > onPlan.heat);
+        PidConfig noD = pf;
+        noD.fcTd      = 0;
+        PidState z    = st;
+        NEAR(PidStep(z, at, bt, 1.0f, noD).d, 0.0f);
+        PidAim pre = CardputerAim(c, 440, bt, 430, false, 0, 8, 8);  // before F: td (0 by default) applies
+        PidState y = st;
+        NEAR(PidStep(y, pre, bt, 1.0f, pf).d, 0.0f);
+    }
+
+
+    // --- curves from first crack and drop: through both points, no corners, development at one speed
+    {
+        Curve c;
+        c.pts = {{0, 50, PointTag::Charge}, {260, 150, PointTag::Dry}, {365, 185, PointTag::None},
+                 {425, 200.1f, PointTag::FCs}, {470, 208.5f, PointTag::Drop}};  // Syrina D: Dry and free points ignored
+        c.build();
+        CHECK(c.valid());
+        CHECK(c.endTime() == 470);
+        NEAR(c.at(0), 50.0f);
+        NEAR(c.at(425), 200.1f);
+        NEAR(c.at(470), 208.5f);
+        auto ror = [&](int a, int b) { return (c.at(b) - c.at(a)) / (b - a) * 60; };
+        float worst = 0;
+        for (int t = 10; t + 10 <= 470; t++) worst = std::max(worst, std::fabs(ror(t, t + 10) - ror(t - 10, t)));
+        CHECK(worst < 1.5f);  // the old builder stepped -4.5 degC/min at first crack
+        NEAR(ror(425, 470), 8.4f / 45 * 60);  // development: one speed
+        NEAR(ror(440, 450), 8.4f / 45 * 60);
+        CHECK(std::fabs(ror(415, 425) - ror(425, 435)) < 0.3f);  // no step at first crack
+        DevPlan p = c.devPlan();
+        CHECK(p.valid && p.dur == 45 && p.dropT == 470);
+        NEAR(p.rise, 8.4f);
+        NEAR(p.speed * 60, 11.2f);
+        NEAR(p.dropBT, 208.5f);
+    }
+    {  // a slow development: the rate of rise falls into first crack over the last minute, no corner either
+        Curve c;
+        c.pts = {{0, 50, PointTag::Charge}, {450, 199, PointTag::FCs}, {600, 210, PointTag::Drop}};  // 4.4 degC/min
+        c.build();
+        NEAR(c.at(450), 199.0f);
+        NEAR(c.at(600), 210.0f);
+        auto ror = [&](int a, int b) { return (c.at(b) - c.at(a)) / (b - a) * 60; };
+        float worst = 0, up = 0;
+        for (int t = 10; t + 10 <= 600; t++) {
+            worst = std::max(worst, std::fabs(ror(t, t + 10) - ror(t - 10, t)));
+            up    = std::max(up, ror(t, t + 10) - ror(t - 10, t));
+        }
+        CHECK(worst < 1.5f);
+        CHECK(up < 0.3f);  // never rises
+    }
+    {  // development from F: the curve's speed from where the beans cracked; drop at the time or the temperature
+        Curve c;
+        c.pts = {{0, 50, PointTag::Charge}, {425, 200, PointTag::FCs}, {470, 210, PointTag::Drop}};  // 45 s at 13.3/min
+        c.build();
+        DevPlan plan = c.devPlan();
+        DevTrack late = DevStart(c, 440, 203.0f);  // 15 s late, 3 over the curve
+        CHECK(late.active);
+        NEAR(late.target(440), 203.0f);
+        NEAR(late.target(455), 203.0f + 10.0f / 45 * 15);
+        NEAR(late.rate(450) * 60, 13.33f);
+        CHECK(DevDropDue(late, plan, 470, 207.0f) == DropWhy::None);
+        CHECK(DevDropDue(late, plan, 485, 209.0f) == DropWhy::Time);  // 45 s after F
+        CHECK(DevDropDue(late, plan, 470, 210.0f) == DropWhy::Temp);  // 210 first
+        CHECK(DevDropDue(DevTrack(), plan, 300, 209.9f) == DropWhy::None);  // before F: the drop temperature
+        CHECK(DevDropDue(DevTrack(), plan, 300, 210.0f) == DropWhy::Temp);
+        CHECK(DevDropDue(DevTrack(), plan, 470, 205.0f) == DropWhy::Time);  // or the curve's drop time
+        CHECK(!DevStart(c, 425, NAN).active);
+        Curve none;  // a drop point but no first crack: no plan
+        none.pts = {{0, 50, PointTag::Charge}, {600, 210, PointTag::Drop}};
+        none.build();
+        CHECK(none.valid());
+        NEAR(none.at(600), 210.0f);
+        CHECK(!DevStart(none, 425, 200).active);
+        CHECK(DevDropDue(DevStart(none, 425, 200), none.devPlan(), 600, 260) == DropWhy::None);
+    }
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

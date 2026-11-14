@@ -47,7 +47,7 @@ float FeedForwardHeat(float sv, float svRate, const PlantModel& m)
 {
     if (std::isnan(sv) || m.gain <= 0 || m.rate <= 0) return 0;
     float rate = std::isnan(svRate) ? 0 : svRate;
-    float air  = sv + rate / m.rate;  // the air temperature at which the beans rise at `rate`
+    float air  = sv + (rate - m.selfHeat(sv)) / m.rate;  // the air temperature at which the beans rise at `rate`
     return std::max(0.0f, std::min(100.0f, (air - m.ambient) / m.gain));
 }
 
@@ -93,7 +93,8 @@ PidTerms PidStep(PidState& s, const PidAim& a, float bt, float dt, const PidConf
     float e = a.target - bt;
     r.ff    = c.feedforward ? FeedForwardHeat(a.ffTemp, a.ffRate, c.model) : 0;
     r.p     = c.kp * e;
-    r.d     = -c.kp * c.td * s.dBt;
+    float td = a.afterF ? c.fcTd : c.td;
+    r.d      = c.kp * td * ((std::isnan(a.rate) ? 0 : a.rate) - s.dBt);
     float iNew = s.integ;
     if (c.ti > 0) iNew = clampf(s.integ + c.kp / c.ti * e * dt, -c.iLimit, c.iLimit);
     float raw  = r.ff + r.p + iNew + r.d;
@@ -119,4 +120,62 @@ float CurveRate(const Curve& c, int t)
     return (vb - va) / (float)(b - a);
 }
 
+float FcAnchorOffset(const Curve& c, int tF, float btAtF, float cap)
+{
+    float v = c.at(tF);
+    if (std::isnan(v) || std::isnan(btAtF)) return 0;
+    return clampf(btAtF - v, -cap, cap);
+}
+
+PidAim CardputerAim(const Curve& c, int t, float bt, int windowStart, bool fcMarked, float fcOffset, int lookahead,
+                    float cap)
+{
+    int la = std::max(0, std::min(20, lookahead));
+    PidAim a;
+    a.ffRate = CurveRate(c, t + la);
+    a.rate   = CurveRate(c, t);
+    if (fcMarked) {
+        a.afterF = true;
+        a.target = c.at(t) + fcOffset;
+        a.ffTemp = c.at(t + la) + fcOffset;
+        return a;
+    }
+    a.target = c.at(t);
+    a.ffTemp = c.at(t + la);
+    (void)windowStart;  // no hold before F any more: it let BT run 2 degC ahead into the crack (2026-11-14)
+    (void)bt;
+    (void)cap;
+    return a;
+}
+
+DevTrack DevStart(const Curve& c, int tF, float btF)
+{
+    DevTrack d;
+    d.plan = c.devPlan();
+    if (!d.plan.valid || std::isnan(btF)) return d;
+    d.active = true;
+    d.tF     = tF;
+    d.btF    = btF;
+    return d;
+}
+
+float DevTrack::target(int t) const
+{
+    return btF + plan.speed * (float)std::max(0, t - tF);
+}
+
+float DevTrack::rate(int) const
+{
+    return plan.speed;
+}
+
+DropWhy DevDropDue(const DevTrack& d, const DevPlan& plan, int t, float bt)
+{
+    if (std::isnan(bt) || !plan.valid) return DropWhy::None;
+    if (bt >= plan.dropBT) return DropWhy::Temp;
+    if (d.active) return t - d.tF >= d.plan.dur ? DropWhy::Time : DropWhy::None;
+    return plan.dropT > 0 && t >= plan.dropT ? DropWhy::Time : DropWhy::None;  // no F: the curve's drop time
+}
+
 }  // namespace roast
+

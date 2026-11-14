@@ -9,4 +9,14 @@ APP=$ROOT/main/apps/app_roast
 g++ -std=gnu++17 -O1 -Wall -I"$ROOT/main" -I"$ROOT/tools/preview/stubs" -I"$CJSON" \
     "$ROOT/tools/pid/pid_compare.cpp" "$APP/roast_control.cpp" "$APP/roast_curve.cpp" "$CJSON/cJSON.c" \
     -o "$OUT/pid_compare"
+g++ -std=gnu++17 -O1 -Wall -I"$ROOT/main" -I"$ROOT/tools/preview/stubs" -I"$CJSON" \
+    "$ROOT/tools/pid/fc_crack.cpp" "$APP/roast_control.cpp" "$APP/roast_curve.cpp" "$CJSON/cJSON.c" \
+    -o "$OUT/fc_crack"
+g++ -std=gnu++17 -O1 -Wall -I"$ROOT/main" -I"$ROOT/tools/preview/stubs" -I"$CJSON" \
+    "$ROOT/tools/pid/syrina_1114.cpp" "$APP/roast_control.cpp" "$APP/roast_curve.cpp" "$CJSON/cJSON.c" \
+    -o "$OUT/syrina_1114"
 OUT=$OUT "$OUT/pid_compare" "$@"
+echo
+OUT=$OUT "$OUT/fc_crack" "$ROOT/tools/pid"
+echo
+"$OUT/syrina_1114"
