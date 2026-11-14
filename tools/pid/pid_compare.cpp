@@ -75,20 +75,20 @@ static Result run(Mode m, Plant pl, const char* csv, float floorDelta = 1.0f, fl
     if (f) fprintf(f, "t,bt,curve,heat,ror\n");
     Result r;
     std::deque<float> bts;
-    float heat = 0, last = 0, sq = 0;
+    float heat = 0, last = 0, sq = 0, fcOffset = 0;
     int n = 0;
     for (int t = 0; t <= kDrop; t++) {
         float bt = std::round((pl.bt + ((rand() % 100) - 50) / 2000.0f) * 10) / 10;  // 0.1 degC, like register 4
         int start = FcFloorStart(c.tagTime(PointTag::FCs), t >= kFc ? kFc : -1, sc.floorLead);
         bool in   = start >= 0 && t >= start;
-        if (m == Cardputer) {
-            SvConfig now = sc;
-            now.lookahead = 0;
-            PidAim a;
-            a.target = ComputeSv(c, t, bt, in, now).sv;
-            a.ffTemp = c.at(t + sc.lookahead);
-            a.ffRate = CurveRate(c, t + sc.lookahead);
+        if (m == Cardputer) {  // as the firmware does it (app_roast.cpp pidAim / fcAnchor)
+            int start = FcFloorStart(c.tagTime(PointTag::FCs), t >= kFc ? kFc : -1, sc.floorLead);
             if (t == 0) PidReset(ps, 0);
+            if (t == kFc) {
+                fcOffset = FcAnchorOffset(c, t, bt, sc.floorCap);
+                PidPrime(ps, ps.out, CardputerAim(c, t, bt, start, true, fcOffset, sc.lookahead, sc.floorCap), bt, pc);
+            }
+            PidAim a = CardputerAim(c, t, bt, start, t >= kFc, fcOffset, sc.lookahead, sc.floorCap);
             heat = PidStep(ps, a, bt, 1.0f, pc).heat;
         } else {
             heat = rp.step(ComputeSv(c, t, bt, in, sc).sv, bt);
@@ -168,10 +168,9 @@ int main(int argc, char** argv)
         {"roaster PID, as roasted (L0, no floor)", RoasterAsRoasted, fit, "roaster_asroasted.csv", 1, 8},
         {"roaster PID, L8 + floor +1 cap 8", RoasterLookFloor, fit, "roaster_floor.csv", 1, 8},
         {"roaster PID, L8 + floor +1 cap 3", RoasterLookFloor, fit, "roaster_floor3.csv", 1, 3},
-        {"Cardputer PID, floor +1 cap 8", Cardputer, fit, "cardputer_d1.csv", 1, 8},
-        {"Cardputer PID, floor = hold (default)", Cardputer, fit, "cardputer.csv", 0, 8},
+                {"Cardputer PID (hold, anchor at F, D after F)", Cardputer, fit, "cardputer.csv", 0, 8},
         {"roaster PID, L8 + floor +1 cap 3, model off", RoasterLookFloor, off, "roaster_floor3_off.csv", 1, 3},
-        {"Cardputer PID, hold, model off", Cardputer, off, "cardputer_off.csv", 0, 8},
+        {"Cardputer PID, model off", Cardputer, off, "cardputer_off.csv", 0, 8},
     };
     printf("%-44s %6s %6s %7s %7s %7s %7s %7s %7s %6s\n", "batch A (FC 8:01, drop 8:56)", "rms", "worst", "BT FC",
            "BT drop", "RoR+30", "RoRmin", "heatFC", "heatmin", "moves");

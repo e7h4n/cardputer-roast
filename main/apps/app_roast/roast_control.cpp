@@ -93,7 +93,8 @@ PidTerms PidStep(PidState& s, const PidAim& a, float bt, float dt, const PidConf
     float e = a.target - bt;
     r.ff    = c.feedforward ? FeedForwardHeat(a.ffTemp, a.ffRate, c.model) : 0;
     r.p     = c.kp * e;
-    r.d     = -c.kp * c.td * s.dBt;
+    float td = a.afterF ? c.fcTd : c.td;
+    r.d      = c.kp * td * ((std::isnan(a.rate) ? 0 : a.rate) - s.dBt);
     float iNew = s.integ;
     if (c.ti > 0) iNew = clampf(s.integ + c.kp / c.ti * e * dt, -c.iLimit, c.iLimit);
     float raw  = r.ff + r.p + iNew + r.d;
@@ -119,4 +120,34 @@ float CurveRate(const Curve& c, int t)
     return (vb - va) / (float)(b - a);
 }
 
+float FcAnchorOffset(const Curve& c, int tF, float btAtF, float cap)
+{
+    float v = c.at(tF);
+    if (std::isnan(v) || std::isnan(btAtF)) return 0;
+    return clampf(btAtF - v, -cap, cap);
+}
+
+PidAim CardputerAim(const Curve& c, int t, float bt, int windowStart, bool fcMarked, float fcOffset, int lookahead,
+                    float cap)
+{
+    int la = std::max(0, std::min(20, lookahead));
+    PidAim a;
+    a.ffRate = CurveRate(c, t + la);
+    a.rate   = CurveRate(c, t);
+    if (fcMarked) {
+        a.afterF = true;
+        a.target = c.at(t) + fcOffset;
+        a.ffTemp = c.at(t + la) + fcOffset;
+        return a;
+    }
+    a.target = c.at(t);
+    a.ffTemp = c.at(t + la);
+    if (windowStart >= 0 && t >= windowStart && !std::isnan(bt) && bt > a.target) {  // hold until F
+        a.target  = std::min(bt, a.target + cap);
+        a.floored = true;
+    }
+    return a;
+}
+
 }  // namespace roast
+

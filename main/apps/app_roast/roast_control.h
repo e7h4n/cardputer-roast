@@ -58,11 +58,14 @@ struct PlantModel {
     float rate    = 0.0175f;  // 1/s
 };
 
-/// Cardputer PID, ISA form on the measurement: heat = ff + Kp (e + integral(e dt) / Ti) - Kp Td dBT/dt, e = SV - BT.
+/// Cardputer PID: heat = ff + Kp (e + integral(e dt) / Ti + Td (rate - dBT/dt)), e = target - BT. D acts on the
+/// rate-of-rise shortfall against the plan (the curve's slope, which has no steps), not on the error's derivative, so
+/// the F re-anchor causes no kick; with rate 0 it is the usual derivative on the measurement.
 struct PidConfig {
     float kp         = 1.5f;  // % heat per degC of error
     float ti         = 60;    // s, integral time; 0 = no integral
-    float td         = 0;     // s, derivative time (on BT, filtered over 5 s)
+    float td         = 0;     // s, derivative time before the F mark (on the rate-of-rise shortfall, BT slope 5 s)
+    float fcTd       = 10;    // s, derivative time from the F mark on: answers the crack's rate-of-rise dip at once
     bool feedforward = true;  // add the heat the model needs to follow the curve
     PlantModel model;
     float maxStep  = 3.0f;    // % per second, heater slew limit
@@ -95,7 +98,9 @@ struct PidAim {
     float target = NAN;  // degC: ComputeSv with lookahead 0
     float ffTemp = NAN;  // degC: curve(t + lookahead)
     float ffRate = 0;    // degC/s: slope there
+    float rate   = 0;    // degC/s: the plan's slope now (D acts on rate - BT rate: the rate-of-rise shortfall)
     bool floored = false;  // first-crack floor holding (BT above the curve)
+    bool afterF  = false;  // from the F mark on: D uses fcTd
 };
 
 /// Fresh start at charge: no integral yet; the output ramps up from `heatNow` at the slew limit.
@@ -109,6 +114,20 @@ PidTerms PidStep(PidState& s, const PidAim& a, float bt, float dt, const PidConf
 
 /// Slope of the curve at t (degC/s), central difference over +-5 s.
 float CurveRate(const Curve& c, int t);
+
+/// First crack, Cardputer PID: from the F mark on, the rest of the curve is followed shifted by this much
+/// (BT - curve at F, within +-cap: the "floor cap" rule), so the plan's rate of rise is followed from where the beans
+/// are. Holding the curve's absolute temperature through the crack either cut heat (BT ahead of the line) or reacted
+/// only once BT had fallen back onto the line, by then the rate of rise had already collapsed.
+float FcAnchorOffset(const Curve& c, int tF, float btAtF, float cap);
+
+/// What the Cardputer PID aims at, at curve second t:
+///  - before the first-crack window: the curve now; feedforward from the curve `lookahead` s ahead;
+///  - in the window before F (from the curve's FC time - 20 s): hold, BT above the curve counts as on it, up to
+///    curve + cap (beyond that the PI cuts, as BT is running away);
+///  - from F on (`fcMarked`): the curve shifted by `fcOffset`, target and feedforward alike.
+PidAim CardputerAim(const Curve& c, int t, float bt, int windowStart, bool fcMarked, float fcOffset, int lookahead,
+                    float cap);
 
 /// Heater output (%) to hold when switching to manual: mean of the samples in (now - window, now]; `fallback`
 /// (the current reading) when there are none.

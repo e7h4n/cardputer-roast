@@ -594,6 +594,9 @@ void AppRoast::renderDash()
         if (_hasCurve) text(4, 45, signed1(bt - tgt) + "° vs curve", F11(), DIM);
     } else if (_hasCurve && _svFloored) {  // first-crack floor: SV held at BT + delta, above the curve
         text(4, 32, _cardPid ? std::string("FC hold: heat on plan") : "FC floor SV " + fmt1(_lastSv), F11(), CURVE);
+    } else if (_hasCurve && _cardPid && _session.markT(Mark::FCs) >= 0) {  // after F: the plan's RoR from where BT was
+        text(4, 32, "after F: curve " + signed1(_fcOffset) + "°", F11(), CURVE);
+        text(4, 45, signed1(bt - _lastSv) + "°", F14(), INK);
     } else if (_hasCurve) {
         text(4, 32, "target " + fmt1(tgt), F11(), DIM);
         text(4, 45, signed1(bt - tgt) + "°", F14(), INK);

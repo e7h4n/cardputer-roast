@@ -38,7 +38,8 @@ struct RoastRules {
     bool cardPid     = true;  // the Cardputer computes the heater output; off: the roaster's own PID follows SV
     float pidKp      = 1.5f;  // % heat per degC, 0.1..10 (roast_control.h PidConfig)
     int pidTi        = 60;    // integral time, s (0: no integral)
-    int pidTd        = 0;     // derivative time, s
+    int pidTd        = 0;     // derivative time before F, s
+    int pidFcTd      = 10;    // derivative time from F on, s (rate-of-rise shortfall; tools/pid fc_crack)
     bool pidFF       = true;  // model feedforward
     void load();
     void save() const;
@@ -128,6 +129,8 @@ private:
     int _lastHeatRaw   = -1;
     uint32_t _pidMs    = 0;
     uint32_t _heatSentMs = 0;
+    float _fcOffset      = 0;   // Cardputer PID: curve shift from the F mark on (FcAnchorOffset)
+    void fcAnchor(bool marked);
     void pidTick(const roast::PidAim& aim);
     roast::PidAim pidAim(int t) const;
     roast::SvResult svAt(int t) const;  // what to write as SV at curve second t (lookahead, first-crack floor)

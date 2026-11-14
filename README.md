@@ -200,15 +200,26 @@ the roaster's own PID off (register 15 = 0) and then writes the heater output (r
   PID, the model reproduces batch A within 1.7 °C RMS. It is one model for both batch sizes; the integral covers
   the rest. A rule of thumb from it: 1 % heat ≈ 2.4 °C/min of RoR.
 - **PI(D)**, measured against the curve *now*:
-  - Defaults: P 1.5 %/°C, I time 60 s, D time 0 (BT moves in 0.1 °C steps about once a second, so D adds mostly
-    noise).
+  - Defaults: P 1.5 %/°C, I time 60 s, D time 0 before F and 10 s from F on (*D after F*).
+  - D acts on the rate-of-rise shortfall: the curve's slope now minus BT's slope (5 s filter). The curve's slope
+    has no steps, so nothing kicks when the target shifts at F. Before F it stays off: on batch A it doubled the
+    heater's movement and the error.
   - The heater moves at most 3 %/s.
   - Anti-windup: the integral stops while the output is pinned or slew-limited, and is capped at ±30 %.
   - At charge the controller starts from 0 % with no integral. When P hands back from manual, it picks up the
     heat being held (bumpless).
-- **First crack: hold.** In the first-crack window (from the curve's FC time − 20 s, or the F mark if earlier),
-  BT above the curve counts as no error. The integral stops and the heater stays on the plan: no cut while the
-  crack absorbs heat, and no push upwards either.
+- **First crack.**
+  - *Before F*, from the curve's FC time − 20 s: hold. BT above the curve (up to *floor cap*) counts as no error,
+    so the heater is not cut while the beans run ahead.
+  - *At F*: the rest of the curve shifts by BT − curve (within ± *floor cap*). From then on the plan's rate of rise
+    is followed from where the beans are, and the controller is re-primed so the heater does not jump. Clearing F
+    undoes the shift.
+  - *After F*: D (10 s) adds heat as soon as the rate of rise falls behind the plan, instead of waiting for BT to
+    fall back onto the line. In `tools/pid` (`fc_crack`, Syrina D 100g with a crack absorbing up to ~5–7 °C/min of
+    RoR), the mean |RoR − plan| from F to the drop went from 1.00 / 1.52 / 1.08 °C/min (normal crack, strong
+    crack, beans ahead of the curve) to 0.60 / 0.94 / 0.82.
+  - With the heater already at 100 % no controller can lift the rate of rise. That has to be planned in the curve;
+    the "heater pinned" alert shows it.
 - **Stale reading:** if BT is more than 3 s old, the output is held.
 - **Drop:** cancels any heater write still queued, so it cannot land after the drop. In manual mode the roaster
   zeroes the heater at drop (seen in R0014).
@@ -226,9 +237,9 @@ a curve of 206.4 °C):
 |---|---|---|---|
 | Roaster PID as roasted (no lookahead, no floor) | 3.4 °C | 207.0 | 4.3 |
 | Roaster PID, lookahead 8 s + FC floor +1 °C | 2.5 °C | 210.6 | 7.9 |
-| **Cardputer PID** | **0.75 °C** | **207.2** | 5.6 |
+| **Cardputer PID** | **0.74 °C** | **206.5** | 4.4 |
 | Roaster PID, lookahead + floor, model 15 % off, dead time 7 s | 3.5 °C | 210.4 | 5.7 |
-| Cardputer PID, model 15 % off, dead time 7 s | 1.5 °C | 209.1 | 5.9 |
+| Cardputer PID, model 15 % off, dead time 7 s | 1.5 °C | 207.5 | 4.3 |
 
 The roaster's own PID (registers 20–23: cycle 1000 ms, P 6, I 1, D 8) fits as heat = 0.50 e + 0.036 ∫e dt + 12 %
 (R² 0.995–0.998 on all three roasts): an integral time of ~14 s against a ~57 s bean time constant, so it reacts

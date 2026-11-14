@@ -56,6 +56,7 @@ void RoastRules::load()
     pidKp       = std::max(1, std::min(100, (int)s.GetInt("pidKp10", (int)lroundf(pidKp * 10)))) / 10.0f;
     pidTi       = std::max(0, std::min(600, (int)s.GetInt("pidTi", pidTi)));
     pidTd       = std::max(0, std::min(30, (int)s.GetInt("pidTd", pidTd)));
+    pidFcTd     = std::max(0, std::min(30, (int)s.GetInt("pidFcTd", pidFcTd)));
     pidFF       = s.GetInt("pidFF", pidFF ? 1 : 0) != 0;
 }
 
@@ -84,6 +85,7 @@ void RoastRules::save() const
     s.SetInt("pidKp10", (int)lroundf(pidKp * 10));
     s.SetInt("pidTi", pidTi);
     s.SetInt("pidTd", pidTd);
+    s.SetInt("pidFcTd", pidFcTd);
     s.SetInt("pidFF", pidFF ? 1 : 0);
 }
 
@@ -352,6 +354,7 @@ void AppRoast::charge()
         _cardPid       = true;
         _lastTargetRaw = t0;
         PidReset(_pid, 0);
+        _fcOffset      = 0;
         _lastHeatRaw   = -1;
         _pidMs         = 0;
     } else if (_hasCurve) {
@@ -557,11 +560,15 @@ void AppRoast::toggleMark(Mark m)
         _session.clearMark(m);
         _markMs[(int)m] = -1;
         toast(std::string("Cleared ") + MarkName(m), ui::WARN);
-        if (m == Mark::FCs) _heatDropWarned = _rorWarned = false;
+        if (m == Mark::FCs) {
+            _heatDropWarned = _rorWarned = false;
+            fcAnchor(false);
+        }
         return;
     }
     _session.setMark(m, t, bt);
     _markMs[(int)m] = (int32_t)(GetHAL().millis() - _chargeMs);
+    if (m == Mark::FCs) fcAnchor(true);
     char b[48];
     snprintf(b, sizeof(b), "%s %s · %.1f°", MarkName(m), FormatMmSs(t).c_str(), bt);
     toast(b, m == Mark::Dry ? ui::DRY : (m == Mark::FCs ? ui::FC : ui::FCE));
@@ -598,6 +605,7 @@ PidConfig AppRoast::pidConfig() const
     c.kp          = _rules.pidKp;
     c.ti          = (float)_rules.pidTi;
     c.td          = (float)_rules.pidTd;
+    c.fcTd        = (float)_rules.pidFcTd;
     c.feedforward = _rules.pidFF;
     return c;
 }
@@ -608,19 +616,28 @@ PidConfig AppRoast::pidConfig() const
 // roaster PID only. With +1 the integral kept pushing BT up and the drop came 4-5 degC over the curve (tools/pid).
 PidAim AppRoast::pidAim(int t) const
 {
-    SvConfig c = svConfig();
-    c.lookahead  = 0;
-    c.floorDelta = 0;  // floor = hold: BT above the curve gives no error, so the PI neither cuts nor pushes
-    int start   = FcFloorStart(_curve.tagTime(PointTag::FCs), _session.markT(Mark::FCs), c.floorLead);
-    bool in     = _phase == Phase::Roasting && start >= 0 && t >= start;
-    float bt    = _snap.has(4) ? _snap.bt() : NAN;
-    PidAim a;
-    SvResult r = ComputeSv(_curve, t, bt, in, c);
-    a.target   = r.sv;
-    a.floored  = r.floored;
-    a.ffTemp = _curve.at(t + _rules.svLookahead);
-    a.ffRate = CurveRate(_curve, t + _rules.svLookahead);
-    return a;
+    SvConfig c   = svConfig();
+    int fcT      = _session.markT(Mark::FCs);
+    int start    = FcFloorStart(_curve.tagTime(PointTag::FCs), fcT, c.floorLead);
+    bool roast   = _phase == Phase::Roasting;
+    float bt     = _snap.has(4) ? _snap.bt() : NAN;
+    return CardputerAim(_curve, t, bt, roast ? start : -1, roast && fcT >= 0, _fcOffset, c.lookahead, c.floorCap);
+}
+
+// F set or cleared with the Cardputer PID: from F on the rest of the curve is followed shifted to where the beans are
+// (roast_control.h CardputerAim). Re-primed so the heater does not jump at the switch.
+void AppRoast::fcAnchor(bool marked)
+{
+    if (!_cardPid || !_hasCurve || _phase != Phase::Roasting) return;
+    float bt  = _snap.has(4) ? _snap.bt() : NAN;
+    _fcOffset = marked ? FcAnchorOffset(_curve, curveT(), bt, _rules.floorCap) : 0;
+    if (!_manual) PidPrime(_pid, _pid.out, pidAim(curveT()), bt, pidConfig());
+    char b[64];
+    if (marked)
+        snprintf(b, sizeof(b), "FC anchor: curve %+.1f from here (BT %.1f)", _fcOffset, bt);
+    else
+        snprintf(b, sizeof(b), "FC anchor cleared");
+    _session.addAction(roastT(), b);
 }
 
 // Cardputer PID, once a roast second: heater output from the curve and BT.
@@ -1604,6 +1621,7 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     rowF("P", &_rules.pidKp, nullptr, 0.1f, 10, 0.1f, "%/°");
     rowI("I time", &_rules.pidTi, nullptr, 0, 600, 5, " s");
     rowI("D time", &_rules.pidTd, nullptr, 0, 30, 1, " s");
+    rowI("D after F", &_rules.pidFcTd, nullptr, 0, 30, 1, " s");
     RuleRow ffRow;
     ffRow.label  = "feedforward";
     ffRow.toggle = &_rules.pidFF;

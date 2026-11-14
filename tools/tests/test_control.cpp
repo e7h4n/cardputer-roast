@@ -263,6 +263,61 @@ int main()
         CHECK(errNo > err);
     }
 
+
+    // --- first crack, Cardputer PID: hold until F, then the curve shifted to where the beans are
+    {
+        Curve c = line();  // 100 + t/6
+        int win = 430;
+        PidAim a = CardputerAim(c, 300, 140.0f, win, false, 0, 8, 8);  // before the window: the curve now
+        NEAR(a.target, c.at(300));
+        NEAR(a.ffTemp, c.at(308));
+        NEAR(a.rate, 1 / 6.0f);
+        CHECK(!a.floored && !a.afterF);
+        a = CardputerAim(c, 440, c.at(440) + 2, win, false, 0, 8, 8);  // window, BT 2 above: hold (no error)
+        NEAR(a.target, c.at(440) + 2);
+        CHECK(a.floored);
+        a = CardputerAim(c, 440, c.at(440) + 12, win, false, 0, 8, 8);  // runaway: held at most curve + cap
+        NEAR(a.target, c.at(440) + 8);
+        a = CardputerAim(c, 440, c.at(440) - 2, win, false, 0, 8, 8);  // below: the curve
+        NEAR(a.target, c.at(440));
+        CHECK(!a.floored);
+        float off = FcAnchorOffset(c, 450, c.at(450) + 2.5f, 8);  // F with BT 2.5 above the curve
+        NEAR(off, 2.5f);
+        NEAR(FcAnchorOffset(c, 450, c.at(450) + 20, 8), 8.0f);    // capped
+        NEAR(FcAnchorOffset(c, 450, c.at(450) - 3, 8), -3.0f);    // late crack: below the curve too
+        NEAR(FcAnchorOffset(c, 450, NAN, 8), 0.0f);
+        a = CardputerAim(c, 470, c.at(470) + 5, win, true, off, 8, 8);  // after F: shifted, no hold
+        NEAR(a.target, c.at(470) + 2.5f);
+        NEAR(a.ffTemp, c.at(478) + 2.5f);
+        CHECK(a.afterF && !a.floored);
+    }
+    {  // re-prime at F keeps the heater where it was (no jump), and D after F answers a rate-of-rise dip
+        Curve c = line();
+        PidConfig pf;
+        pf.maxStep = 100;
+        PidState st;
+        PidAim before = CardputerAim(c, 449, c.at(449) - 1.0f, 430, false, 0, 8, 8);
+        PidPrime(st, 80, before, c.at(449) - 1.0f, pf);
+        float bt  = c.at(450) - 1.0f;
+        PidAim at = CardputerAim(c, 450, bt, 430, true, FcAnchorOffset(c, 450, bt, 8), 8, 8);
+        PidPrime(st, st.out, at, bt, pf);
+        NEAR(st.out, 80.0f);
+        PidState flat = st, dip = st;
+        PidStep(flat, at, bt, 1.0f, pf);
+        PidStep(dip, at, bt, 1.0f, pf);
+        PidTerms onPlan = PidStep(flat, at, bt + 1 / 6.0f, 1.0f, pf);  // rising at the plan's rate
+        PidTerms slow   = PidStep(dip, at, bt, 1.0f, pf);              // stalled: the crack
+        CHECK(slow.d > onPlan.d);
+        CHECK(slow.heat > onPlan.heat);
+        PidConfig noD = pf;
+        noD.fcTd      = 0;
+        PidState z    = st;
+        NEAR(PidStep(z, at, bt, 1.0f, noD).d, 0.0f);
+        PidAim pre = CardputerAim(c, 440, bt, 430, false, 0, 8, 8);  // before F: td (0 by default) applies
+        PidState y = st;
+        NEAR(PidStep(y, pre, bt, 1.0f, pf).d, 0.0f);
+    }
+
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
