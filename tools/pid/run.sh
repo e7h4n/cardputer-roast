@@ -14,4 +14,4 @@ g++ -std=gnu++17 -O1 -Wall -I"$ROOT/main" -I"$ROOT/tools/preview/stubs" -I"$CJSO
     -o "$OUT/fc_crack"
 OUT=$OUT "$OUT/pid_compare" "$@"
 echo
-OUT=$OUT "$OUT/fc_crack"
+OUT=$OUT "$OUT/fc_crack" "$ROOT/tools/pid"

@@ -319,6 +319,79 @@ int main()
         NEAR(PidStep(y, pre, bt, 1.0f, pf).d, 0.0f);
     }
 
+
+    // --- curves from first crack and drop: through both points, no corners, rate of rise never rises after FC
+    {
+        Curve c;
+        c.pts = {{0, 50, PointTag::Charge}, {260, 150, PointTag::Dry}, {365, 185, PointTag::None},
+                 {425, 200.1f, PointTag::FCs}, {540, 213.2f, PointTag::Drop}};  // Syrina D 100g: Dry and free points ignored
+        c.build();
+        CHECK(c.valid());
+        // 115 s for +13.1 would need the rate to crash (11.8 -> 1.9): it falls to 40 % and reaches +13.1 at ~1:35
+        CHECK(c.endTime() > 425 + 80 && c.endTime() < 540);
+        NEAR(c.at(0), 50.0f);
+        NEAR(c.at(425), 200.1f);
+        NEAR(c.at(c.endTime()), 213.2f);
+        auto ror = [&](int a, int b) { return (c.at(b) - c.at(a)) / (b - a) * 60; };
+        float worst = 0, rise = 0;
+        for (int t = 10; t + 10 <= c.endTime(); t++) worst = std::max(worst, std::fabs(ror(t, t + 10) - ror(t - 10, t)));
+        for (int t = 435; t + 10 <= c.endTime(); t++) rise = std::max(rise, ror(t, t + 10) - ror(t - 10, t));
+        CHECK(worst < 1.5f);  // the old builder stepped -4.5 degC/min at first crack
+        CHECK(rise <= 0.01f);
+        CHECK(std::fabs(ror(415, 425) - ror(425, 435)) < 0.6f);  // no step at first crack
+        DevPlan p = c.devPlan();
+        CHECK(p.valid && p.dur == 115);
+        NEAR(p.rise, 13.1f);
+        NEAR(p.dropBT, 213.2f);
+    }
+    {  // a development that would need a rising rate stays flat and ends below the drop temperature
+        Curve c;
+        c.pts = {{0, 50, PointTag::Charge}, {450, 200, PointTag::FCs}, {495, 210, PointTag::Drop}};
+        c.build();
+        NEAR(c.at(450), 200.0f);
+        CHECK(c.at(495) < 210.0f);
+        float r0 = (c.at(455) - c.at(450)) / 5 * 60, r1 = (c.at(495) - c.at(490)) / 5 * 60;
+        CHECK(std::fabs(r0 - r1) < 0.2f);
+        // and one that would fall below 1 degC/min reaches the drop temperature early and holds it
+        DevShape d = DevCurve(12 / 60.0, 120, 6);  // a crash would be needed: falls only to 40 % and arrives early
+        CHECK(d.full && d.reach < 120);
+        NEAR((float)(d.r1 * 60), 4.8f);
+        NEAR((float)d.at(d.reach), 6.0f);
+        NEAR((float)d.at(120), 6.0f);
+        CHECK(d.at(120, true) > 6.5);  // extended: keeps rising at r1
+        DevShape f = DevCurve(9 / 60.0, 45, 10);  // needs 13.3 on average from 9: flat at 9
+        CHECK(!f.full);
+        NEAR((float)f.at(45), 6.75f);
+    }
+    {  // development after F, from where the beans cracked; drop at the first limit
+        Curve c;
+        c.pts = {{0, 50, PointTag::Charge}, {425, 200, PointTag::FCs}, {470, 210, PointTag::Drop}};  // 45 s, +10, 210
+        c.build();
+        DevPlan plan = c.devPlan();
+        DevTrack late = DevStart(c, 440, 203.0f);  // 15 s late, 3 degrees over the curve
+        CHECK(late.active);
+        NEAR(late.target(440), 203.0f);
+        CHECK(late.rate(441) <= late.shape.r0 + 1e-6);  // never rises
+        CHECK(DevDropDue(late, plan, 470, 207.0f) == DropWhy::None);
+        CHECK(DevDropDue(late, plan, 485, 207.0f) == DropWhy::Time);   // 45 s after F
+        CHECK(DevDropDue(late, plan, 470, 213.0f) == DropWhy::Rise);   // +10 since F
+        DevTrack hot = DevStart(c, 425, 205.0f);  // cracked 5 over: aims at 210 (not +10) at 45 s
+        CHECK(DevDropDue(hot, plan, 440, 210.0f) == DropWhy::Temp);
+        CHECK(std::fabs(hot.target(425 + (int)std::lround(hot.shape.reach)) - 210.0f) < 0.2f);
+        CHECK(hot.target(480) > 210.0f);  // and keeps rising, so BT crosses it
+        CHECK(DevDropDue(DevTrack(), plan, 300, 209.9f) == DropWhy::None);  // before F: the drop temperature
+        CHECK(DevDropDue(DevTrack(), plan, 300, 210.0f) == DropWhy::Temp);
+        CHECK(DevDropDue(DevTrack(), plan, 470, 205.0f) == DropWhy::Time);  // or the curve's drop time
+        CHECK(!DevStart(c, 425, NAN).active);
+        Curve none;  // a drop point but no first crack: no plan
+        none.pts = {{0, 50, PointTag::Charge}, {600, 210, PointTag::Drop}};
+        none.build();
+        CHECK(none.valid());
+        NEAR(none.at(600), 210.0f);
+        CHECK(!DevStart(none, 425, 200).active);
+        CHECK(DevDropDue(DevStart(none, 425, 200), none.devPlan(), 600, 260) == DropWhy::None);
+    }
+
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

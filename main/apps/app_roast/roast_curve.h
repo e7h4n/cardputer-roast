@@ -8,6 +8,7 @@
  *   /sdcard/roast/logs/                roast logs written by the app (.csv, .json, .alog)
  */
 #pragma once
+#include <cmath>
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -21,6 +22,30 @@ struct CurvePoint {
     float c     = 0;  // target bean temperature; NAN = mark enabled but temperature not edited (anchor only)
     PointTag tag = PointTag::None;
 };
+
+/// Development plan of a curve: from first crack to drop at most `dur` seconds, at most `rise` degrees, at most
+/// `dropBT`. After the F mark Roast follows it from where the beans actually cracked and drops at the first limit.
+struct DevPlan {
+    bool valid   = false;
+    int dur      = 0;
+    float rise   = 0;
+    float dropBT = NAN;
+    int dropT    = -1;  // the curve's drop time: without an F mark Roast drops here (or at dropBT)
+};
+
+/// Rate of rise from first crack: starts at r0 (degC/s) and falls linearly to r1 at `reach` s, so that the beans rise
+/// `rise` in `dur` s. It never rises (then flat: `full` false, ends below) and never falls below kDevRorFloor of r0
+/// or kDevRorMin (a crash): then it reaches `rise` early, at `reach` < dur, and Roast drops there.
+constexpr double kDevRorMin   = 1.0 / 60;  // degC/s (1 degC/min)
+constexpr double kDevRorFloor = 0.4;       // the development's rate of rise stays >= 40 % of the one at first crack
+struct DevShape {
+    double r0 = 0, r1 = 0, reach = 0, dur = 0, rise = 0;
+    bool full = true;                               // reaches `rise`
+    double at(double s, bool extend = false) const; // degC above the start, s s after first crack; past `reach` it
+                                                    // holds, or with `extend` keeps rising at r1 (so BT crosses it)
+    double rate(double s) const;                    // degC/s (r1 past `reach`)
+};
+DevShape DevCurve(double r0, double dur, double rise);
 
 struct Curve {
     std::string name;
@@ -45,7 +70,8 @@ struct Curve {
     float at(int t) const;
     int tagTime(PointTag tag) const;  // -1 if absent
     float tagTemp(PointTag tag) const;
-    void build();  // keypoints -> table
+    void build();  // keypoints -> table (Charge, FCs, Drop; see roast_curve.cpp)
+    DevPlan devPlan() const;
     void sortPoints();
 };
 

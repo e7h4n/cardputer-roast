@@ -144,54 +144,89 @@ void Curve::sortPoints()
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Curve construction identical to the myERoast curve editor (pages/edit/edit.js, 1.0.18):
-//   new curve = dark-roast preset; TOTAL resizes the table (truncate / extend with the last value);
-//   moving a mark in time does not reshape the curve; INIT temperature blends in with a raised-cosine taper;
-//   every mark temperature edit adds a linear ramp between the neighbouring anchors (_applyTempChangeAt).
-// Edits are applied in the editor's list order: INIT, DRY, FCs, FCe, DROP, then free (untagged) points.
+// Curve construction from two points: first crack (FCs) and drop (DROP), plus the charge temperature (CHARGE,
+// default the preset's). Other tags and untagged points in older files are ignored.
+//  - Charge -> first crack: the vendor's dark-roast preset (a smooth curve, rate of rise falling ~27 -> 10
+//    degC/min), stretched in time so its first crack (480 s) lands on ours and in temperature so it starts at the
+//    charge temperature and passes through ours.
+//  - First crack -> drop: the rate of rise starts where the preset part ends (no step) and falls linearly so that
+//    the beans rise drop - FC degrees in drop - FC seconds. It never rises: when that would need a rising rate it
+//    stays flat (and ends below the drop temperature at the drop time); when it would fall below kDevRorMin it
+//    reaches the drop temperature early and holds it.
+// Without FCs (or DROP) the whole preset is stretched onto the one point there is.
+// Unlike the myERoast app (piecewise-linear corrections between marks, which put a rate-of-rise step at every
+// mark: on Syrina D 100g -4.5 degC/min at first crack), this has no corners.
 // ---------------------------------------------------------------------------------------------------------
 namespace {
-struct Anchor {
-    int idx;
-    double temp;
-};
-
-void apply_temp_change(std::vector<double>& a, int t, double oldT, double newT, std::vector<Anchor> r)
+double presetAt(double tau)
 {
-    int n = (int)a.size();
-    if (t < 0) t = 0;
-    if (t > n - 1) t = n - 1;
-    double s = newT - oldT;
-    if (r.empty()) return;
-    std::vector<Anchor> o = r;
-    std::stable_sort(o.begin(), o.end(), [](const Anchor& x, const Anchor& y) { return x.idx < y.idx; });
-    std::vector<Anchor> u;
-    for (auto& x : o)
-        if (u.empty() || u.back().idx != x.idx) u.push_back(x);
-    int h = -1;
-    for (int i = 0; i < (int)u.size(); i++)
-        if (u[i].idx == t) h = i;
-    if (h < 0) return;
-    int l = 0, c = n - 1;
-    if (h > 0) l = u[h - 1].idx;
-    if (h < (int)u.size() - 1) c = u[h + 1].idx;
-    if (c <= l) return;
-    std::vector<double> f = a;
-    if (t > l)
-        for (int i = l; i <= t; i++) f[i] = a[i] + s * (i - l) / (t - l);
-    if (c > t)
-        for (int i = t; i <= c; i++) f[i] = a[i] + s * (c - i) / (c - t);
-    bool found = false;
-    for (auto& x : r)
-        if (x.idx == t) {
-            x.temp = newT;
-            found = true;
-        }
-    if (!found) r.push_back({t, newT});
-    for (auto& x : r) f[x.idx] = x.temp;
-    a.swap(f);
+    if (tau <= 0) return kPresetDark100[0] / 100.0;
+    int i = (int)tau;
+    if (i >= kPresetDarkLen - 1) return kPresetDark100[kPresetDarkLen - 1] / 100.0;
+    double f = tau - i;
+    return (kPresetDark100[i] * (1 - f) + kPresetDark100[i + 1] * f) / 100.0;
 }
+
+// Preset stretched so that preset time `pT` lands on `t1` and its temperatures run from t0Temp (at 0) to c1 (at t1).
+struct Stretch {
+    double t0Temp, c1, pT, t1, p0, p1;
+    double at(double t) const
+    {
+        double tau = t * pT / t1;
+        double k   = (p1 - p0) != 0 ? (c1 - t0Temp) / (p1 - p0) : 1;
+        return t0Temp + (presetAt(tau) - p0) * k;
+    }
+    double rate(double t) const  // degC/s
+    {
+        return (at(t + 0.5) - at(t - 0.5));
+    }
+};
 }  // namespace
+
+DevShape DevCurve(double r0, double dur, double rise)
+{
+    DevShape d;
+    d.r0 = std::max(0.0, r0);
+    if (dur <= 0 || rise <= 0) {
+        d.r1 = d.r0;
+        d.reach = 0;
+        return d;
+    }
+    double r1    = 2 * rise / dur - d.r0;
+    double floor = std::max(kDevRorMin, kDevRorFloor * d.r0);
+    if (r1 > d.r0) {  // would need a rising rate: hold it; ends below the target at `dur`
+        d.r1    = d.r0;
+        d.reach = dur;
+        d.full  = false;
+    } else if (r1 < floor) {  // would need a crash: fall only to the floor and reach `rise` early
+        d.r1    = std::min(floor, d.r0);
+        d.reach = d.r0 + d.r1 > 0 ? 2 * rise / (d.r0 + d.r1) : dur;
+        if (d.reach > dur) d.reach = dur;
+    } else {
+        d.r1    = r1;
+        d.reach = dur;
+    }
+    d.dur  = dur;
+    d.rise = rise;
+    return d;
+}
+
+double DevShape::at(double s, bool extend) const
+{
+    if (s <= 0 || reach <= 0) return 0;
+    double u = std::min(s, reach);
+    double v = r0 * u + (r1 - r0) * u * u / (2 * reach);
+    if (full) v = std::min(v, rise);
+    if (extend && s > reach) v += r1 * (s - reach);
+    return v;
+}
+
+double DevShape::rate(double s) const
+{
+    if (s < 0) return r0;
+    if (reach <= 0 || s >= reach) return r1;
+    return r0 + (r1 - r0) * s / reach;
+}
 
 void Curve::build()
 {
@@ -199,96 +234,56 @@ void Curve::build()
     sortPoints();
     table.clear();
     if (pts.empty()) return;
-    int total = totalT > 0 ? totalT : pts.back().t;
-    if (total <= 0 || total > 1800) return;
-
-    // marks in the vendor list order (edit.js `s`)
-    const PointTag order[6] = {PointTag::Dry, PointTag::FCs, PointTag::FCe, PointTag::SCs, PointTag::SCe, PointTag::Drop};
-    const int presetT[6]    = {kPresetDark_DRY_t, kPresetDark_FCs_t, kPresetDark_FCe_t,
-                               kPresetDark_SCs_t, kPresetDark_SCe_t, kPresetDark_DROP_t};
-    int markT[6];
-    double markC[6];
-    for (int k = 0; k < 6; k++) {
-        markT[k] = -1;
-        markC[k] = NAN;
-    }
-    std::vector<CurvePoint> freePts;
-    bool hasInit    = false;
-    double initTemp = 0;
+    double charge = kPresetDark100[0] / 100.0;
+    int tF = -1, tD = -1;
+    double cF = NAN, cD = NAN;
     for (auto& p : pts) {
-        if (p.tag == PointTag::Charge || (p.t == 0 && p.tag == PointTag::None)) {
-            if (!std::isnan(p.c)) {
-                hasInit  = true;
-                initTemp = p.c;
-            }
-            continue;
+        if (p.tag == PointTag::Charge && !std::isnan(p.c)) charge = p.c;
+        if (p.tag == PointTag::FCs) {
+            tF = p.t;
+            cF = p.c;
         }
-        bool tagged = false;
-        for (int k = 0; k < 6; k++)
-            if (p.tag == order[k]) {
-                markT[k] = p.t;
-                markC[k] = p.c;
-                tagged   = true;
-            }
-        if (!tagged && !std::isnan(p.c)) freePts.push_back(p);
-    }
-    if (markT[5] < 0) {  // the vendor DROP mark always exists (preset time, clamped to TOTAL)
-        markT[5] = std::min(presetT[5], total);
-        if (!freePts.empty() && freePts.back().t == markT[5]) {
-            markC[5] = freePts.back().c;
-            freePts.pop_back();
+        if (p.tag == PointTag::Drop) {
+            tD = p.t;
+            cD = p.c;
         }
     }
-    for (int k = 0; k < 6; k++)
-        if (markT[k] > total) markT[k] = total;
+    if (tF > 0 && std::isnan(cF)) cF = Stretch{charge, presetAt(kPresetDark_FCs_t), (double)kPresetDark_FCs_t, (double)tF,
+                                               presetAt(0), presetAt(kPresetDark_FCs_t)}.at(tF);
+    if (tD > 0 && std::isnan(cD)) tD = -1;
+    int total = tD > 0 ? tD : (tF > 0 ? tF : -1);
+    if (total <= 0 || total > 1800) return;
+    double p0 = presetAt(0);
+    if (tF > 0) {
+        Stretch pre{charge, cF, (double)kPresetDark_FCs_t, (double)tF, p0, presetAt(kPresetDark_FCs_t)};
+        DevShape d;
+        if (tD > tF) {  // when a limit comes before the drop time (the rate would have to crash), the curve ends there
+            d     = DevCurve(pre.rate(tF), tD - tF, cD - cF);
+            total = std::min(tD, tF + (int)std::ceil(d.reach));
+        }
+        table.resize(total + 1);
+        for (int t = 0; t <= std::min(tF, total); t++) table[t] = (float)pre.at(t);
+        for (int t = tF + 1; t <= total; t++) table[t] = (float)(cF + d.at(t - tF));
+    } else {
+        table.resize(total + 1);  // only a drop point: the whole preset onto it
+        Stretch all{charge, cD, (double)kPresetDark_DROP_t, (double)tD, p0, presetAt(kPresetDark_DROP_t)};
+        for (int t = 0; t <= tD; t++) table[t] = (float)all.at(t);
+    }
+    totalT = total;
+}
 
-    std::vector<double> a(kPresetDarkLen);
-    for (int i = 0; i < kPresetDarkLen; i++) a[i] = kPresetDark100[i] / 100.0;
-    {  // TOTAL: resize (truncate, or extend with the last value)
-        double last = a.back();
-        a.resize(total + 1, last);
-    }
-    auto anchors = [&]() {
-        std::vector<Anchor> r;
-        if (hasInit) r.push_back({0, initTemp});
-        for (int k = 0; k < 6; k++)
-            if (markT[k] >= 0) {
-                int i = std::min(std::max(markT[k], 0), (int)a.size() - 1);
-                r.push_back({i, a[i]});
-            }
-        return r;
-    };
-    if (hasInit) {  // INIT: raised-cosine blend over max(60 s, 20 % of the chart span)
-        double nmin  = total / 60.0;
-        int maxTime  = 60 * (nmin <= 14 ? 14 : (int)std::ceil(nmin + 2));
-        int o        = std::max(60, (int)std::lround(0.2 * maxTime));
-        double first = a[0];
-        for (int h = 0; h < (int)a.size() && h < o; h++) {
-            double m = 0.5 * (1 + std::cos(M_PI * h / o));
-            if (m < 0.01) continue;
-            double v = a[h] + (initTemp - first) * m;
-            a[h]     = v < 0 ? 0 : (v > 300 ? 300 : v);
-        }
-    }
-    for (int k = 0; k < 6; k++) {  // temperature edits in list order; NAN = enabled mark used only as an anchor
-        if (markT[k] < 0 || std::isnan(markC[k])) continue;
-        int i = std::min(markT[k], (int)a.size() - 1);
-        apply_temp_change(a, i, a[i], markC[k], anchors());
-    }
-    std::vector<Anchor> fp;  // free points: added after the marks, then edited
-    for (auto& p : freePts) {
-        int i = std::min(p.t, (int)a.size() - 1);
-        fp.push_back({i, a[i]});
-    }
-    for (size_t j = 0; j < freePts.size(); j++) {
-        auto r = anchors();
-        for (auto& x : fp) r.push_back(x);
-        int i = fp[j].idx;
-        apply_temp_change(a, i, a[i], freePts[j].c, r);
-        fp[j].temp = freePts[j].c;
-    }
-    table.resize(a.size());
-    for (size_t i = 0; i < a.size(); i++) table[i] = (float)a[i];
+DevPlan Curve::devPlan() const
+{
+    DevPlan p;
+    int tF = tagTime(PointTag::FCs), tD = tagTime(PointTag::Drop);
+    float cF = tagTemp(PointTag::FCs), cD = tagTemp(PointTag::Drop);
+    if (readOnly || tF <= 0 || tD <= tF || std::isnan(cF) || std::isnan(cD) || cD <= cF) return p;
+    p.valid  = true;
+    p.dur    = tD - tF;
+    p.rise   = cD - cF;
+    p.dropBT = cD + offset;
+    p.dropT  = tD;
+    return p;
 }
 
 static Curve make_builtin(const char* name, const char* note, int batch, std::vector<CurvePoint> pts)
@@ -306,19 +301,12 @@ static Curve make_builtin(const char* name, const char* note, int batch, std::ve
 std::vector<Curve> BuiltinCurves()
 {
     std::vector<Curve> v;
-    v.push_back(make_builtin("Gotiti 200g Light V3", "Drop 75-85 s after FC at +5-6 C, max 206 C; untested", 200,
-                             {{0, 50, PointTag::Charge},
-                              {285, 150, PointTag::Dry},
-                              {470, 199, PointTag::FCs},
-                              {570, 209, PointTag::Drop}}));
-    v.push_back(make_builtin("Gotiti 200g Pullback", "+4 C in the 40 s after FC, latest drop 9:35; untested", 200,
-                             {{0, 50, PointTag::Charge},
-                              {285, 150, PointTag::Dry},
-                              {470, 200, PointTag::FCs},
-                              {510, 204, PointTag::FCe},
-                              {575, 208, PointTag::Drop}}));
+    v.push_back(make_builtin("Gotiti 200g Light V3", "At most 65 s and +8 C after FC, max 207 C; untested", 200,
+                             {{0, 50, PointTag::Charge}, {470, 199, PointTag::FCs}, {535, 207, PointTag::Drop}}));
+    v.push_back(make_builtin("Gotiti 200g Pullback", "At most 85 s and +11 C after FC, max 211 C; untested", 200,
+                             {{0, 50, PointTag::Charge}, {470, 200, PointTag::FCs}, {555, 211, PointTag::Drop}}));
     v.push_back(make_builtin("Dry run (no beans)", "Low temperature check of PID and manual heat, 3 min", 0,
-                             {{0, 50, PointTag::Charge}, {90, 90, PointTag::Dry}, {120, 100, PointTag::FCe}, {180, 110, PointTag::Drop}}));
+                             {{0, 50, PointTag::Charge}, {120, 100, PointTag::FCs}, {180, 110, PointTag::Drop}}));
     return v;
 }
 

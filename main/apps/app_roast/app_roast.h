@@ -41,6 +41,7 @@ struct RoastRules {
     int pidTd        = 0;     // derivative time before F, s
     int pidFcTd      = 0;     // derivative time from F on, s (rate-of-rise shortfall; off: tools/pid fc_crack)
     bool pidFF       = true;  // model feedforward
+    bool planDrop    = true;  // drop at the curve's development limits (time, rise, temperature), whichever first
     void load();
     void save() const;
 };
@@ -129,7 +130,8 @@ private:
     int _lastHeatRaw   = -1;
     uint32_t _pidMs    = 0;
     uint32_t _heatSentMs = 0;
-    float _fcOffset      = 0;   // Cardputer PID: curve shift from the F mark on (FcAnchorOffset)
+    float _fcOffset      = 0;   // curve shift from the F mark on, for curves without a development plan
+    roast::DevTrack _dev;           // development from the F mark (curve with first crack and drop points)
     void fcAnchor(bool marked);
     void pidTick(const roast::PidAim& aim);
     roast::PidAim pidAim(int t) const;
@@ -169,13 +171,13 @@ private:
     int _heatReps        = 0;
     int _listSel = 0, _listTop = 0;
     int _setSel  = 0;
-    // curve editor: fixed nodes like the phone editor (Start, Dry, FC start, FC end, SC start, SC end, Drop, Total)
+    // curve editor: Start (temperature), first crack and drop (time and temperature); roast_curve.cpp builds the rest
     struct EdRow {
         bool on = false;
         int t   = -1;      // seconds
         float c = NAN;     // NAN = temperature not edited (node only pins the curve)
     };
-    static constexpr int kEdRows = 8;
+    static constexpr int kEdRows = 3;
     EdRow _ed[kEdRows];
     int _edRow = 0, _edCol = 0;  // col 0 enabled, 1 time, 2 temperature
     int _edStage = 0;            // 0 browse, 1 minutes, 2 seconds, 3 temperature

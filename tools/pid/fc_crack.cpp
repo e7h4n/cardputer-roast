@@ -1,8 +1,11 @@
-// First crack on the Syrina D 100g curve (key points only): how the Cardputer PID's RoR behaves after F.
-// From crack onset (BT 200 C) the beans absorb (E > 0) or release (E < 0) E * exp(-s / 40) degC/s. Neither is
-// measured: the literature disputes where roasting turns exothermic, and R0012-R0014 show no heat sink at the crack. F 10 s after onset, drop 45 s
-// after F (the plan for this batch). Uses the firmware's roast_control.cpp; one step per second.
-//   tools/pid/run.sh  (builds and runs both tools)
+// First crack and development on Syrina D 100g, as planned for the competition: first crack 7:05 / 200.1, drop
+// 45 s later at most 208.5 (curve FCs 425/200.1, Drop 470/208.5).
+//   main:  the curve as the myERoast-style builder made it (syrina_myeroast_build.csv, a -4.5 degC/min corner at
+//          first crack), the Cardputer PID holding through the crack, drop by hand at F + 45 s;
+//   new:   the smooth two-point curve, development planned from where the beans cracked, drop at the first limit.
+// The crack starts when BT reaches `onset`; it then absorbs (E > 0) or releases (E < 0) E * exp(-s / 40) degC/s.
+// Neither is measured: the literature disputes where roasting turns exothermic, and R0012-R0014 show no heat sink at
+// the crack. F 2 s after onset (reaction time). One step per second; uses the firmware's roast_curve.cpp and roast_control.cpp.
 #include <apps/app_roast/roast_control.h>
 #include <algorithm>
 #include <cmath>
@@ -15,7 +18,7 @@
 using namespace roast;
 
 struct Plant {
-    float gain = 2.2f, rate = 0.0175f, ambient = 26.0f, endo = 0.08f, lateRate = 1.0f;
+    float gain = 2.2f, rate = 0.0175f, ambient = 26.0f, endo = 0, onset = 200;
     int dead = 5;
     float bt = 25.0f, air = 26.0f;
     int crackAt = -1, t = 0;
@@ -25,124 +28,150 @@ struct Plant {
         hist.push_back(heat);
         float late = hist.size() > (size_t)dead ? hist[hist.size() - 1 - dead] : 0;
         air += (ambient + gain * late - air) * (1 - std::exp(-1.0f));
-        if (crackAt < 0 && bt >= 200) crackAt = t;
+        if (crackAt < 0 && bt >= onset) crackAt = t;
         float sink = crackAt >= 0 ? endo * std::exp(-(t - crackAt) / 40.0f) : 0;
-        bt += (air - bt) * rate * (t >= 380 ? lateRate : 1.0f) - sink;
+        bt += (air - bt) * rate - sink;
         t++;
     }
 };
 
-static Curve syrina()
+static Curve oldCurve(const char* dir)
 {
     Curve c;
-    c.pts    = {{0, 50, PointTag::Charge}, {260, 150, PointTag::Dry}, {365, 185, PointTag::None},
-                {425, 200.1f, PointTag::FCs}, {465, 206.4f, PointTag::None}, {540, 213.2f, PointTag::Drop}};
-    c.totalT = 540;
+    c.pts = {{0, 50, PointTag::Charge}, {425, 200.1f, PointTag::FCs}, {470, 208.5f, PointTag::Drop}};
+    std::string p = std::string(dir) + "/syrina_myeroast_build.csv";
+    FILE* f       = fopen(p.c_str(), "r");
+    char line[64];
+    while (f && fgets(line, sizeof line, f)) {
+        int t;
+        float v;
+        if (sscanf(line, "%d,%f", &t, &v) == 2) c.table.push_back(v);
+    }
+    if (f) fclose(f);
+    return c;
+}
+
+static Curve newCurve()
+{
+    Curve c;
+    c.pts = {{0, 50, PointTag::Charge}, {425, 200.1f, PointTag::FCs}, {470, 208.5f, PointTag::Drop}};
     c.build();
     return c;
 }
 
-enum Mode { Hold, Anchor };
-
 struct Out {
     int f = -1, drop = -1;
-    float ror[4] = {}, plan[4] = {}, rorMin = 1e9f, planMin = 1e9f, btDrop = 0, curveDrop = 0, heatF = 0, heatMin = 1e9f,
-          heatMax = 0, devDrop = 0, rorErr = 0;
-    int rorN = 0;
+    float btF = 0, btDrop = 0, rorMinAfter = 1e9f, flick = 0, err = 0;
+    int n = 0;
+    const char* why = "";
 };
 
-static Out run(Mode m, Plant pl, const char* csv, float td)
+static Out run(bool isNew, Plant pl, const Curve& c)
 {
     srand(1);
-    Curve c = syrina();
-    SvConfig sc;  // lookahead 8, floor lead 20
     PidConfig pc;
-    pc.fcTd = td;
     PidState ps;
     PidReset(ps, 0);
-    FILE* f = csv ? fopen(csv, "w") : nullptr;
-    if (f) fprintf(f, "t,bt,curve,target,heat,ror,plan\n");
     std::deque<float> bts;
+    std::vector<float> rors;
+    DevPlan plan = c.devPlan();
+    DevTrack dev;
     Out o;
-    float offset = 0;
-    bool anchored = false;
-    int winStart = FcFloorStart(c.tagTime(PointTag::FCs), -1, sc.floorLead);
-    for (int t = 0; t < 700; t++) {
+    int winStart = FcFloorStart(c.tagTime(PointTag::FCs), -1, 20);
+    for (int t = 0; t < 900; t++) {
         float bt = std::round((pl.bt + ((rand() % 100) - 50) / 2000.0f) * 10) / 10;
-        if (o.f < 0 && pl.crackAt >= 0 && t >= pl.crackAt + 10) o.f = t;  // F, 2nd-3rd crack
-        if (o.f >= 0 && o.drop < 0 && t > o.f + 45) o.drop = t;
-        if (o.drop >= 0) break;
-        PidAim a;
-        if (m == Anchor) {
-            if (o.f >= 0 && !anchored) {
-                offset   = FcAnchorOffset(c, t, bt, sc.floorCap);
-                anchored = true;
-                PidAim na = CardputerAim(c, t, bt, winStart, true, offset, sc.lookahead, sc.floorCap);
-                PidPrime(ps, ps.out, na, bt, pc);  // bumpless at F
+        if (o.f < 0 && pl.crackAt >= 0 && t >= pl.crackAt + 2) {
+            o.f   = t;
+            o.btF = bt;
+            if (isNew) {
+                dev = DevStart(c, t, bt);
+                PidAim da;
+                da.target = dev.target(t);
+                da.ffTemp = dev.target(t + 8);
+                da.ffRate = dev.rate(t + 8);
+                da.rate   = dev.rate(t);
+                da.afterF = true;
+                PidPrime(ps, ps.out, da, bt, pc);  // as fcAnchor
             }
-            a = CardputerAim(c, t, bt, winStart, o.f >= 0, offset, sc.lookahead, sc.floorCap);
-        } else {  // the firmware before this change: hold from the window on (BT above the curve = on it)
-            SvConfig now   = sc;
-            now.lookahead  = 0;
-            now.floorDelta = 0;
-            bool in        = t >= FcFloorStart(c.tagTime(PointTag::FCs), o.f, sc.floorLead);
-            a.target = ComputeSv(c, t, bt, in, now).sv;
-            a.ffTemp = c.at(t + sc.lookahead);
-            a.ffRate = CurveRate(c, t + sc.lookahead);
-            a.rate   = 0;  // the firmware before this change: D on the measurement
+        }
+        if (o.f >= 0 && o.drop < 0) {
+            if (isNew) {
+                DropWhy w = DevDropDue(dev, plan, t, bt);
+                if (w != DropWhy::None) {
+                    o.drop = t;
+                    o.why  = w == DropWhy::Time ? "time" : (w == DropWhy::Rise ? "rise" : "temp");
+                }
+            } else if (t >= o.f + 45 || (bt >= 208.5f && t >= o.f + 35)) {  // the plan's manual drop
+                o.drop = t;
+                o.why  = t >= o.f + 45 ? "F+45 (hand)" : "208.5 (hand)";
+            }
+        }
+        if (o.drop >= 0) {
+            o.btDrop = bt;
+            break;
+        }
+        PidAim a;
+        if (isNew && dev.active) {
+            a.target = dev.target(t);
+            a.ffTemp = dev.target(t + 8);
+            a.ffRate = dev.rate(t + 8);
+            a.rate   = dev.rate(t);
+            a.afterF = true;
+        } else if (isNew) {
+            a = CardputerAim(c, t, bt, winStart, false, 0, 8, 8);
+        } else {  // main: hold from the window on, through the crack
+            bool in  = t >= FcFloorStart(c.tagTime(PointTag::FCs), o.f, 20);
+            a        = CardputerAim(c, t, bt, in ? 0 : -1, false, 0, 8, 8);
+            a.rate   = 0;
         }
         float heat = std::round(PidStep(ps, a, bt, 1.0f, pc).heat * 10) / 10;
         pl.step(heat);
         bts.push_back(pl.bt);
         if (bts.size() > 31) bts.pop_front();
-        float ror  = bts.size() > 30 ? (bts.back() - bts.front()) * 2 : NAN;
-        float plan = (c.at(t + 1) - c.at(t - 29)) * 2;
-        if (o.f >= 0) {
-            int k = (t - o.f) / 15;  // F+0, +15, +30, +45
-            if ((t - o.f) % 15 == 0 && k < 4) { o.ror[k] = ror; o.plan[k] = plan; }
-            o.rorMin  = std::min(o.rorMin, ror);
-            if (!std::isnan(ror)) { o.rorErr += std::fabs(ror - plan); o.rorN++; }
-            o.planMin = std::min(o.planMin, plan);
-            o.heatMin = std::min(o.heatMin, heat);
-            o.heatMax = std::max(o.heatMax, heat);
-            if (t == o.f) o.heatF = heat;
+        float ror = bts.size() > 30 ? (bts.back() - bts.front()) * 2 : NAN;
+        if (o.f >= 0 && !std::isnan(ror)) {
+            float plan30 = isNew && dev.active ? (dev.target(t + 1) - dev.target(t - 29)) * 2
+                                               : (c.at(t + 1) - c.at(t - 29)) * 2;
+            if (t >= o.f + 30) {  // once the 30 s window has left the time before F
+                o.err += std::fabs(ror - plan30);
+                o.n++;
+            }
+            o.rorMinAfter = std::min(o.rorMinAfter, ror);
+            rors.push_back(ror);
+            if (rors.size() > 10) o.flick = std::max(o.flick, ror - rors[rors.size() - 11]);
         }
-        o.btDrop    = pl.bt;
-        o.curveDrop = c.at(t + 1);
-        o.devDrop   = pl.bt - (c.at(t + 1) + (m == Anchor ? offset : 0));
-        if (f) fprintf(f, "%d,%.2f,%.2f,%.2f,%.1f,%s,%.2f\n", t + 1, pl.bt, c.at(t + 1), a.target, heat,
-                       std::isnan(ror) ? "" : std::to_string(ror).c_str(), plan);
     }
-    if (f) fclose(f);
     return o;
 }
 
-int main()
+int main(int argc, char** argv)
 {
-    const char* out = getenv("OUT") ? getenv("OUT") : ".";
-    Curve c = syrina();
-    printf("Syrina D 100g, crack sink E*exp(-s/40) from BT 200, F 10 s after onset, drop at F+45\n");
-    printf("%-30s %5s %5s | %-23s | %-23s | %6s %6s %6s | %5s %5s %5s\n", "run", "F", "drop", "RoR at F/+15/+30/+45",
-           "plan at F/+15/+30/+45", "|dRoR|", "minRoR", "BT-crv", "heatF", "hmin", "hmax");
-    struct S { const char* name; float endo, gain, late; } scen[] = {
-        {"crack absorbs 0.08 (assumed)", 0.08f, 2.2f, 1.0f}, {"crack absorbs 0.12 (assumed)", 0.12f, 2.2f, 1.0f},
-        {"crack releases 0.05 (exothermic)", -0.05f, 2.2f, 1.0f}, {"crack releases 0.10 (exothermic)", -0.10f, 2.2f, 1.0f},
-        {"beans ahead (k+25% from 6:20)", 0.08f, 2.2f, 1.25f}, {"heater weak -15%", 0.08f, 1.87f, 1.0f}};
-    struct V { const char* name; Mode m; float td; } vars[] = {
-        {"now: hold, D off", Hold, 0}, {"anchor at F, D off", Anchor, 0}, {"anchor + D 5 s after F", Anchor, 5},
-        {"anchor + D 10 s after F", Anchor, 10}, {"anchor + D 15 s after F", Anchor, 15}, {"anchor + D 20 s after F", Anchor, 20}};
-    for (auto& sc : scen) {
-        printf("-- %s\n", sc.name);
-        for (auto& v : vars) {
+    const char* dir = argc > 1 ? argv[1] : "tools/pid";
+    Curve oc = oldCurve(dir), nc = newCurve();
+    if (oc.table.empty()) {
+        printf("missing %s/syrina_myeroast_build.csv\n", dir);
+        return 1;
+    }
+    printf("Syrina D 100g as planned for the competition: FC 7:05 / 200.1, drop at most 45 s / +8.4 / 208.5\n");
+    printf("%-36s %-5s %5s %6s | %5s %-12s %5s %6s %6s | %6s %6s %6s\n", "scenario", "fw", "F", "BT F", "drop", "why", "dev",
+           "rise", "BT", "minRoR", "flick", "|dRoR|");
+    struct S { const char* name; float onset, endo; } sc[] = {
+        {"crack on time (200), no heat effect", 200, 0},  {"crack on time, absorbs 0.08", 200, 0.08f}, {"crack on time, releases 0.05", 200, -0.05f},
+        {"crack 15 s early (196), no effect", 196, 0}, {"crack 15 s early, absorbs 0.08", 196, 0.08f}, {"crack 15 s early, releases 0.05", 196, -0.05f},
+        {"crack 15 s late (204), no effect", 204, 0},  {"crack 15 s late, absorbs 0.08", 204, 0.08f}, {"crack 15 s late, releases 0.05", 204, -0.05f},
+    };
+    for (auto& s : sc) {
+        for (int k = 0; k < 2; k++) {
             Plant p;
-            p.endo = sc.endo; p.gain = sc.gain; p.lateRate = sc.late;
-            std::string file = std::string(out) + "/fc_" + std::to_string(&sc - scen) + "_" + std::to_string(&v - vars) + ".csv";
-            Out o = run(v.m, p, file.c_str(), v.td);
-            printf("%-30s %5d %5d | %5.1f %5.1f %5.1f %5.1f | %5.1f %5.1f %5.1f %5.1f | %6.2f %6.1f %+6.1f | %5.1f %5.1f %5.1f\n", v.name,
-                   o.f, o.drop, o.ror[0], o.ror[1], o.ror[2], o.ror[3], o.plan[0], o.plan[1], o.plan[2], o.plan[3], o.rorErr / std::max(1, o.rorN), o.rorMin,
-                   o.btDrop - o.curveDrop, o.heatF, o.heatMin, o.heatMax);
+            p.onset = s.onset;
+            p.endo  = s.endo;
+            Out o   = run(k == 1, p, k == 1 ? nc : oc);
+            printf("%-36s %-5s %5s %6.1f | %5s %-12s %5d %+6.1f %6.1f | %6.1f %6.1f %6.2f\n", k == 0 ? s.name : "", k == 0 ? "main" : "new",
+                   FormatMmSs(o.f).c_str(), o.btF, FormatMmSs(o.drop).c_str(), o.why, o.drop - o.f, o.btDrop - o.btF, o.btDrop,
+                   o.rorMinAfter, o.flick, o.err / std::max(1, o.n));
         }
     }
-    printf("\nRoR: degC/min over 30 s. plan: the curve's own RoR there. BT-crv: BT minus the (unshifted) curve at the drop.\n");
+    printf("\nflick: largest RoR increase over 10 s after F (degC/min). |dRoR|: mean |RoR - plan| from F + 30 s to the\n"
+           "drop (main: the curve's RoR on the clock; new: the development plan from F). RoR over 30 s.\n");
     return 0;
 }
