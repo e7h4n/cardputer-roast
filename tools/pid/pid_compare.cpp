@@ -168,7 +168,7 @@ int main(int argc, char** argv)
         {"roaster PID, as roasted (L0, no floor)", RoasterAsRoasted, fit, "roaster_asroasted.csv", 1, 8},
         {"roaster PID, L8 + floor +1 cap 8", RoasterLookFloor, fit, "roaster_floor.csv", 1, 8},
         {"roaster PID, L8 + floor +1 cap 3", RoasterLookFloor, fit, "roaster_floor3.csv", 1, 3},
-                {"Cardputer PID (hold, anchor at F, D after F)", Cardputer, fit, "cardputer.csv", 0, 8},
+                {"Cardputer PID (hold, anchor at F)", Cardputer, fit, "cardputer.csv", 0, 8},
         {"roaster PID, L8 + floor +1 cap 3, model off", RoasterLookFloor, off, "roaster_floor3_off.csv", 1, 3},
         {"Cardputer PID, model off", Cardputer, off, "cardputer_off.csv", 0, 8},
     };

@@ -1,5 +1,6 @@
 // First crack on the Syrina D 100g curve (key points only): how the Cardputer PID's RoR behaves after F.
-// The crack absorbs heat from crack onset (BT 200 C): E * exp(-s / 40) degC/s. F 10 s after onset, drop 45 s
+// From crack onset (BT 200 C) the beans absorb (E > 0) or release (E < 0) E * exp(-s / 40) degC/s. Neither is
+// measured: the literature disputes where roasting turns exothermic, and R0012-R0014 show no heat sink at the crack. F 10 s after onset, drop 45 s
 // after F (the plan for this batch). Uses the firmware's roast_control.cpp; one step per second.
 //   tools/pid/run.sh  (builds and runs both tools)
 #include <apps/app_roast/roast_control.h>
@@ -124,7 +125,8 @@ int main()
     printf("%-30s %5s %5s | %-23s | %-23s | %6s %6s %6s | %5s %5s %5s\n", "run", "F", "drop", "RoR at F/+15/+30/+45",
            "plan at F/+15/+30/+45", "|dRoR|", "minRoR", "BT-crv", "heatF", "hmin", "hmax");
     struct S { const char* name; float endo, gain, late; } scen[] = {
-        {"crack 0.08", 0.08f, 2.2f, 1.0f}, {"crack 0.12", 0.12f, 2.2f, 1.0f},
+        {"crack absorbs 0.08 (assumed)", 0.08f, 2.2f, 1.0f}, {"crack absorbs 0.12 (assumed)", 0.12f, 2.2f, 1.0f},
+        {"crack releases 0.05 (exothermic)", -0.05f, 2.2f, 1.0f}, {"crack releases 0.10 (exothermic)", -0.10f, 2.2f, 1.0f},
         {"beans ahead (k+25% from 6:20)", 0.08f, 2.2f, 1.25f}, {"heater weak -15%", 0.08f, 1.87f, 1.0f}};
     struct V { const char* name; Mode m; float td; } vars[] = {
         {"now: hold, D off", Hold, 0}, {"anchor at F, D off", Anchor, 0}, {"anchor + D 5 s after F", Anchor, 5},

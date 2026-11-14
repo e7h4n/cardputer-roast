@@ -200,7 +200,7 @@ the roaster's own PID off (register 15 = 0) and then writes the heater output (r
   PID, the model reproduces batch A within 1.7 °C RMS. It is one model for both batch sizes; the integral covers
   the rest. A rule of thumb from it: 1 % heat ≈ 2.4 °C/min of RoR.
 - **PI(D)**, measured against the curve *now*:
-  - Defaults: P 1.5 %/°C, I time 60 s, D time 0 before F and 10 s from F on (*D after F*).
+  - Defaults: P 1.5 %/°C, I time 60 s, D time 0, *D after F* 0.
   - D acts on the rate-of-rise shortfall: the curve's slope now minus BT's slope (5 s filter). The curve's slope
     has no steps, so nothing kicks when the target shifts at F. Before F it stays off: on batch A it doubled the
     heater's movement and the error.
@@ -214,10 +214,14 @@ the roaster's own PID off (register 15 = 0) and then writes the heater output (r
   - *At F*: the rest of the curve shifts by BT − curve (within ± *floor cap*). From then on the plan's rate of rise
     is followed from where the beans are, and the controller is re-primed so the heater does not jump. Clearing F
     undoes the shift.
-  - *After F*: D (10 s) adds heat as soon as the rate of rise falls behind the plan, instead of waiting for BT to
-    fall back onto the line. In `tools/pid` (`fc_crack`, Syrina D 100g with a crack absorbing up to ~5–7 °C/min of
-    RoR), the mean |RoR − plan| from F to the drop went from 1.00 / 1.52 / 1.08 °C/min (normal crack, strong
-    crack, beans ahead of the curve) to 0.60 / 0.94 / 0.82.
+  - *After F*, optional (*D after F*, off by default): D adds heat as soon as the rate of rise falls behind the
+    plan. Whether the crack absorbs heat is not established: the literature disputes where roasting turns
+    exothermic (at first crack, near 200 °C, above 150 °C, or per coffee), and a crack heat sink fitted on
+    R0012–R0014 comes out at zero (the beans if anything heat faster than the heater model says). In `tools/pid`
+    `fc_crack` (Syrina D 100g) the shift alone lowers the mean |RoR − plan| from F to the drop in all six cases
+    (crack absorbing 0.08 / 0.12 °C/s: 1.00 → 0.88, 1.52 → 1.33; releasing 0.05 / 0.10: 0.84 → 0.71,
+    1.84 → 1.50; beans ahead 1.08 → 1.02; heater pinned 1.17). D 10 s on top helps only when the crack absorbs
+    heat (0.60, 0.94) and does worse when it releases heat (0.98, 1.68).
   - With the heater already at 100 % no controller can lift the rate of rise. That has to be planned in the curve;
     the "heater pinned" alert shows it.
 - **Stale reading:** if BT is more than 3 s old, the output is held.

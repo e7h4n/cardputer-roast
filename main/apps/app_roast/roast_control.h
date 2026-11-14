@@ -65,7 +65,8 @@ struct PidConfig {
     float kp         = 1.5f;  // % heat per degC of error
     float ti         = 60;    // s, integral time; 0 = no integral
     float td         = 0;     // s, derivative time before the F mark (on the rate-of-rise shortfall, BT slope 5 s)
-    float fcTd       = 10;    // s, derivative time from the F mark on: answers the crack's rate-of-rise dip at once
+    float fcTd       = 0;     // s, derivative time from the F mark on (rate-of-rise shortfall). Off by default: it
+                              // helps only if the crack absorbs heat, which is not established (tools/pid fc_crack)
     bool feedforward = true;  // add the heat the model needs to follow the curve
     PlantModel model;
     float maxStep  = 3.0f;    // % per second, heater slew limit

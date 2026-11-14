@@ -39,7 +39,7 @@ struct RoastRules {
     float pidKp      = 1.5f;  // % heat per degC, 0.1..10 (roast_control.h PidConfig)
     int pidTi        = 60;    // integral time, s (0: no integral)
     int pidTd        = 0;     // derivative time before F, s
-    int pidFcTd      = 10;    // derivative time from F on, s (rate-of-rise shortfall; tools/pid fc_crack)
+    int pidFcTd      = 0;     // derivative time from F on, s (rate-of-rise shortfall; off: tools/pid fc_crack)
     bool pidFF       = true;  // model feedforward
     void load();
     void save() const;

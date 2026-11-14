@@ -295,6 +295,7 @@ int main()
         Curve c = line();
         PidConfig pf;
         pf.maxStep = 100;
+        pf.fcTd    = 10;  // off by default; on here to check it
         PidState st;
         PidAim before = CardputerAim(c, 449, c.at(449) - 1.0f, 430, false, 0, 8, 8);
         PidPrime(st, 80, before, c.at(449) - 1.0f, pf);
