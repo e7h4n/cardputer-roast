@@ -447,9 +447,9 @@ void AppRoast::renderPrep()
         sum += "drop " + mmss(_curve.endTime()) + " · " + fmt0(_curve.at(_curve.endTime())) + "°";
         text(14, 16, sum, F11(), DIM);
     } else {
-        dot(7, 7, 3, HEAT);
+        dot(7, 7, 3, WARN);
         text(14, 0, "No curve", F14(), INK);
-        text(14, 16, "heat by hand with ←→ after charge", F11(), DIM);
+        text(14, 16, "C to pick one before charging", F11(), DIM);
     }
     // hero: bean temperature
     std::string bt = _snap.has(4) ? fmt1(_snap.bt()) : "--";
@@ -474,8 +474,7 @@ void AppRoast::renderPrep()
         bool done;
         uint32_t col;
     } steps[4] = {
-        {"curve", _hasCurve ? clipTo(_curve.name, 64, F10()) : (_noCurve ? "manual" : "none"), _hasCurve || _noCurve,
-         _hasCurve ? CURVE : HEAT},
+        {"curve", _hasCurve ? clipTo(_curve.name, 64, F10()) : "none", _hasCurve, _hasCurve ? CURVE : WARN},
         {"batch", fmt0(_rules.greenG) + " g", _rules.greenG > 0, INK},
         {"fan", fmt0(fan) + "%", on, FAN},
         {"charge", "Enter", false, GO},
@@ -554,9 +553,8 @@ void AppRoast::renderDash()
 {
     int t    = roastT();
     float bt = _snap.has(4) ? _snap.bt() : _session.lastBT();
-    // clock + mode
-    int x = 4 + text(4, 2, mmss(t), F23(), INK);
-    pill(x + 6, 8, _manual ? "MAN" : "PID", _manual ? HEAT : CURVE);
+    // clock
+    text(4, 2, mmss(t), F23(), INK);
     // hero: bean temperature
     bool stale = !linkReady();
     DevPlan plan = _hasCurve ? _curve.devPlan() : DevPlan();
@@ -568,25 +566,19 @@ void AppRoast::renderDash()
         int age = _snap.lastRxMs ? (int)((GetHAL().millis() - _snap.lastRxMs) / 1000) : 0;
         text(4, 32, "no reading " + mmss(age), F11(), DROP);
         if (_hasCurve) text(4, 45, signed1(bt - tgt) + "°", F14(), FAINT);
-    } else if (_manual) {
-        text(4, 32, "manual heat", F11(), HEAT);
-        if (_hasCurve) text(4, 45, signed1(bt - tgt) + "° vs curve", F11(), DIM);
     } else if (_hasCurve && _dev.active) {  // after F: the development plan, from where the beans cracked
         text(4, 32, "plan " + fmt1(_lastSv), F11(), CURVE);
         text(4, 45, signed1(bt - _lastSv) + "°", F14(), INK);
     } else if (_hasCurve && _session.markT(Mark::FCs) >= 0) {  // after F, no plan: the curve shifted to BT
         text(4, 32, "after F: curve " + signed1(_fcOffset) + "°", F11(), CURVE);
         text(4, 45, signed1(bt - _lastSv) + "°", F14(), INK);
-    } else if (_hasCurve) {
+    } else {
         text(4, 32, "target " + fmt1(tgt), F11(), DIM);
         text(4, 45, signed1(bt - tgt) + "°", F14(), INK);
-    } else {
-        text(4, 32, "no curve", F11(), DIM);
     }
-    // three cards: the two things you can turn, and the rate of rise
+    // three cards: heater, fan and the rate of rise
     const int y = 70;
-    if (_manual) rbox(2, y - 3, 76, y + 25, 4, HEAT_TINT);
-    metric(5, y, HEAT, "heat", fmt0(_snap.heat()) + "%", _manual);
+    metric(5, y, HEAT, "heat", fmt0(_snap.heat()) + "%");
     metric(84, y, FAN, "fan", fmt1(_snap.fan()) + "%");
     const char* trend = "";
     auto& ss          = _session.samples();
@@ -638,20 +630,16 @@ bool AppRoast::renderAlertBar()
         return true;
     }
     char b[80];
-    int t    = roastT();
     float bt = _snap.has(4) ? _snap.bt() : _session.lastBT();
     if (!linkReady()) {
         // the roaster keeps the last heater output for ~17-19 s, then cuts it by itself
-        float h = _manual ? _heatSet : (_lastHeatRaw >= 0 ? _lastHeatRaw / 10.0f : NAN);
-        if (std::isnan(h))
+        if (_lastHeatRaw < 0)
             snprintf(b, sizeof(b), "BLE lost · retrying");
         else
-            snprintf(b, sizeof(b), "BLE lost · last heat %.0f%% · retrying", h);
+            snprintf(b, sizeof(b), "BLE lost · last heat %.0f%% · retrying", _lastHeatRaw / 10.0);
         bar(DROP, b);
         return true;
     }
-    int fc  = _session.markT(Mark::FCs);
-    int dev = fc >= 0 ? t - fc : -1;
     if (_hasCurve && _dev.active) {  // the coming automatic drop: development time or drop temperature
         int left    = _dev.plan.dur - (curveT() - _dev.tF);
         float tempL = _dev.plan.dropBT - bt;
@@ -660,10 +648,6 @@ bool AppRoast::renderAlertBar()
             bar(GO, b, "D D");
             return true;
         }
-    }
-    if (_heatDropWarned && fc >= 0 && dev <= 75 && !_manual) {
-        bar(WARN, "heat falling after FC · P manual", nullptr, INK);
-        return true;
     }
     if (_satWarned && _satRun > 0) {
         snprintf(b, sizeof(b), "heat at max %.0f%% for %d s", _snap.heat(), _satRun);
@@ -683,16 +667,14 @@ void AppRoast::renderKeysBar()
     int dry = _session.markT(Mark::Dry), fc = _session.markT(Mark::FCs), fce = _session.markT(Mark::FCe);
     if (_view == 1)
         keybar({{"Tab", CURVE, "numbers"}, {"D D", DROP, "drop"}, {"↑ ↓", FAN, "fan"}});
-    else if (_manual)
-        keybar({{"← →", HEAT, "heat"}, {"P", CURVE, "PID"}, {"↑ ↓", FAN, "fan"}, {"D D", DROP, nullptr}});
     else if (fc >= 0 && fce < 0)
-        keybar({{"G", FCE, "FC end"}, {"D D", DROP, "drop"}, {"↑ ↓", FAN, "fan"}, {"P", HEAT, "manual"}});
+        keybar({{"G", FCE, "FC end"}, {"D D", DROP, "drop"}, {"↑ ↓", FAN, "fan"}, {"Tab", CURVE, "chart"}});
     else if (fc >= 0)
-        keybar({{"D D", DROP, "drop"}, {"↑ ↓", FAN, "fan"}, {"P", HEAT, "manual"}, {"Tab", CURVE, "chart"}});
+        keybar({{"D D", DROP, "drop"}, {"↑ ↓", FAN, "fan"}, {"Tab", CURVE, "chart"}});
     else if (dry >= 0)
-        keybar({{"F", FC, "1st crack"}, {"↑ ↓", FAN, "fan"}, {"P", HEAT, "manual"}, {"Tab", CURVE, "chart"}});
+        keybar({{"F", FC, "1st crack"}, {"↑ ↓", FAN, "fan"}, {"Tab", CURVE, "chart"}});
     else
-        keybar({{"Y", DRY, "dry end"}, {"↑ ↓", FAN, "fan"}, {"P", HEAT, "manual"}, {"Tab", CURVE, "chart"}});
+        keybar({{"Y", DRY, "dry end"}, {"↑ ↓", FAN, "fan"}, {"Tab", CURVE, "chart"}});
 }
 
 /* ================================================================= chart */
@@ -910,7 +892,7 @@ void AppRoast::renderSummary()
 /* ================================================================ curves */
 void AppRoast::renderCurves()
 {
-    int n = (int)_curves.size() + 1;  // row 0 = "No curve"
+    int n = (int)_curves.size();
     int x = 4 + text(4, 0, "Curves", F16(), INK);
     text(x + 4, 5, std::to_string(_curves.size()), F11(), DIM);
     int y = 18;
@@ -921,32 +903,23 @@ void AppRoast::renderCurves()
             cv().drawRoundRect(2, y - 1, W - 9, 30, 5, INK);
         }
         rbox(7, y + 3, 45, y + 25, 3, sel ? ui::WHITE : CARD);
-        std::string name, meta;
-        bool current = false;
-        if (i == 0) {
-            name    = "No curve";
-            meta    = "heat by hand with ←→";
-            current = !_hasCurve && _noCurve;
-            text(26, y + 14, "←→", F11(), HEAT, Datum::middle_center);
-        } else {
-            auto& c = _curves[i - 1];
-            name    = c.name;
-            current = _hasCurve && c.name == _curve.name;
-            int end = std::max(60, c.endTime());
-            int px = -1, py = -1;
-            for (int s = 0; s <= end; s += std::max(1, end / 36)) {
-                int nx = 8 + 36 * s / end, ny = y + 24 - (int)(20 * (c.at(s) - 40) / 190);
-                if (px >= 0) cv().drawLine(px, py, nx, ny, CURVE);
-                px = nx;
-                py = ny;
-            }
-            meta    = "drop " + mmss(c.endTime()) + " · " + fmt0(c.at(c.endTime())) + "°";
-            int fcT = c.tagTime(PointTag::FCs);
-            if (fcT >= 0) meta += " · FC " + mmss(fcT);
-            if (c.batchG > 0) meta += " · " + std::to_string(c.batchG) + " g";
-            if (c.builtin) meta += " · sample";
-            if (c.readOnly) meta += " · alog";
+        auto& c          = _curves[i];
+        std::string name = c.name;
+        bool current     = _hasCurve && c.name == _curve.name;
+        int end          = std::max(60, c.endTime());
+        int px = -1, py = -1;
+        for (int s = 0; s <= end; s += std::max(1, end / 36)) {
+            int nx = 8 + 36 * s / end, ny = y + 24 - (int)(20 * (c.at(s) - 40) / 190);
+            if (px >= 0) cv().drawLine(px, py, nx, ny, CURVE);
+            px = nx;
+            py = ny;
         }
+        std::string meta = "drop " + mmss(c.endTime()) + " · " + fmt0(c.at(c.endTime())) + "°";
+        int fcT          = c.tagTime(PointTag::FCs);
+        if (fcT >= 0) meta += " · FC " + mmss(fcT);
+        if (c.batchG > 0) meta += " · " + std::to_string(c.batchG) + " g";
+        if (c.builtin) meta += " · sample";
+        if (c.readOnly) meta += " · alog";
         text(52, y + 2, clipTo(name, W - 80, F12()), F12(), INK);
         text(52, y + 16, clipTo(meta, W - 62, F10()), F10(), DIM);
         if (current) {
@@ -1329,9 +1302,11 @@ void AppRoast::renderHelp()
         const char* name;
         const char* keys;
     } groups[] = {
-        {FAN, "fan", "S on · ↑↓ ±1 · Aa ±0.1 · X X stop"}, {HEAT, "heat", "P manual/PID · ←→ ±5 · Aa ±1"},
-        {DRY, "marks", "Y dry · F 1st crack · G FC end"}, {DROP, "drop", "D D or Space Space · X X stop"},
-        {CURVE, "curve", "C library · E edit · Tab chart"},   {INK, "roast", "Enter charge · W batch · O rules"},
+        {FAN, "fan", "S on · ↑↓ ±1 · Aa ±0.1 · X X stop"},
+        {DRY, "marks", "Y dry · F 1st crack · G FC end"},
+        {DROP, "drop", "D D or Space Space · X X stop"},
+        {CURVE, "curve", "C library · E edit · Tab chart"},
+        {INK, "roast", "Enter charge · W batch · O rules"},
         {FAINT, "app", "H keys · Esc back"},
     };
     int y = 18;

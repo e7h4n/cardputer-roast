@@ -23,7 +23,6 @@ struct RoastRules {
     float coldBT     = 40.f;  // charge / stop threshold
     float startFan   = 53.0f; // fan when pressing S
     float greenG     = 200.f; // default batch
-    float heatDrop   = 5.0f;  // heater drop around first crack that triggers a hint
     float curveOffset = 0.0f; // shift the whole curve (myERoast tempCompensation), -30..30
     int svLookahead  = 8;     // the feedforward aims at curve(t + this), 0..20 s (roast_control.h PidAim)
     float floorCap   = 8.0f;  // after F on a curve without FC/DROP points: shift to BT by at most this, 1..8 degC
@@ -97,23 +96,17 @@ private:
     Screen _backScreen = Screen::Prep;
     Phase _phase       = Phase::Idle;
     int _view          = 0;  // 0 numbers, 1 chart
-    bool _blockedByKeyboardApp = false;
     bool _fanRunning   = false;  // machine fan on (S/charge) until X X stop, independent of the log
-    bool _noCurve      = false;  // "No curve" picked explicitly: manual heat
 
     // ---- roast timing / control
     uint32_t _chargeMs   = 0;
     int _lastSampleT     = -1;
     uint32_t _dropMs     = 0;
-    bool _manual         = false;  // PID off: heater set by hand
     float _fanSet        = 0;
     uint32_t _fanSetMs   = 0;
-    float _heatSet       = 0;
     float _lastSv        = NAN;
-    roast::SvConfig svConfig() const;
     roast::PidConfig pidConfig() const;
     roast::PidState _pid;
-    bool _cardPid      = false;  // this roast: heater from the Cardputer PID (decided at charge)
     int _lastHeatRaw   = -1;
     uint32_t _pidMs    = 0;
     uint32_t _heatSentMs = 0;
@@ -126,7 +119,6 @@ private:
     // ---- alerts
     int _satRun          = 0;
     bool _satWarned      = false;
-    bool _heatDropWarned = false;
     bool _rorWarned      = false;
     bool _autoDropped    = false;
     std::string _autoDropWhy;
@@ -149,12 +141,6 @@ private:
     int _setStage    = 0;      // range rows: 0 lower end, 1 upper end
     std::string _setBuf;       // digits typed while editing
     float _setVal[2] = {0, 0};
-    // ←/→ held in manual mode repeats the heater step
-    int _heatHeld        = 0;
-    uint32_t _heatHeldMs = 0;
-    uint32_t _heatRepMs  = 0;
-    bool _heatHeldShift  = false;
-    int _heatReps        = 0;
     int _listSel = 0, _listTop = 0;
     int _setSel  = 0;
     // curve editor: Start (temperature), first crack and drop (time and temperature); roast_curve.cpp builds the rest
@@ -241,8 +227,6 @@ private:
     void drop(const char* why);
     void stopMachine();
     void adjustFan(float delta);
-    void adjustHeat(float delta);
-    void toggleManual();
     void toggleMark(roast::Mark m);
     void tickRoast();
     void finishRoast();

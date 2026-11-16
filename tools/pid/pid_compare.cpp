@@ -4,6 +4,7 @@
 // Uses the firmware's own roast_control.cpp. Writes one CSV per run to $OUT and prints a table.
 //   tools/pid/run.sh  [logs dir with R0012.csv for the replay check]
 #include <apps/app_roast/roast_control.h>
+#include "roaster_sv.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -91,7 +92,7 @@ static Result run(Mode m, Plant pl, const char* csv, float floorDelta = 1.0f, fl
                 PidPrime(ps, ps.out, DevAim(dev, t, sc.lookahead), bt, pc);
             }
             PidAim a = t >= kFc && dev.active ? DevAim(dev, t, sc.lookahead)
-                                              : CardputerAim(c, t, bt, start, false, 0, sc.lookahead, sc.floorCap);
+                                              : CardputerAim(c, t, start, false, 0, sc.lookahead);
             heat = PidStep(ps, a, bt, 1.0f, pc).heat;
         } else {
             heat = rp.step(ComputeSv(c, t, bt, in, sc).sv, bt);

@@ -3,7 +3,6 @@
  *
  * SPDX-License-Identifier: MIT
  */
-#include <smooth_ui_toolkit.h>
 #include <M5Unified.hpp>
 #include <mooncake_log.h>
 #include <mooncake.h>
@@ -12,7 +11,6 @@
 #include <apps/app_roast/roast_debug.h>
 
 using namespace mooncake;
-using namespace smooth_ui_toolkit;
 
 extern "C" void app_main(void)
 {
@@ -22,10 +20,6 @@ extern "C" void app_main(void)
 
     // HAL init
     GetHAL().init();
-
-    // Setup ui hal
-    ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });
-    ui_hal::on_get_tick([]() { return GetHAL().millis(); });
 
     // Roast-only firmware for the community Launcher: Roast owns the whole screen.
     GetHAL().display.setBrightness(255);

@@ -232,7 +232,7 @@ static Out run(const RoastCase& rc, const Residual* res, const PidConfig& pc, un
             a.afterF  = true;
             a.observe = true;
         } else {
-            a = CardputerAim(c, t, bt, ObserveStart(c.tagTime(PointTag::FCs), o.f, pc.obsLead), false, 0, 8, 8);
+            a = CardputerAim(c, t, ObserveStart(c.tagTime(PointTag::FCs), o.f, pc.obsLead), false, 0, 8);
         }
         if (t >= 60 && o.f < 0) {
             se += (bt - a.target) * (bt - a.target);

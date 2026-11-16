@@ -273,7 +273,7 @@ std::vector<Curve> BuiltinCurves()
                              {{0, 50, PointTag::Charge}, {470, 199, PointTag::FCs}, {535, 207, PointTag::Drop}}));
     v.push_back(make_builtin("Gotiti 200g Pullback", "Development 85 s at 7.8 C/min, max 211 C; untested", 200,
                              {{0, 50, PointTag::Charge}, {470, 200, PointTag::FCs}, {555, 211, PointTag::Drop}}));
-    v.push_back(make_builtin("Dry run (no beans)", "Low temperature check of PID and manual heat, 3 min", 0,
+    v.push_back(make_builtin("Dry run (no beans)", "Low temperature check of the PID, 3 min", 0,
                              {{0, 50, PointTag::Charge}, {120, 100, PointTag::FCs}, {180, 110, PointTag::Drop}}));
     return v;
 }

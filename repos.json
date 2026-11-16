@@ -18,10 +18,5 @@
         "url": "https://github.com/Forairaaaaa/mooncake_log.git",
         "path": "components/mooncake_log",
         "branch": "v1.3.0"
-    },
-    {
-        "url": "https://github.com/Forairaaaaa/smooth_ui_toolkit.git",
-        "path": "components/smooth_ui_toolkit",
-        "branch": "v2.4.0"
     }
 ]

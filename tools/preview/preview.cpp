@@ -65,7 +65,6 @@ struct PreviewBle : roast::RoasterLink {
     }
     uint32_t command(const std::vector<roast::RegWrite>& w) override { return fake->command(w); }
     roast::TxStatus txStatus(uint32_t id) override { return fake->txStatus(id); }
-    void setTarget(uint16_t raw) override { fake->setTarget(raw); }
     void setHeat(uint16_t raw) override { fake->setHeat(raw); }
     void clearQueue() override { fake->clearQueue(); }
 };
@@ -264,11 +263,6 @@ int main(int argc, char** argv)
 
     press("c");
     shot("curves");
-    press("up");
-    press("enter");
-    shot("prep_no_curve");
-    press("c");
-    press("down");
     press("enter");
     step(2500);
 
@@ -345,14 +339,6 @@ int main(int argc, char** argv)
     press("tab");
     shot("roast_chart");
     press("tab");
-
-    press("p");
-    step(400);
-    GetHAL().keyboard.onKeyEvent.emit(ev("right", true));  // hold → repeats
-    step(1200);
-    GetHAL().keyboard.onKeyEvent.emit(ev("right", false));
-    shot("roast_manual");
-    press("p");
 
     until([] { return bt() >= 198; }, 400);
     press("f");

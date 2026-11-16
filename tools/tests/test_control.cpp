@@ -1,4 +1,4 @@
-// Host unit tests for roast_control (SV lookahead, first-crack floor, manual hold, Cardputer PID) and the curve
+// Host unit tests for roast_control (the Cardputer PID, its self-heating estimate, the development) and the curve
 // lookup they use.
 //   tools/tests/run.sh
 #include <apps/app_roast/roast_control.h>
@@ -41,13 +41,6 @@ static PidAim Aim(float target, float rate)
     return a;
 }
 
-static Sample S(int t, float heat)
-{
-    Sample s{};
-    s.t      = (int16_t)t;
-    s.heat10 = (int16_t)lroundf(heat * 10);
-    return s;
-}
 
 
 // Heater -> bean plant as fitted on R0012-R0014 (roast_control.h PlantModel), with a dead time; one step per second.
@@ -95,71 +88,9 @@ static void follow(const PidConfig& cfg, Plant pl, float* worstErr, float* maxJu
 int main()
 {
     Curve c = line();
-    SvConfig cfg;  // lookahead 8, floor on, delta 1, cap 8, lead 20
-
-    // --- lookahead
-    NEAR(ComputeSv(c, 100, NAN, false, cfg).sv, c.at(108));
-    cfg.lookahead = 0;
-    NEAR(ComputeSv(c, 100, NAN, false, cfg).sv, c.at(100));
-    cfg.lookahead = 50;  // clamped to 20
-    NEAR(ComputeSv(c, 100, NAN, false, cfg).sv, c.at(120));
-    cfg.lookahead = 8;
     // past the end of the curve: hold the last value, never extrapolate
-    NEAR(ComputeSv(c, 597, NAN, false, cfg).sv, 200.0f);
-    NEAR(ComputeSv(c, 600, NAN, false, cfg).sv, 200.0f);
-    NEAR(ComputeSv(c, 900, NAN, false, cfg).sv, 200.0f);
+    NEAR(c.at(900), 200.0f);
     NEAR(c.at(-5), 100.0f);
-
-    // --- window start: earlier of curve FC - lead and the F mark
-    CHECK(FcFloorStart(450, -1, 20) == 430);
-    CHECK(FcFloorStart(450, 400, 20) == 400);  // F pressed early
-    CHECK(FcFloorStart(450, 470, 20) == 430);  // F pressed late: the curve's window already started
-    CHECK(FcFloorStart(-1, 470, 20) == 470);   // curve without an FC mark: from the F press
-    CHECK(FcFloorStart(-1, -1, 20) == -1);
-    CHECK(FcFloorStart(10, -1, 20) == 0);
-
-    // --- floor: outside the window nothing changes
-    SvResult r = ComputeSv(c, 440, 190.0f, false, cfg);
-    CHECK(!r.floored);
-    NEAR(r.sv, c.at(448));
-    // inside the window, BT below the curve: curve wins
-    r = ComputeSv(c, 440, 160.0f, true, cfg);
-    CHECK(!r.floored);
-    NEAR(r.sv, c.at(448));
-    // BT above the curve: SV = BT + delta
-    float ahead = c.at(448);  // 174.67
-    r           = ComputeSv(c, 440, ahead + 2.0f, true, cfg);
-    CHECK(r.floored && !r.capped);
-    NEAR(r.sv, ahead + 3.0f);
-    // far above: capped at curve(t) + 8, but never below the lookahead curve
-    r = ComputeSv(c, 440, ahead + 20.0f, true, cfg);
-    CHECK(r.floored && r.capped);
-    NEAR(r.sv, c.at(440) + 8.0f);
-    CHECK(r.sv >= r.ahead);
-    // delta adjustable; floor off disables it
-    cfg.floorDelta = 2.5f;
-    NEAR(ComputeSv(c, 440, ahead + 2.0f, true, cfg).sv, ahead + 4.5f);
-    cfg.fcFloor = false;
-    NEAR(ComputeSv(c, 440, ahead + 2.0f, true, cfg).sv, ahead);
-    cfg.fcFloor    = true;
-    cfg.floorDelta = 1.0f;
-    // no BT reading: curve only
-    CHECK(!ComputeSv(c, 440, NAN, true, cfg).floored);
-    // leaving the window (drop): back to the curve
-    r = ComputeSv(c, 560, 200.0f, false, cfg);
-    CHECK(!r.floored);
-    NEAR(r.sv, c.at(568));
-
-    // --- manual hold: 30 s mean, not the last sample
-    std::vector<Sample> s;
-    for (int t = 0; t <= 100; t++) s.push_back(S(t, t < 71 ? 50.0f : 80.0f));  // last 30 s at 80, earlier 50
-    NEAR(HoldHeat(s, 100, 30, -1), 80.0f);
-    s.back().heat10 = 600;  // one low reading at the switch
-    NEAR(HoldHeat(s, 100, 30, -1), (29 * 80.0f + 60.0f) / 30.0f);
-    NEAR(HoldHeat(s, 80, 30, -1), (20 * 50.0f + 10 * 80.0f) / 30.0f);  // window ends at `now`
-    NEAR(HoldHeat({}, 10, 30, 77.0f), 77.0f);                        // no samples: current reading
-    NEAR(HoldHeat(s, 5, 30, -1), 50.0f);                              // shorter than 30 s so far
-
 
     // --- Cardputer PID: feedforward from the model
     PlantModel pm;
@@ -268,30 +199,24 @@ int main()
     }
 
 
-    // --- first crack, Cardputer PID: hold until F, then the curve shifted to where the beans are
+    // --- first crack, Cardputer PID: the curve until F, then the curve shifted to where the beans are
     {
         Curve c = line();  // 100 + t/6
         int win = 430;
-        PidAim a = CardputerAim(c, 300, 140.0f, win, false, 0, 8, 8);  // before the window: the curve now
+        PidAim a = CardputerAim(c, 300, win, false, 0, 8);  // the curve now, feedforward 8 s ahead
         NEAR(a.target, c.at(300));
         NEAR(a.ffTemp, c.at(308));
         NEAR(a.rate, 1 / 6.0f);
-        CHECK(!a.floored && !a.afterF);
-        a = CardputerAim(c, 440, c.at(440) + 2, win, false, 0, 8, 8);  // window, BT 2 above: no hold any more
-        NEAR(a.target, c.at(440));
-        CHECK(!a.floored);
-        a = CardputerAim(c, 440, c.at(440) - 2, win, false, 0, 8, 8);  // below: the curve
-        NEAR(a.target, c.at(440));
-        CHECK(!a.floored);
+        CHECK(!a.afterF);
         float off = FcAnchorOffset(c, 450, c.at(450) + 2.5f, 8);  // F with BT 2.5 above the curve
         NEAR(off, 2.5f);
         NEAR(FcAnchorOffset(c, 450, c.at(450) + 20, 8), 8.0f);    // capped
         NEAR(FcAnchorOffset(c, 450, c.at(450) - 3, 8), -3.0f);    // late crack: below the curve too
         NEAR(FcAnchorOffset(c, 450, NAN, 8), 0.0f);
-        a = CardputerAim(c, 470, c.at(470) + 5, win, true, off, 8, 8);  // after F: shifted, no hold
+        a = CardputerAim(c, 470, win, true, off, 8);  // after F: shifted
         NEAR(a.target, c.at(470) + 2.5f);
         NEAR(a.ffTemp, c.at(478) + 2.5f);
-        CHECK(a.afterF && !a.floored);
+        CHECK(a.afterF);
     }
     {  // re-prime at F keeps the heater where it was (no jump), and D after F answers a rate-of-rise dip
         Curve c = line();
@@ -299,10 +224,10 @@ int main()
         pf.maxStep = 100;
         pf.fcTd    = 10;  // 3 by default; 10 here to make it plain
         PidState st;
-        PidAim before = CardputerAim(c, 449, c.at(449) - 1.0f, 430, false, 0, 8, 8);
+        PidAim before = CardputerAim(c, 449, 430, false, 0, 8);
         PidPrime(st, 80, before, c.at(449) - 1.0f, pf);
         float bt  = c.at(450) - 1.0f;
-        PidAim at = CardputerAim(c, 450, bt, 430, true, FcAnchorOffset(c, 450, bt, 8), 8, 8);
+        PidAim at = CardputerAim(c, 450, 430, true, FcAnchorOffset(c, 450, bt, 8), 8);
         PidPrime(st, st.out, at, bt, pf);
         NEAR(st.out, 80.0f);
         PidState flat = st, dip = st;
@@ -316,7 +241,7 @@ int main()
         noD.fcTd      = 0;
         PidState z    = st;
         NEAR(PidStep(z, at, bt, 1.0f, noD).d, 0.0f);
-        PidAim pre = CardputerAim(c, 440, bt, 430, false, 0, 8, 8);  // before F: td (0 by default) applies
+        PidAim pre = CardputerAim(c, 440, 430, false, 0, 8);  // before F: td (0 by default) applies
         PidState y = st;
         NEAR(PidStep(y, pre, bt, 1.0f, pf).d, 0.0f);
     }
@@ -331,9 +256,9 @@ int main()
         Curve c;
         c.pts = {{0, 50, PointTag::Charge}, {420, 204, PointTag::FCs}, {470, 209, PointTag::Drop}};
         c.build();
-        CHECK(!CardputerAim(c, 299, 190, 300, false, 0, 8, 8).observe);
-        CHECK(CardputerAim(c, 300, 190, 300, false, 0, 8, 8).observe);
-        CHECK(!CardputerAim(c, 300, 190, -1, false, 0, 8, 8).observe);
+        CHECK(!CardputerAim(c, 299, 300, false, 0, 8).observe);
+        CHECK(CardputerAim(c, 300, 300, false, 0, 8).observe);
+        CHECK(!CardputerAim(c, 300, -1, false, 0, 8).observe);
         DevTrack d = DevStart(c, 400, 202.5f);
         PidAim da  = DevAim(d, 410, 8);
         NEAR(da.target, 202.5f + d.plan.speed * 10);
@@ -356,7 +281,7 @@ int main()
         CHECK(std::fabs(a.dist * 60) < 0.5f);
         float extra = (0.4f - 0.253f) * (hot.bt - 156.2f);  // degC/min the model misses at this BT
         CHECK(std::fabs(b.dist * 60 - extra) < 1.0f);
-        NEAR(a.air, 26 + 2.133f * 75);  // the modelled air settles on the heat written (manual hold path)
+        NEAR(a.air, 26 + 2.133f * 75);  // the modelled air settles on the heat written
     }
     {  // the correction: what the estimate has changed by since the window opened, capped; off outside it
         PidConfig po;
@@ -414,7 +339,7 @@ int main()
             double sum = 0;
             for (int t = 0; t < 400; t++) {
                 float bt  = std::round(pl.bt * 10) / 10;
-                PidAim a  = CardputerAim(c, t, bt, ObserveStart(420, -1, pc.obsLead), false, 0, 8, 8);
+                PidAim a  = CardputerAim(c, t, ObserveStart(420, -1, pc.obsLead), false, 0, 8);
                 if (t >= 370) sum += bt - c.at(t);
                 pl.step(std::round(PidStep(st, a, bt, 1.0f, pc).heat * 10) / 10);
             }

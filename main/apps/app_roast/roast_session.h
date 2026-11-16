@@ -17,7 +17,7 @@ const char* MarkName(Mark m);
 struct Sample {
     int16_t t;       // seconds after charge
     int16_t bt10;    // bean temp x10
-    int16_t tgt10;   // target written x10 (0 when no curve)
+    int16_t tgt10;   // the Cardputer PID's target x10
     int16_t heat10;  // heater output x10
     int16_t fan10;   // fan setpoint x10
     int16_t ror10;   // RoR degC/min x10 (INT16_MIN when n/a)
