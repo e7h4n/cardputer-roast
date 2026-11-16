@@ -69,7 +69,7 @@ static Result run(Mode m, Plant pl, const char* csv, float floorDelta = 1.0f, fl
         sc.lookahead = 0;
         sc.fcFloor   = false;
     }
-    PidConfig pc;  // P 1.5, Ti 60, Td 0, feedforward
+    PidConfig pc;  // P 1.5, Ti 60, Td 0, feedforward + self-heating estimate; after F P 4, Td 3
     PidState ps;
     RoasterPid rp;
     FILE* f = csv ? fopen(csv, "w") : nullptr;
@@ -84,22 +84,14 @@ static Result run(Mode m, Plant pl, const char* csv, float floorDelta = 1.0f, fl
         int start = FcFloorStart(c.tagTime(PointTag::FCs), t >= kFc ? kFc : -1, sc.floorLead);
         bool in   = start >= 0 && t >= start;
         if (m == Cardputer) {  // as the firmware does it (app_roast.cpp pidAim / fcAnchor): development from F
-            int start = FcFloorStart(c.tagTime(PointTag::FCs), t >= kFc ? kFc : -1, sc.floorLead);
+            int start = ObserveStart(c.tagTime(PointTag::FCs), t >= kFc ? kFc : -1, pc.obsLead);
             if (t == 0) PidReset(ps, 0);
-            auto devAim = [&](int s) {
-                PidAim a;
-                a.target = dev.target(s);
-                a.ffTemp = dev.target(s + sc.lookahead);
-                a.ffRate = dev.rate(s + sc.lookahead);
-                a.rate   = dev.rate(s);
-                a.afterF = true;
-                return a;
-            };
             if (t == kFc) {
                 dev = DevStart(c, t, bt);
-                PidPrime(ps, ps.out, devAim(t), bt, pc);
+                PidPrime(ps, ps.out, DevAim(dev, t, sc.lookahead), bt, pc);
             }
-            PidAim a = t >= kFc && dev.active ? devAim(t) : CardputerAim(c, t, bt, start, false, 0, sc.lookahead, sc.floorCap);
+            PidAim a = t >= kFc && dev.active ? DevAim(dev, t, sc.lookahead)
+                                              : CardputerAim(c, t, bt, start, false, 0, sc.lookahead, sc.floorCap);
             heat = PidStep(ps, a, bt, 1.0f, pc).heat;
         } else {
             heat = rp.step(ComputeSv(c, t, bt, in, sc).sv, bt);

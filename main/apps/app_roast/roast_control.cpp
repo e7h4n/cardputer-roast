@@ -56,6 +56,64 @@ static float clampf(float v, float lo, float hi)
     return std::max(lo, std::min(hi, v));
 }
 
+// Observer: fold in the reading of this second (the slope it shows against the slope the model expected) ...
+static void ObsMeasure(Observer& o, float bt, float dt, const PidConfig& c, bool afterF = false)
+{
+    const PlantModel& m = c.model;
+    if (std::isnan(o.air)) return;
+    if (!std::isnan(bt) && !std::isnan(o.lastBt) && dt > 0 && dt <= 3) {
+        float model = m.rate * (o.air - o.lastBt) + m.selfHeat(o.lastBt);  // what the model expected this second
+        float tau   = afterF && c.fcObsTau > 0 ? c.fcObsTau : c.obsTau;
+        float a     = dt / (std::max(1.0f, tau) + dt);
+        o.dist += a * ((bt - o.lastBt) / dt - model - o.dist);
+    }
+    o.lastBt = bt;  // NAN: the next reading starts afresh
+}
+
+// Before the first second: settled at the heat in effect.
+static void ObsSeed(Observer& o, float heat, const PidConfig& c)
+{
+    o.air = c.model.ambient + c.model.gain * heat;
+    for (float& h : o.hist) h = heat;
+}
+
+// ... then the heat written for the coming second: the modelled air it reaches the beans with.
+static void ObsAdvance(Observer& o, float heat, float dt, const PidConfig& c)
+{
+    const PlantModel& m = c.model;
+    if (std::isnan(o.air)) ObsSeed(o, heat, c);
+    if (!(dt > 0)) dt = 1;
+    for (int k = 0; k < 7; k++) o.hist[k] = o.hist[k + 1];
+    o.hist[7]  = heat;
+    float late = o.hist[7 - std::max(0, std::min(7, m.dead))];
+    o.air += (m.ambient + m.gain * late - o.air) * (1 - std::exp(-dt / std::max(0.1f, m.airTau)));
+}
+
+void ObserverStep(Observer& o, float bt, float heat, float dt, const PidConfig& c)
+{
+    if (std::isnan(o.air)) ObsSeed(o, heat, c);
+    ObsMeasure(o, bt, dt, c);
+    ObsAdvance(o, heat, dt, c);
+}
+
+// The feedforward, with the Observer correction when the aim asks for it (and the start of that correction latched).
+static float Feedforward(PidState& s, const PidAim& a, const PidConfig& c, float* corr)
+{
+    float k = 0;
+    if (c.observe && a.observe) {
+        if (!s.obs.on) {
+            s.obs.on    = true;
+            s.obs.dist0 = s.obs.dist;
+        }
+        k = clampf(s.obs.dist - s.obs.dist0, -c.obsLimit, c.obsLimit);
+    } else {
+        s.obs.on = false;
+    }
+    if (corr) *corr = k;
+    if (!c.feedforward) return 0;
+    return FeedForwardHeat(a.ffTemp, a.ffRate - k, c.model);
+}
+
 void PidReset(PidState& s, float heatNow)
 {
     s        = PidState();
@@ -65,8 +123,9 @@ void PidReset(PidState& s, float heatNow)
 
 void PidPrime(PidState& s, float heatNow, const PidAim& a, float bt, const PidConfig& c)
 {
-    float ff = c.feedforward ? FeedForwardHeat(a.ffTemp, a.ffRate, c.model) : 0;
-    float p  = (std::isnan(bt) || std::isnan(a.target)) ? 0 : c.kp * (a.target - bt);
+    float ff = Feedforward(s, a, c, nullptr);
+    float kp = a.afterF && c.fcKp > 0 ? c.fcKp : c.kp;
+    float p  = (std::isnan(bt) || std::isnan(a.target)) ? 0 : kp * (a.target - bt);
     s.primed = true;
     s.out    = clampf(heatNow, c.outMin, c.outMax);
     s.integ  = c.ti > 0 ? clampf(s.out - ff - p, -c.iLimit, c.iLimit) : 0;
@@ -81,6 +140,7 @@ PidTerms PidStep(PidState& s, const PidAim& a, float bt, float dt, const PidConf
     if (std::isnan(bt) || std::isnan(a.target) || !(dt > 0)) {  // no fresh reading: hold, do not integrate
         r.heat = s.out;
         r.i    = s.integ;
+        ObserverStep(s.obs, NAN, s.out, dt, c);
         return r;
     }
     dt = std::min(dt, 3.0f);
@@ -91,10 +151,13 @@ PidTerms PidStep(PidState& s, const PidAim& a, float bt, float dt, const PidConf
     s.lastBt = bt;
 
     float e = a.target - bt;
-    r.ff    = c.feedforward ? FeedForwardHeat(a.ffTemp, a.ffRate, c.model) : 0;
-    r.p     = c.kp * e;
+    if (std::isnan(s.obs.air)) ObsSeed(s.obs, s.out, c);
+    ObsMeasure(s.obs, bt, dt, c, a.afterF);
+    r.ff    = Feedforward(s, a, c, &r.obs);
+    float kp = a.afterF && c.fcKp > 0 ? c.fcKp : c.kp;
+    r.p      = kp * e;
     float td = a.afterF ? c.fcTd : c.td;
-    r.d      = c.kp * td * ((std::isnan(a.rate) ? 0 : a.rate) - s.dBt);
+    r.d      = kp * td * ((std::isnan(a.rate) ? 0 : a.rate) - s.dBt);
     float iNew = s.integ;
     if (c.ti > 0) iNew = clampf(s.integ + c.kp / c.ti * e * dt, -c.iLimit, c.iLimit);
     float raw  = r.ff + r.p + iNew + r.d;
@@ -108,6 +171,7 @@ PidTerms PidStep(PidState& s, const PidAim& a, float bt, float dt, const PidConf
     r.limited = high || low;
     s.out     = out;
     r.heat    = out;
+    ObsAdvance(s.obs, out, dt, c);
     return r;
 }
 
@@ -127,11 +191,17 @@ float FcAnchorOffset(const Curve& c, int tF, float btAtF, float cap)
     return clampf(btAtF - v, -cap, cap);
 }
 
+int ObserveStart(int curveFcT, int fcMarkT, int lead)
+{
+    return FcFloorStart(curveFcT, fcMarkT, lead);
+}
+
 PidAim CardputerAim(const Curve& c, int t, float bt, int windowStart, bool fcMarked, float fcOffset, int lookahead,
                     float cap)
 {
     int la = std::max(0, std::min(20, lookahead));
     PidAim a;
+    a.observe = windowStart >= 0 && t >= windowStart;
     a.ffRate = CurveRate(c, t + la);
     a.rate   = CurveRate(c, t);
     if (fcMarked) {
@@ -142,8 +212,7 @@ PidAim CardputerAim(const Curve& c, int t, float bt, int windowStart, bool fcMar
     }
     a.target = c.at(t);
     a.ffTemp = c.at(t + la);
-    (void)windowStart;  // no hold before F any more: it let BT run 2 degC ahead into the crack (2026-11-14)
-    (void)bt;
+    (void)bt;  // no hold before F any more: it let BT run 2 degC ahead into the crack (2026-11-14)
     (void)cap;
     return a;
 }
@@ -167,6 +236,19 @@ float DevTrack::target(int t) const
 float DevTrack::rate(int) const
 {
     return plan.speed;
+}
+
+PidAim DevAim(const DevTrack& d, int t, int lookahead)
+{
+    int la = std::max(0, std::min(20, lookahead));
+    PidAim a;
+    a.target  = d.target(t);
+    a.ffTemp  = d.target(t + la);
+    a.ffRate  = d.rate(t + la);
+    a.rate    = d.rate(t);
+    a.afterF  = true;
+    a.observe = true;
+    return a;
 }
 
 DropWhy DevDropDue(const DevTrack& d, const DevPlan& plan, int t, float bt)

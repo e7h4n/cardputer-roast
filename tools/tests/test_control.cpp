@@ -297,7 +297,7 @@ int main()
         Curve c = line();
         PidConfig pf;
         pf.maxStep = 100;
-        pf.fcTd    = 10;  // off by default; on here to check it
+        pf.fcTd    = 10;  // 3 by default; 10 here to make it plain
         PidState st;
         PidAim before = CardputerAim(c, 449, c.at(449) - 1.0f, 430, false, 0, 8, 8);
         PidPrime(st, 80, before, c.at(449) - 1.0f, pf);
@@ -321,6 +321,111 @@ int main()
         NEAR(PidStep(y, pre, bt, 1.0f, pf).d, 0.0f);
     }
 
+
+    // --- self-heating estimate (Observer) and the after-F gains
+    {
+        CHECK(ObserveStart(420, -1, 120) == 300);
+        CHECK(ObserveStart(420, 290, 120) == 290);  // F before the window: from F
+        CHECK(ObserveStart(-1, 390, 120) == 390);   // curve without an FC point: from F
+        CHECK(ObserveStart(-1, -1, 120) == -1);
+        Curve c;
+        c.pts = {{0, 50, PointTag::Charge}, {420, 204, PointTag::FCs}, {470, 209, PointTag::Drop}};
+        c.build();
+        CHECK(!CardputerAim(c, 299, 190, 300, false, 0, 8, 8).observe);
+        CHECK(CardputerAim(c, 300, 190, 300, false, 0, 8, 8).observe);
+        CHECK(!CardputerAim(c, 300, 190, -1, false, 0, 8, 8).observe);
+        DevTrack d = DevStart(c, 400, 202.5f);
+        PidAim da  = DevAim(d, 410, 8);
+        NEAR(da.target, 202.5f + d.plan.speed * 10);
+        NEAR(da.ffTemp, 202.5f + d.plan.speed * 18);
+        NEAR(da.rate * 60, 6.0f);
+        CHECK(da.afterF && da.observe);
+    }
+    {  // the estimate: ~0 on the plant the model describes, the extra slope on one that heats itself harder
+        PidConfig po;
+        Plant same, hot;
+        hot.extra = 0.4f / 60;  // degC/s per degC above 156.2 (the model: 0.253)
+        same.bt = same.air = hot.bt = hot.air = 190;
+        Observer a, b;
+        for (int t = 0; t < 120; t++) {  // heat held at 75 %, BT read to 0.1 degC
+            ObserverStep(a, std::round(same.bt * 10) / 10, 75, 1.0f, po);
+            ObserverStep(b, std::round(hot.bt * 10) / 10, 75, 1.0f, po);
+            same.step(75);
+            hot.step(75);
+        }
+        CHECK(std::fabs(a.dist * 60) < 0.5f);
+        float extra = (0.4f - 0.253f) * (hot.bt - 156.2f);  // degC/min the model misses at this BT
+        CHECK(std::fabs(b.dist * 60 - extra) < 1.0f);
+        NEAR(a.air, 26 + 2.133f * 75);  // the modelled air settles on the heat written (manual hold path)
+    }
+    {  // the correction: what the estimate has changed by since the window opened, capped; off outside it
+        PidConfig po;
+        po.maxStep = 100;
+        PidState st;
+        PidAim a  = Aim(195, 0.15f);
+        a.ffTemp  = 196;
+        a.observe = true;
+        st.obs.dist = 0.05f;
+        PidPrime(st, 70, a, 195, po);  // opens the window: dist0 = 0.05
+        CHECK(st.obs.on);
+        NEAR(st.obs.dist0, 0.05f);
+        st.obs.dist   = 0.15f;  // the beans now rise 6 degC/min faster than at the start of the window
+        st.obs.lastBt = NAN;    // (no slope this step: the estimate stays put)
+        PidTerms o = PidStep(st, a, 195, 1.0f, po);
+        NEAR(o.obs * 60, 6.0f);
+        NEAR(o.ff, FeedForwardHeat(196, 0.15f - 0.1f, po.model));
+        st.obs.dist   = 2.0f;
+        st.obs.lastBt = NAN;
+        NEAR(PidStep(st, a, 195, 1.0f, po).obs, po.obsLimit);
+        a.observe     = false;
+        st.obs.lastBt = NAN;
+        o             = PidStep(st, a, 195, 1.0f, po);
+        NEAR(o.obs, 0.0f);
+        CHECK(!st.obs.on);
+        NEAR(o.ff, FeedForwardHeat(196, 0.15f, po.model));
+        PidConfig off = po;
+        off.observe   = false;
+        a.observe     = true;
+        st.obs.lastBt = NAN;
+        NEAR(PidStep(st, a, 195, 1.0f, off).obs, 0.0f);
+    }
+    {  // P after F: fcKp from the F mark on, kp before
+        PidConfig pf;
+        pf.maxStep = 100;
+        PidState st;
+        PidAim a = Aim(200, 0.1f);
+        PidPrime(st, 70, a, 199, pf);
+        NEAR(PidStep(st, a, 199, 1.0f, pf).p, 1.5f);
+        a.afterF = true;
+        NEAR(PidStep(st, a, 199, 1.0f, pf).p, 4.0f);
+    }
+    {  // closed loop on beans that heat themselves like Huakui 11 B (2026-11-15): BT into the crack on the curve
+        Curve c;
+        c.pts = {{0, 50, PointTag::Charge}, {420, 204, PointTag::FCs}, {470, 209, PointTag::Drop}};
+        c.build();
+        auto lead = [&](bool observe) {
+            PidConfig pc;
+            pc.observe = observe;
+            Plant pl;
+            pl.gain = 2.038f, pl.rate = 0.0160f, pl.extra = 0.0119f, pl.from = 183.2f;
+            pl.bt = pl.air = 25;
+            PidState st;
+            PidReset(st, 0);
+            double sum = 0;
+            for (int t = 0; t < 400; t++) {
+                float bt  = std::round(pl.bt * 10) / 10;
+                PidAim a  = CardputerAim(c, t, bt, ObserveStart(420, -1, pc.obsLead), false, 0, 8, 8);
+                if (t >= 370) sum += bt - c.at(t);
+                pl.step(std::round(PidStep(st, a, bt, 1.0f, pc).heat * 10) / 10);
+            }
+            return (float)(sum / 30);
+        };
+        float without = lead(false), with = lead(true);
+        printf("  beans heating like Huakui 11 B: BT - curve over 6:10-6:40 %+.2f without the estimate, %+.2f with\n",
+               without, with);
+        CHECK(without > 0.5f);
+        CHECK(std::fabs(with) < 0.3f);
+    }
 
     // --- curves from first crack and drop: through both points, no corners, development at one speed
     {

@@ -258,10 +258,20 @@ the roaster's own PID off (register 15 = 0) and then writes the heater output (r
   better heat transfer as the beans dry and expand, or the probe: the data do not tell them apart). Without that
   term the feedforward gave too much heat near first crack and the beans ran ahead (the 2026-11-14 roast). The
   model gives the heat the curve needs at curve(t + lookahead) with the curve's slope there, so the PI only trims.
-  Replayed through the fitted roaster PID, it reproduces batch A within 1.2 °C RMS. Beans differ (the 11-14
-  Syrina heated itself harder): the integral covers the rest. A rule of thumb: 1 % heat ≈ 2.6 °C/min of RoR.
+  Replayed through the fitted roaster PID, it reproduces batch A within 1.2 °C RMS. A rule of thumb: 1 % heat ≈
+  2.6 °C/min of RoR.
+- **Self-heating estimate** (*self-heat estimate*, on by default; `Observer`). Beans differ, and near first crack
+  the difference grows: one model fitted per competition roast (2026-11-14/15) puts their own heating at 200 °C at
+  5.0–6.9 % heat against the model's 4.3 %, and the bigger batches also respond less to the heater. The integral
+  (60 s) follows a difference that keeps growing only late, so BT ran 0.4–0.9 °C ahead of the curve into every
+  crack and the RoR at F was 9–12 °C/min against 7–8.5 planned. So every second Roast compares how fast BT
+  actually rose with what the model predicted from the heat it wrote (through the 5 s delay and the air lag), and
+  low-passes the difference (10 s). From 2 minutes before the curve's first crack, the feedforward takes off how much
+  that estimate has changed since (what it was before, the integral already carries): the heat comes off as the
+  beans speed up, not a minute later. After F the estimate reacts faster (4 s). The correction is capped at
+  15 °C/min (~6 % heat) and logged in the `obs` column.
 - **PI(D)**, measured against the curve *now*:
-  - Defaults: P 1.5 %/°C, I time 60 s, D time 0, *D after F* 0.
+  - Defaults: P 1.5 %/°C, I time 60 s, D time 0; after F (*P after F*, *D after F*) P 4 %/°C, D 3 s.
   - D acts on the rate-of-rise shortfall: the curve's slope now minus BT's slope (5 s filter). The curve's slope
     has no steps, so nothing kicks when the target shifts at F. Before F it stays off: on batch A it doubled the
     heater's movement and the error.
@@ -274,9 +284,10 @@ the roaster's own PID off (register 15 = 0) and then writes the heater output (r
     removed after the 2026-11-14 roast: it let BT run 2 °C ahead into the crack.)
   - *At F*: the development (above) becomes the target, and the controller is re-primed so the heater does not
     jump. A curve without first crack and drop points is shifted to BT instead (within ± *floor cap*).
-  - *After F*, optional (*D after F*, off by default): D acts on the rate of rise against the development rate.
-    In the 2026-11-14 replay it made the development a little faster rather than steadier (11.4 and 11.8 °C/min
-    against 11.2 without), so it stays off.
+  - *After F*: P 4 %/°C and D 3 s on the rate of rise against the development speed, with the faster
+    self-heating estimate. The development lasts 25–50 s and the beans add or lose 2–7 °C/min of their own in it
+    (the Syrina 204.5 g roast hit its maximum temperature after 21 s of a planned 25); P 1.5 corrected that only
+    after the drop. More D than 3 s made the RoR swing on a 100 g batch, which responds more to the heater.
   - With the heater already at 100 % no controller can lift the rate of rise. That has to be planned in the curve;
     the "heater pinned" alert shows it.
 - **Stale reading:** if BT is more than 3 s old, the output is held.
@@ -288,6 +299,27 @@ the roaster's own PID off (register 15 = 0) and then writes the heater output (r
 > the heater by itself; heating resumed with the next write after the reconnect. Roast re-sends the heater every
 > 5 s even when it does not change. Stay with the roast, as always.
 
+**The competition roasts replayed** (`tools/pid`, `fc_replay`, run by CI). Each of the five roasts of 2026-11-14/15
+gets its own fitted plant plus what its beans did beyond it (the residual of the log), and F is pressed at the BT
+the crack was heard: writing the logged heat retraces the log, and replaying the firmware that roasted them
+reproduces what happened. Lead: BT − curve over the 30 s before F (3 noise seeds); development: rise from F to the
+drop over the time taken, against the planned speed (T: the drop temperature came first).
+
+| Roast | lead before F, as roasted → now | development, as roasted → now |
+|---|---|---|
+| X1 Syrina 150 g | +0.37 → −0.07 °C | 89 → 94 % |
+| X2 Syrina 100 g | +0.78 → +0.03 °C | 114 % T → 99 % |
+| Syrina 204.5 g | +0.57 → +0.12 °C | 127 % T → 107 % |
+| Huakui 11 B 200 g | +0.83 → −0.02 °C | 120 → 96 % |
+| Huakui 11 A 200 g | +0.84 → +0.16 °C | 110 → 94 % |
+
+The estimate alone fixes the lead but not the development (80–125 %); stronger P/D after F alone fixes neither
+(lead up to 0.84 °C, development up to 118 %). Even each roast's exact model, without the estimate, keeps the lead
+at up to 0.84 °C and two developments ending at the temperature: what the beans did near the crack was not in any
+smooth model. With 4× the probe noise: lead within 0.19 °C, development within 10 %. The single reading at F can
+still be 0.2–0.8 °C over the curve (the beans speed up in the last seconds). Also note these beans cracked at
+202.3–203.0 °C on this probe, 7–31 s before curves that put the crack at 203–204.
+
 ![Batch A: roaster PID vs Cardputer PID](docs/pid/pid_compare_batchA.png)
 
 Batch A's curve (first crack 7:30 / 199, drop 10:00 / 210: 2:30 at 4.4 °C/min) as built now, on the fitted model
@@ -298,9 +330,9 @@ earlier builder.
 |---|---|---|---|
 | Roaster PID, no lookahead, no floor | 3.2 °C | 204.5 | 3.2 |
 | Roaster PID, lookahead 8 s + FC floor +1 °C | 1.9 °C | 207.9 | 5.4 |
-| **Cardputer PID** (development from F) | **0.53 °C** | 205.4 | 4.4 |
+| **Cardputer PID** (development from F) | **0.53 °C** | 205.3 | 4.0 |
 | Roaster PID, lookahead + floor, model 15 % off, dead time 7 s | 3.4 °C | 208.2 | 5.2 |
-| Cardputer PID, model 15 % off, dead time 7 s | 1.7 °C | 206.0 | 4.0 |
+| Cardputer PID, model 15 % off, dead time 7 s | 1.6 °C | 205.4 | 4.0 |
 
 The roaster's own PID (registers 20–23: cycle 1000 ms, P 6, I 1, D 8) fits as heat = 0.50 e + 0.036 ∫e dt + 12 %
 (R² 0.995–0.998 on all three roasts): an integral time of ~14 s against a ~50 s bean time constant, so it reacts
@@ -374,7 +406,7 @@ The card must be FAT32. Without one, logs live only in memory until the summary 
 |---|---|
 | `roast/curves/*.json` | Curves (format below). |
 | `roast/curves/*.alog` | Artisan or myERoast exports, read-only; `temp2` is the target. |
-| `roast/logs/<id>.csv` | One row per second: `t,bt,target,heat,fan,ror,pid,machine_t,heat_cmd,ff,p,i,d`. `pid`: 0 manual, 1 roaster PID, 2 Cardputer PID. The last five columns (only with the Cardputer PID) are the heater output written and its feedforward, P, I and D terms, in %. Marks and actions are lines starting with `#`. |
+| `roast/logs/<id>.csv` | One row per second: `t,bt,target,heat,fan,ror,pid,machine_t,heat_cmd,ff,p,i,d,obs`. `pid`: 0 manual, 1 roaster PID, 2 Cardputer PID. The last six columns (only with the Cardputer PID) are the heater output written and its feedforward, P, I and D terms, in %, and `obs`: what the self-heating estimate took off the feedforward's rate, °C/min. Marks and actions are lines starting with `#`. |
 | `roast/logs/<id>.json` | Roast summary. |
 | `roast/logs/<id>.alog` | Opens in Artisan. |
 | `roast/logs/<id>.wav` | The roast's recording (32 kHz, 16-bit, mono). Samples start at byte 512. |

@@ -98,22 +98,23 @@ float Session::rorAt(int idx) const
     return fabsf((_samples[idx].bt10 - _samples[idx - 29].bt10) / 10.0f) / 0.5f;
 }
 
-void Session::setControl(float heat, float ff, float p, float i, float d)
+void Session::setControl(float heat, float ff, float p, float i, float d, float obs)
 {
     _ctl[0] = heat;
     _ctl[1] = ff;
     _ctl[2] = p;
     _ctl[3] = i;
     _ctl[4] = d;
+    _ctl[5] = obs;
     _ctlSet = true;
 }
 
 void Session::writeControl()
 {
     if (_ctlSet)
-        fprintf(_csv, ",%.1f,%.1f,%.1f,%.1f,%.1f\n", _ctl[0], _ctl[1], _ctl[2], _ctl[3], _ctl[4]);
+        fprintf(_csv, ",%.1f,%.1f,%.1f,%.1f,%.1f,%.1f\n", _ctl[0], _ctl[1], _ctl[2], _ctl[3], _ctl[4], _ctl[5]);
     else
-        fputs(",,,,,\n", _csv);
+        fputs(",,,,,,\n", _csv);
     _ctlSet = false;
 }
 
@@ -218,7 +219,7 @@ bool Session::openLog(const std::string& id)
     if (!_csv) return false;
     fprintf(_csv, "# roast %s curve=%s green_g=%.1f bean=%s\n", id.c_str(), curveName.c_str(), _greenG,
             _bean.c_str());
-    fprintf(_csv, "t,bt,target,heat,fan,ror,pid,machine_t,heat_cmd,ff,p,i,d\n");
+    fprintf(_csv, "t,bt,target,heat,fan,ror,pid,machine_t,heat_cmd,ff,p,i,d,obs\n");
     for (auto& a : _actions) fprintf(_csv, "#action,%d,%s\n", a.t, a.text.c_str());
     flush();
     return true;

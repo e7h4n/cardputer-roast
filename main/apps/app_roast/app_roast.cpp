@@ -51,8 +51,11 @@ void RoastRules::load()
     pidKp       = std::max(1, std::min(100, (int)s.GetInt("pidKp10", (int)lroundf(pidKp * 10)))) / 10.0f;
     pidTi       = std::max(0, std::min(600, (int)s.GetInt("pidTi", pidTi)));
     pidTd       = std::max(0, std::min(30, (int)s.GetInt("pidTd", pidTd)));
-    pidFcTd     = std::max(0, std::min(30, (int)s.GetInt("pidFcTd", pidFcTd)));
+    // "pidFcTd" held 0, the default until the self-heating estimate; its new default needs a new key.
+    pidFcKp     = std::max(1, std::min(100, (int)s.GetInt("pidFcKp10", (int)lroundf(pidFcKp * 10)))) / 10.0f;
+    pidFcTd     = std::max(0, std::min(30, (int)s.GetInt("pidFcTd2", pidFcTd)));
     pidFF       = s.GetInt("pidFF", pidFF ? 1 : 0) != 0;
+    pidObs      = s.GetInt("pidObs", pidObs ? 1 : 0) != 0;
 }
 
 void RoastRules::save() const
@@ -75,8 +78,10 @@ void RoastRules::save() const
     s.SetInt("pidKp10", (int)lroundf(pidKp * 10));
     s.SetInt("pidTi", pidTi);
     s.SetInt("pidTd", pidTd);
-    s.SetInt("pidFcTd", pidFcTd);
+    s.SetInt("pidFcKp10", (int)lroundf(pidFcKp * 10));
+    s.SetInt("pidFcTd2", pidFcTd);
     s.SetInt("pidFF", pidFF ? 1 : 0);
+    s.SetInt("pidObs", pidObs ? 1 : 0);
 }
 
 /* ---------------------------------- app ---------------------------------- */
@@ -378,10 +383,12 @@ void AppRoast::charge()
         snprintf(b, sizeof(b), "charge fan %.1f%% BT %.1f", _snap.has(12) ? _snap.fan() : _fanSet, _snap.bt());
         _session.addAction(0, b);
         if (_hasCurve) {
-            char c[80];
+            char c[128];
             if (_cardPid)
-                snprintf(c, sizeof(c), "control: Cardputer PID P %.1f Ti %d s Td %d s feedforward %s", _rules.pidKp,
-                         _rules.pidTi, _rules.pidTd, _rules.pidFF ? "on" : "off");
+                snprintf(c, sizeof(c),
+                         "control: Cardputer PID P %.1f Ti %d s Td %d s, after F P %.1f Td %d s, feedforward %s%s",
+                         _rules.pidKp, _rules.pidTi, _rules.pidTd, _rules.pidFcKp, _rules.pidFcTd,
+                         _rules.pidFF ? "on" : "off", _rules.pidFF && _rules.pidObs ? " + self-heat estimate" : "");
             else
                 snprintf(c, sizeof(c), "control: roaster PID");
             _session.addAction(0, c);
@@ -597,8 +604,10 @@ PidConfig AppRoast::pidConfig() const
     c.kp          = _rules.pidKp;
     c.ti          = (float)_rules.pidTi;
     c.td          = (float)_rules.pidTd;
+    c.fcKp        = _rules.pidFcKp;
     c.fcTd        = (float)_rules.pidFcTd;
     c.feedforward = _rules.pidFF;
+    c.observe     = _rules.pidObs;
     return c;
 }
 
@@ -610,19 +619,10 @@ PidAim AppRoast::pidAim(int t) const
 {
     SvConfig c   = svConfig();
     int fcT      = _session.markT(Mark::FCs);
-    int start    = FcFloorStart(_curve.tagTime(PointTag::FCs), fcT, c.floorLead);
+    int start    = ObserveStart(_curve.tagTime(PointTag::FCs), fcT, pidConfig().obsLead);
     bool roast   = _phase == Phase::Roasting;
     float bt     = _snap.has(4) ? _snap.bt() : NAN;
-    if (roast && _dev.active) {
-        int la = std::max(0, std::min(20, c.lookahead));
-        PidAim a;
-        a.target = _dev.target(t);
-        a.ffTemp = _dev.target(t + la);
-        a.ffRate = _dev.rate(t + la);
-        a.rate   = _dev.rate(t);
-        a.afterF = true;
-        return a;
-    }
+    if (roast && _dev.active) return DevAim(_dev, t, c.lookahead);
     return CardputerAim(_curve, t, bt, roast ? start : -1, roast && fcT >= 0, _fcOffset, c.lookahead, c.floorCap);
 }
 
@@ -668,7 +668,7 @@ void AppRoast::pidTick(const PidAim& aim)
         _lastHeatRaw = raw;
         _heatSentMs  = now;
     }
-    _session.setControl(o.heat, o.ff, o.p, o.i, o.d);
+    _session.setControl(o.heat, o.ff, o.p, o.i, o.d, o.obs * 60);
 }
 
 SvResult AppRoast::svAt(int t) const
@@ -718,7 +718,13 @@ void AppRoast::tickRoast()
     _lastSv = sv;
     if (_phase == Phase::Roasting && _hasCurve && linkReady()) {
         if (_cardPid) {
-            if (!_manual) pidTick(aim);
+            if (!_manual) {
+                pidTick(aim);
+            } else {  // heat held by hand: the self-heating estimate keeps up, so PID can take over again
+                uint32_t now = GetHAL().millis();
+                bool fresh   = _snap.has(4) && _snap.lastRxMs && now - _snap.lastRxMs < 3000;
+                ObserverStep(_pid.obs, fresh ? _snap.bt() : NAN, _heatSet, 1.0f, pidConfig());
+            }
         } else {
             int raw = (int)lroundf(sv * 10);
             if (raw != _lastTargetRaw) {
@@ -1603,11 +1609,16 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     rowF("P", &_rules.pidKp, nullptr, 0.1f, 10, 0.1f, "%/°");
     rowI("I time", &_rules.pidTi, nullptr, 0, 600, 5, " s");
     rowI("D time", &_rules.pidTd, nullptr, 0, 30, 1, " s");
+    rowF("P after F", &_rules.pidFcKp, nullptr, 0.1f, 10, 0.1f, "%/°");
     rowI("D after F", &_rules.pidFcTd, nullptr, 0, 30, 1, " s");
     RuleRow ffRow;
     ffRow.label  = "feedforward";
     ffRow.toggle = &_rules.pidFF;
     v.push_back(ffRow);
+    RuleRow obsRow;
+    obsRow.label  = "self-heat estimate";
+    obsRow.toggle = &_rules.pidObs;
+    v.push_back(obsRow);
     rowI("SV lookahead", &_rules.svLookahead, nullptr, 0, 20, 1, " s");
     RuleRow floorRow;
     floorRow.label  = "FC floor";
