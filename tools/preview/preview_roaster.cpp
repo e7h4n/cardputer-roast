@@ -1,12 +1,11 @@
 /*
- * Simulated roaster for practising the UI without the machine.
- * Same register semantics as the BLE link. Thermal model fitted on R0012-R0014 and the 2026-11-14 Syrina D roast
- * (roast_control.h PlantModel): heater -> inlet air after a 5 s dead time and a 1 s lag, beans approach the air at
- * 0.0204/s at 53.5 % fan plus their own heating above 156 degC; more airflow dilutes the air and speeds up the
- * transfer. On-board PID fitted on R0012-R0014. The on-board PID is the fitted positional
- * form heat = 0.50 e + 0.036 integral(e dt) + 12 %.
+ * The desktop preview's roaster: answers like the E-Meter621 over BLE (same registers) with a thermal model, so the
+ * preview can play a whole roast. Model fitted on R0012-R0014 and the 2026-11-14 Syrina D roast (roast_control.h
+ * PlantModel): heater -> inlet air after a 5 s dead time and a 1 s lag, beans approach the air at 0.0204/s at
+ * 53.5 % fan plus their own heating above 156 degC; more airflow dilutes the air and speeds up the transfer. The
+ * roaster's own PID (register 15) is the form fitted on R0012-R0014: heat = 0.50 e + 0.036 integral(e dt) + 12 %.
  */
-#include "roast_link.h"
+#include <apps/app_roast/roast_link.h>
 #include <esp_timer.h>
 #include <cmath>
 #include <cstdlib>
@@ -14,7 +13,7 @@
 
 namespace roast {
 
-class SimLink : public RoasterLink {
+class FakeRoaster : public RoasterLink {
 public:
     bool begin() override
     {
@@ -32,7 +31,7 @@ public:
     }
     std::string deviceName() override
     {
-        return "Simulator";
+        return "E-Meter621 BLE";
     }
     std::string lastError() override
     {
@@ -40,11 +39,7 @@ public:
     }
     std::vector<ScanEntry> scanResults() override
     {
-        return {{"Simulator", -40}};
-    }
-    bool isSimulated() const override
-    {
-        return true;
+        return {{"E-Meter621 BLE", -58}};
     }
 
     RegSnapshot snapshot() override
@@ -197,9 +192,9 @@ private:
     }
 };
 
-RoasterLink* CreateSimLink()
+RoasterLink* CreateFakeRoaster()
 {
-    return new SimLink();
+    return new FakeRoaster();
 }
 
 }  // namespace roast

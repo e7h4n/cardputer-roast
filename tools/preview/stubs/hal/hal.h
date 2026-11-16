@@ -12,16 +12,6 @@ struct FakeDisplay {
     void setBrightness(int) {}
     void fillScreen(uint32_t) {}
 };
-struct FakeSpeaker {
-    int v = 128;
-    int getVolume() { return v; }
-    void setVolume(int x) { v = x; }
-    template <typename... A>
-    void tone(A...) {}
-    bool isPlaying() { return false; }
-    bool begin() { return true; }
-    void end() {}
-};
 struct FakeButton {
     bool clicked = false;
     bool wasClicked()
@@ -36,7 +26,6 @@ class Hal {
 public:
     LGFX_Sprite canvas;
     FakeDisplay display;
-    FakeSpeaker speaker;
     FakeButton homeButton;
     Keyboard keyboard;
     bool sd = true;

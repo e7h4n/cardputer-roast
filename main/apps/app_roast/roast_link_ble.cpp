@@ -73,10 +73,6 @@ public:
         Lock l(_mtx);
         return _scan;
     }
-    bool isSimulated() const override
-    {
-        return false;
-    }
     RegSnapshot snapshot() override
     {
         Lock l(_mtx);

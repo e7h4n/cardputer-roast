@@ -4,10 +4,9 @@
  *   key <name>     inject a key press: a..z 0..9 enter esc tab space bksp up down left right; prefix S- for shift
  *   type <text>    inject printable characters
  *   shot           dump the 240x135 screen canvas: "SHOT w h" + one hex line per row (RGB565, as stored) + "ENDSHOT"
- *   hold <key> <ms>, quiet, ping, regs
+ *   hold <key> <ms>, ping, regs
  *   ls <dir>, cat <file>, rm <file under /sdcard/roast/>, sdinfo, sdformat FORMAT-SD-CARD
- *   rec            recorder state: "REC state=... samples=... peak_dbfs=... recent_dbfs=... ..."
- *   b64 <file> <offset> <length>   base64 of a byte range (pull a WAV over USB: tools/pull_audio.py)
+ *   b64 <file> <offset> <length>   base64 of a byte range (pull a file over USB)
  *   net            Wi-Fi & Dropbox setup state (no credentials): "NET open=... wifi=... dropbox=... heap=..."
  *   sync           sync job state: "SYNC job=... running=... ok=... step=... error=..."
  *   boot roast     test only: restart into Roast once without the Wi-Fi/Dropbox requirement or the boot sync
@@ -15,10 +14,8 @@
  */
 #include "roast_debug.h"
 #include <hal/hal.h>
-#include <apps/utils/audio/audio.h>
 #include "roast_curve.h"
 #include "roast_link.h"
-#include "roast_audio.h"
 #include "net/roast_net.h"
 #include "roast_sync.h"
 #include <dirent.h>
@@ -37,7 +34,6 @@
 
 namespace roast {
 
-bool g_debugQuiet = false;
 RoasterLink* g_activeLink = nullptr;
 bool g_debugShift = false;  // kept for API compatibility; raw injection drives shift
 static TaskHandle_t s_task       = nullptr;
@@ -274,16 +270,6 @@ void DebugPollMain()
             printf("ERR rm %s\n", p.c_str());
         }
         fflush(stdout);
-    } else if (line == "rec") {
-        AudioStats st = rec::Stats();
-        printf("REC state=%s samples=%u secs=%.1f peak_dbfs=%.1f recent_dbfs=%.1f clipped=%u gaps=%u buffer_ms=%u "
-               "slot=%d gain=%d failed=%d heap=%u largest=%u\n",
-               st.active ? "running" : "off", (unsigned)st.samples,
-               (double)st.samples / st.sampleRate, PeakDbfs(st.peak), PeakDbfs(st.recentPeak), (unsigned)st.clipped,
-               (unsigned)st.gapCount, (unsigned)st.bufferMs, st.slot, st.gainDb, st.failed ? 1 : 0,
-               (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-        fflush(stdout);
     } else if (line.rfind("b64 ", 0) == 0) {  // b64 <file> <offset> <length>: one line "B64 <n> <data>"
         static char path[100];
         long off = 0, len = 0;
@@ -358,12 +344,6 @@ void DebugPollMain()
             printf("SDFORMAT dirs=%d curve=%d\n", d1 ? 1 : 0, f ? 1 : 0);
         }
         printf("SDINFO\n%sENDSDINFO\n", GetHAL().sdCardInspect().c_str());
-    } else if (line == "quiet") {
-        // silence for remote testing: runtime only (not saved), so the user's own setting returns after a reset
-        audio::set_quiet_mode(true);
-        GetHAL().speaker.setVolume(0);
-        g_debugQuiet = true;
-        printf("OK quiet\n");
     } else if (line == "ping") {
         printf("PONG roast-debug heap=%u largest=%u min=%u\n", (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),

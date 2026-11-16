@@ -28,7 +28,6 @@ constexpr uint32_t FCE        = 0x643C22;  // G: end of first crack
 constexpr uint32_t DROP       = 0xE2303A;  // D D, X X, alarms
 constexpr uint32_t GO         = 0x1C9E58;  // charge, drop window, connected, saved
 constexpr uint32_t WARN       = 0xFAC42E;  // attention (ink text on it)
-constexpr uint32_t SIM        = 0xFFD640;  // simulator tag
 constexpr uint32_t ROR        = 0x96928A;
 // roast phases
 constexpr uint32_t PH_DRY = 0x9CC87C;

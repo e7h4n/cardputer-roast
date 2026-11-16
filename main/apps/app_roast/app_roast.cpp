@@ -4,7 +4,6 @@
  */
 #include "app_roast.h"
 #include "roast_debug.h"
-#include "roast_audio.h"
 #include "net/roast_net.h"
 #include "roast_update.h"
 #include <esp_system.h>
@@ -14,7 +13,6 @@
 #ifndef RTC_NOINIT_ATTR
 #define RTC_NOINIT_ATTR
 #endif
-#include <apps/utils/audio/audio.h>
 #include <hal/utils/settings/settings.h>
 #include <mooncake_log.h>
 #include <esp_system.h>
@@ -43,7 +41,6 @@ void RoastRules::load()
     greenG    = s.GetInt("green10", (int)lroundf(greenG * 10)) / 10.0f;
     heatDrop  = s.GetInt("heatDrop10", (int)lroundf(heatDrop * 10)) / 10.0f;
     curveOffset = s.GetInt("curveOff10", (int)lroundf(curveOffset * 10)) / 10.0f;
-    micGain     = std::max(0, std::min(rec::kMaxGainDb, (int)s.GetInt("micGain", micGain)));
     svLookahead = std::max(0, std::min(20, (int)s.GetInt("svLook", svLookahead)));
     floorCap    = std::max(10, std::min(80, (int)s.GetInt("floorCap10", (int)lroundf(floorCap * 10)))) / 10.0f;
     pidKp       = std::max(1, std::min(100, (int)s.GetInt("pidKp10", (int)lroundf(pidKp * 10)))) / 10.0f;
@@ -67,7 +64,6 @@ void RoastRules::save() const
     s.SetInt("green10", (int)lroundf(greenG * 10));
     s.SetInt("heatDrop10", (int)lroundf(heatDrop * 10));
     s.SetInt("curveOff10", (int)lroundf(curveOffset * 10));
-    s.SetInt("micGain", micGain);
     s.SetInt("svLook", svLookahead);
     s.SetInt("floorCap10", (int)lroundf(floorCap * 10));
     s.SetInt("pidKp10", (int)lroundf(pidKp * 10));
@@ -83,7 +79,6 @@ void RoastRules::save() const
 AppRoast::AppRoast()
 {
     setAppInfo().name = "Roast";
-    for (auto& m : _markMs) m = -1;
 }
 
 AppRoast::~AppRoast() {}
@@ -132,13 +127,13 @@ void AppRoast::onOpen()
     bool bypass = consumeBypass();
     bool skip   = consumeSkipSync();
     if (bypass) {  // test only: USB console `boot roast`
-        if (!_blockedByKeyboardApp) startLink(false);
+        if (!_blockedByKeyboardApp) startLink();
         toast("Test boot: no Dropbox sync", WARN, 4000);
     } else if (!roast_net_saved_wifi(ssid) || !roast_net_saved_dropbox()) {
         _netRequired = true;
         openNetwork();
     } else if (skip) {
-        if (!_blockedByKeyboardApp) startLink(false);
+        if (!_blockedByKeyboardApp) startLink();
     } else {
         startJob(sync::Job::Curves, "");
     }
@@ -150,7 +145,6 @@ void AppRoast::onClose()
     mclog::tagInfo(TAG, "on close");
     if (_keySlot >= 0) GetHAL().keyboard.onKeyEvent.disconnect(_keySlot);
     _keySlot = -1;
-    stopRecording();
     if (_netOpen) roast_net_close();
     _netOpen = false;
     if (_session.active()) {
@@ -174,15 +168,15 @@ void AppRoast::onClose()
     esp_deep_sleep_start();
 }
 
-void AppRoast::startLink(bool sim)
+void AppRoast::startLink()
 {
     if (_link) {
         g_activeLink = nullptr;
         _link->end();
         _link.reset();
     }
-    GetHAL().setRoastBleActive(!sim);
-    _link.reset(sim ? CreateSimLink() : CreateBleLink());
+    GetHAL().setRoastBleActive(true);
+    _link.reset(CreateBleLink());
     g_activeLink = _link.get();
     if (!_link->begin()) toast("BLE init failed", ui::DROP);
     _linkState = _link->state();
@@ -206,8 +200,6 @@ void AppRoast::onRunning()
     } else {
         _heatHeld = 0;
     }
-    pumpBeep();
-    pollRecording();
     pollSync();
     pollSave();
     if (_phase == Phase::Roasting || _phase == Phase::Cooling) tickRoast();
@@ -220,7 +212,6 @@ void AppRoast::onRunning()
         } else if (_phase == Phase::Roasting) {
             toast("Roasting: drop before exit", ui::DROP);
         } else {
-            if (!quietRoast()) audio::play_random_tone();
             close();
             return;
         }
@@ -249,7 +240,6 @@ void AppRoast::pollLink()
         if (_linkState == LinkState::Ready) {
             if (_screen == Screen::Connect) _screen = Screen::Prep;
             if (_prevLinkState == LinkState::Lost) toast("Reconnected", ui::GO);
-            beep(Tone::Good);
         } else if (_linkState == LinkState::Lost) {
             toast("BLE lost, reconnecting", ui::DROP);
         }
@@ -315,7 +305,6 @@ void AppRoast::startFan()
     _phase      = Phase::FanOn;
     _fanRunning = true;
     toast("Fan on (no heat): add beans", ui::GO, 3500);
-    beep(Tone::Info);
 }
 
 void AppRoast::charge()
@@ -363,7 +352,6 @@ void AppRoast::charge()
     _autoDropWhy.clear();
     _session.reset(_hasCurve ? &_curve : nullptr, _rules.greenG, _bean);
     _session.openLog(NextLogId());
-    for (auto& m : _markMs) m = -1;
     {
         char b[40];
         snprintf(b, sizeof(b), "charge fan %.1f%% BT %.1f", _snap.has(12) ? _snap.fan() : _fanSet, _snap.bt());
@@ -379,11 +367,7 @@ void AppRoast::charge()
     }
     _phase  = Phase::Roasting;
     _screen = Screen::Roast;
-    // quiet roast (see quietRoast()): no key clicks either, until the log ends
-    audio::set_keyboard_sfx_enable(false);
-    _beepQueue.clear();
     toast(!_hasCurve ? "Charged: manual heat (←→)" : "Charged: Cardputer PID", ui::GO);
-    startRecording();  // last, so a failure toast is not covered by the charge toast
 }
 
 void AppRoast::drop(const char* why)
@@ -396,7 +380,6 @@ void AppRoast::drop(const char* why)
     int t    = roastT();
     float bt = _snap.has(4) ? _snap.bt() : _session.lastBT();
     _session.setMark(Mark::Drop, t, bt);
-    _markMs[(int)Mark::Drop] = (int32_t)(GetHAL().millis() - _chargeMs);
     _session.addAction(t, std::string("drop") + (why ? why : ""));
     _session.flush();
     _dropMs = GetHAL().millis();
@@ -474,7 +457,6 @@ void AppRoast::pollFanBarrier()
     char b[48];
     snprintf(b, sizeof(b), "Below the %.0f%% floor", f);
     toast(b, ui::HEAT, 1500);
-    beep(Tone::Warn);
 }
 
 void AppRoast::adjustHeat(float delta)
@@ -532,7 +514,6 @@ void AppRoast::toggleMark(Mark m)
     if (_session.markT(m) >= 0) {
         if (!confirm(2000 + (int)m, std::string("Again to clear ") + MarkName(m))) return;
         _session.clearMark(m);
-        _markMs[(int)m] = -1;
         toast(std::string("Cleared ") + MarkName(m), ui::WARN);
         if (m == Mark::FCs) {
             _heatDropWarned = _rorWarned = false;
@@ -541,7 +522,6 @@ void AppRoast::toggleMark(Mark m)
         return;
     }
     _session.setMark(m, t, bt);
-    _markMs[(int)m] = (int32_t)(GetHAL().millis() - _chargeMs);
     if (m == Mark::FCs) fcAnchor(true);
     char b[48];
     snprintf(b, sizeof(b), "%s %s · %.1f°", MarkName(m), FormatMmSs(t).c_str(), bt);
@@ -558,7 +538,6 @@ bool AppRoast::confirm(int key, const std::string& msg, bool quiet)
     _pendingKey   = key;
     _pendingUntil = now + 2000;
     if (!quiet) toast(msg, ui::WARN, 2000);
-    beep(Tone::Key);
     return false;
 }
 
@@ -681,7 +660,6 @@ void AppRoast::tickRoast()
     s.ror10  = INT16_MIN;
     bool cap = _phase == Phase::Cooling && _dropMs && GetHAL().millis() - _dropMs > 240000;
     if (!cap) _session.addSample(s);
-    if (cap) stopRecording();  // the recording ends with the curve log
 
     // 3) link loss is the most dangerous state (the machine keeps chasing its last target): the red bar says so,
     //    and the alerts below would only be guesses without fresh readings
@@ -753,8 +731,6 @@ void AppRoast::tickRoast()
 
 void AppRoast::enterSummary()
 {
-    stopRecording();
-    audio::set_keyboard_sfx_enable(true);  // the roast is over: sounds are back
     std::string err;
     bool ok   = _session.finalize(&err);
     _saveMsg  = ok ? "Saved: roast/logs/" + _session.logId() : err;
@@ -829,11 +805,6 @@ void AppRoast::onKey(const Keyboard::KeyEvent_t& e)
         _screen     = Screen::Help;
         return;
     }
-    if (!typing && code == KEY_M) {
-        _muted = !_muted;
-        toast(_muted ? "Muted" : (quietRoast() ? "Sound on after the roast" : "Sound on"), FAINT);
-        return;
-    }
     switch (_screen) {
         case Screen::Connect:
             keyConnect(code);
@@ -873,10 +844,6 @@ void AppRoast::onKey(const Keyboard::KeyEvent_t& e)
 
 bool AppRoast::keyConnect(int code)
 {
-    if (code == KEY_D) {
-        setSimulator(true);
-        return true;
-    }
     if (code == KEY_O) {  // rules, including Wi-Fi & Dropbox setup, also while the roaster is off
         openSettings();
         return true;
@@ -886,7 +853,7 @@ bool AppRoast::keyConnect(int code)
             toast("BLE busy: restart the device", DROP, 3000);
             return true;
         }
-        startLink(false);
+        startLink();
         return true;
     }
     if (code == KEY_ESC) {
@@ -894,28 +861,6 @@ bool AppRoast::keyConnect(int code)
         return true;
     }
     return false;
-}
-
-// Simulator on/off. Only from Connect and Rules, and never while the machine runs: on the Prep page D D used to
-// mean "simulator" while during a roast it means "drop", one gesture with two meanings.
-void AppRoast::setSimulator(bool on)
-{
-    if (_fanRunning || _phase != Phase::Idle) {
-        toast("Stop the machine first", WARN, 2500);
-        return;
-    }
-    if (on) {
-        startLink(true);
-        if (_screen == Screen::Connect) _screen = Screen::Prep;
-        toast("Simulator: no roaster", SIM, 3000);
-    } else {
-        if (_blockedByKeyboardApp) {
-            toast("BLE busy: restart the device", DROP, 3000);
-            return;
-        }
-        startLink(false);
-        _screen = Screen::Connect;
-    }
 }
 
 void AppRoast::openBatch(int field)
@@ -1526,6 +1471,10 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
         r.unit  = unit;
         v.push_back(r);
     };
+    RuleRow fwRow;
+    fwRow.label    = "firmware";
+    fwRow.firmware = true;
+    v.push_back(fwRow);
     group("SAFETY", DROP);
     rowF("auto-drop at", &_rules.safetyBT, nullptr, 150, 260, 1, "°");
     rowI("after curve end", &_rules.afterEnd, nullptr, 0, 900, 10, " s");
@@ -1552,22 +1501,11 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     v.push_back(obsRow);
     rowI("SV lookahead", &_rules.svLookahead, nullptr, 0, 20, 1, " s");
     rowF("floor cap", &_rules.floorCap, nullptr, 1, 8, 0.5f, "°");
-    group("AUDIO", DROP);  // every roast is recorded (when there is an SD card); only the gain is a setting
-    rowI("mic gain", &_rules.micGain, nullptr, 0, rec::kMaxGainDb, 3, " dB");
     group("SYNC", CURVE);
     RuleRow netRow;
     netRow.label   = "network";
     netRow.network = true;
     v.push_back(netRow);
-    RuleRow fwRow;
-    fwRow.label    = "firmware";
-    fwRow.firmware = true;
-    v.push_back(fwRow);
-    group("MODE", SIM);
-    RuleRow sim;
-    sim.label     = "simulator";
-    sim.simToggle = true;
-    v.push_back(sim);
     return v;
 }
 
@@ -1591,10 +1529,6 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
                 if (_setSel < n - 1) _setSel++;
                 return true;
             case KEY_ENTER:
-                if (r.simToggle) {
-                    setSimulator(!(_link && _link->isSimulated()));
-                    return true;
-                }
                 if (r.network) {
                     openNetwork();
                     return true;
@@ -1763,7 +1697,7 @@ void AppRoast::restartApp(bool skipBootSync)
     s_bootFlag  = 0;
     _toastUntil = 0;
     if (skipBootSync) {
-        startLink(false);
+        startLink();
         _screen = Screen::Connect;
     } else {
         startJob(sync::Job::Curves, "");
@@ -1800,8 +1734,7 @@ void AppRoast::pollSave()
         GetHAL().setRoastBleActive(false);
         _linkState = _prevLinkState = LinkState::Off;
         // The curve library keeps every curve's 1 Hz table (~3 KB each); the summary cannot open it and Roast
-        // restarts after the save, so give that memory to Wi-Fi + TLS. A 10-minute recording's upload ran the heap
-        // down to 2.7 KB without this (2026-11-13).
+        // restarts after the save, so give that memory to Wi-Fi + TLS.
         std::vector<Curve>().swap(_curves);
         _saveStarted = sync::Start(sync::Job::SaveRoast, _session.logId());
         if (!_saveStarted) toast("Dropbox save could not start", DROP, 3000);
@@ -1946,7 +1879,6 @@ void AppRoast::openNetwork()
         toast("Stop the fan before network setup", WARN);
         return;
     }
-    _netWasSim = _link && _link->isSimulated();
     if (_link) {
         g_activeLink = nullptr;
         _link->clearQueue();
@@ -1971,7 +1903,7 @@ void AppRoast::closeNetwork()
     }
     if (started) {
         // BLE + Wi-Fi + TLS leave the heap fragmented (measured: largest block 15 KB afterwards), too little for the
-        // roast log (19 KB) and a recording. Restart into Roast with a clean heap; esp_restart() boots this app again,
+        // roast log (19 KB). Restart into Roast with a clean heap; esp_restart() boots this app again,
         // not the Launcher. Rules and the network setup are already saved in NVS.
         _rules.save();
         toast("Restarting…", INK, 5000);
@@ -1980,7 +1912,7 @@ void AppRoast::closeNetwork()
         esp_restart();
     }
     refreshNetSummary();
-    startLink(_netWasSim);
+    startLink();
     _screen = Screen::Connect;  // pollLink() moves on to Prep when the roaster answers
 }
 
@@ -1995,59 +1927,6 @@ bool AppRoast::keyNetwork(int code)
     return true;
 }
 
-/* ------------------------------- recording ------------------------------- */
-void AppRoast::startRecording()
-{
-    if (_recording || !_sdOk || !_session.logging()) return;  // always on: there is no switch
-    std::string err;
-    if (!rec::Start(LogPath(_session.logId(), ".wav"), _rules.micGain, &err)) {
-        _session.addAction(roastT(), "no audio: " + err);
-        toast("No recording: " + err, WARN, 3500);
-        return;
-    }
-    _recording  = true;
-    _recStartMs = rec::StartMs();
-}
-
-void AppRoast::stopRecording()
-{
-    if (!_recording) return;
-    _recording = false;
-    AudioStats st;
-    std::vector<AudioGap> gaps;
-    bool ok = rec::Stop(&st, &gaps);
-    AudioInfo a;
-    a.valid              = true;
-    a.file               = _session.logId() + ".wav";
-    a.sampleRate         = st.sampleRate;
-    a.gainDb             = st.gainDb;
-    a.startMsAfterCharge = (int)(_recStartMs - _chargeMs);
-    a.durationS          = st.sampleRate ? (double)st.samples / st.sampleRate : 0;
-    a.peakDbfs           = PeakDbfs(st.peak);
-    a.clipped            = st.clipped;
-    a.bufferMs           = st.bufferMs;
-    a.slot               = st.slot;
-    a.failed             = !ok || st.failed;
-    a.gaps               = gaps;
-    a.gapCount           = st.gapCount;
-    a.eventMs[0]         = 0;  // charge: the recording starts a few ms after it
-    for (int i = 0; i < (int)Mark::Count; i++)
-        if (_markMs[i] >= 0) a.eventMs[i + 1] = std::max(0, (int)_markMs[i] - a.startMsAfterCharge);
-    _session.setAudio(a);
-    char b[48];
-    snprintf(b, sizeof(b), "audio %.0f s%s", a.durationS, a.failed ? " (write failed)" : "");
-    _session.addAction(roastT(), b);
-}
-
-void AppRoast::pollRecording()
-{
-    if (!_recording) return;
-    if (rec::Stats().failed) {
-        stopRecording();
-        toast("Recording stopped: SD write failed", DROP, 4000);
-    }
-}
-
 /* --------------------------------- misc ---------------------------------- */
 void AppRoast::toast(const std::string& msg, uint32_t color, uint32_t ms)
 {
@@ -2055,46 +1934,4 @@ void AppRoast::toast(const std::string& msg, uint32_t color, uint32_t ms)
     _toastColor = color;
     _toastUntil = GetHAL().millis() + ms;
     _dirty      = true;
-}
-
-void AppRoast::beep(Tone t)
-{
-    // Silent during a roast (quietRoast()). Notes are played one by one with Speaker.tone(); the launcher's
-    // play_melody() renders the whole melody into one large buffer, which runs out of heap while BLE is up.
-    if (g_debugQuiet || quietRoast() || _muted || audio::is_quiet_mode()) return;
-    auto midi = [](int m) { return (int)lround(440.0 * pow(2.0, (m - 69) / 12.0)); };
-    std::vector<std::pair<int, int>> notes;  // freq (0 = rest), ms
-    if (GetHAL().speaker.getVolume() < audio::DEFAULT_VOLUME) GetHAL().speaker.setVolume(audio::DEFAULT_VOLUME);
-    switch (t) {
-        case Tone::Key:
-            notes = {{1800, 30}};
-            break;
-        case Tone::Info:
-            notes = {{midi(76), 60}, {midi(81), 60}};
-            break;
-        case Tone::Good:
-            notes = {{midi(72), 70}, {midi(76), 70}, {midi(79), 70}, {midi(84), 90}};
-            break;
-        case Tone::Warn:
-            notes = {{midi(84), 90}, {midi(77), 90}, {midi(84), 90}, {midi(77), 90}};
-            break;
-    }
-    _beepQueue.clear();
-    for (auto& n : notes) _beepQueue.push_back(n);
-    _beepNextMs = 0;
-}
-
-void AppRoast::pumpBeep()
-{
-    uint32_t now = GetHAL().millis();
-    if (quietRoast()) {
-        _beepQueue.clear();
-        return;
-    }
-    if (_beepQueue.empty()) return;
-    if (now < _beepNextMs) return;
-    auto n = _beepQueue.front();
-    _beepQueue.pop_front();
-    if (n.first > 0) GetHAL().speaker.tone((float)n.first, n.second, 1, true);
-    _beepNextMs = now + n.second;
 }

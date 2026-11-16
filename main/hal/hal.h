@@ -43,10 +43,6 @@ public:
         canvas.pushSprite(0, 0);
     }
 
-    /* ---------------------------------- Audio --------------------------------- */
-    m5::Speaker_Class& speaker = M5.Speaker;
-    m5::Mic_Class& mic         = M5.Mic;
-
     /* ---------------------------------- Input --------------------------------- */
     m5::Button_Class& homeButton = M5.BtnA;
     Keyboard keyboard;

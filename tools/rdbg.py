@@ -5,7 +5,6 @@ usage: rdbg.py <cmd> [<cmd> ...]
   hold <key> <ms>   hold a key down for <ms> milliseconds
   type <text>       type characters
   shot <file>       save the screen (240x135) as PNG
-  quiet             silence all beeps until the next reboot
   ping              print the device's PONG line (uptime, free heap)
   raw <line> <sec>  send a console line and print the output for <sec> seconds, e.g.
                     raw regs 2 | raw 'ls /sdcard/roast/logs' 2 | raw 'cat <file>' 3 | raw sdinfo 2
@@ -93,8 +92,6 @@ def main():
             i += 3
         elif c == 'hold':  # hold <key> <ms>
             s.write(f'hold {args[i + 1]} {args[i + 2]}\n'.encode()); time.sleep(int(args[i + 2]) / 1000 + 0.3); i += 3
-        elif c == 'quiet':
-            s.write(b'quiet\n'); i += 1; time.sleep(0.3)
         elif c == 'ping':
             s.reset_input_buffer(); s.write(b'ping\n'); time.sleep(0.5); print([x for x in s.read(65536).decode(errors='replace').splitlines() if 'PONG' in x]); i += 1
         else:

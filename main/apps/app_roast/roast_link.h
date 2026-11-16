@@ -90,7 +90,6 @@ public:
     virtual std::string deviceName() = 0;
     virtual std::string lastError() = 0;
     virtual std::vector<ScanEntry> scanResults() = 0;
-    virtual bool isSimulated() const = 0;
 
     /// Copy of the register cache.
     virtual RegSnapshot snapshot() = 0;
@@ -115,6 +114,5 @@ public:
 };
 
 RoasterLink* CreateBleLink();
-RoasterLink* CreateSimLink();
 
 }  // namespace roast
