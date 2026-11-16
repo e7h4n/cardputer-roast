@@ -6,6 +6,7 @@
 #include "roast_debug.h"
 #include "roast_audio.h"
 #include "net/roast_net.h"
+#include "roast_update.h"
 #include <esp_system.h>
 #if __has_include(<esp_attr.h>)
 #include <esp_attr.h>
@@ -1633,6 +1634,10 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     netRow.label   = "network";
     netRow.network = true;
     v.push_back(netRow);
+    RuleRow fwRow;
+    fwRow.label    = "firmware";
+    fwRow.firmware = true;
+    v.push_back(fwRow);
     group("MODE", SIM);
     RuleRow sim;
     sim.label     = "simulator";
@@ -1667,6 +1672,15 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
                 }
                 if (r.network) {
                     openNetwork();
+                    return true;
+                }
+                if (r.firmware) {  // check GitHub; a newer release goes onto the card for the Launcher
+                    if (_phase != Phase::Idle || _fanRunning) {  // the roaster link closes for it
+                        toast("Fan off first", WARN);
+                        return true;
+                    }
+                    _rules.save();
+                    startJob(sync::Job::Update, "");
                     return true;
                 }
                 if (r.toggle) {
@@ -1933,13 +1947,33 @@ void AppRoast::pollSync()
 {
     if (_screen != Screen::Sync) return;
     sync::Status st = sync::Get();
-    if (st.finished && st.ok) restartApp(true);  // done: clean heap, no second sync
+    // done: clean heap, no second sync. A firmware check stays on screen: what was found, what to do in the Launcher.
+    if (st.finished && st.ok && st.job != sync::Job::Update) restartApp(true);
 }
 
 bool AppRoast::keySync(int code)
 {
     sync::Status st = sync::Get();
     if (!st.finished) return true;  // nothing to do while it runs: no cancel, no retry
+    if (st.job == sync::Job::Update) {
+        if (st.ok && !st.upToDate && code == KEY_ENTER) {  // to the Launcher: it installs roast/update/Roast.bin
+            close();
+            return true;
+        }
+        if (!st.ok && code == KEY_ENTER) {
+            if (!sync::Start(sync::Job::Update, "")) toast("Update check could not start", DROP, 3000);
+            return true;
+        }
+        if (!st.ok && code == KEY_O) {
+            openNetwork();
+            return true;
+        }
+        if (code == KEY_ESC || code == KEY_ENTER) {
+            restartApp(true);  // back to Roast with a clean heap
+            return true;
+        }
+        return false;
+    }
     bool boot = st.job == sync::Job::Curves;
     if (code == KEY_ENTER) {  // boot sync must succeed: Enter tries again; other jobs: carry on without it
         restartApp(!boot);

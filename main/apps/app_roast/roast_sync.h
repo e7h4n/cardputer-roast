@@ -12,6 +12,8 @@
  *                overwriting. The summary stays usable meanwhile; an edit there (weight, note) rewrites the .json and
  *                .alog, and Resave() uploads them again after the current file. Finish() ends the session once nothing
  *                is pending; the summary cannot be closed before that. The record is not synced again afterwards.
+ *  - Update      Rules > firmware: fetch the latest release's latest.json from GitHub and, if it is newer, download
+ *                the image to roast/update/Roast.bin for the Launcher to install (roast_update.h). No Dropbox.
  * Every upload and download is checked against Dropbox's content_hash. Jobs run on their own task while the roaster
  * link is closed (BLE + Wi-Fi + TLS do not fit together without PSRAM); the app restarts afterwards for a clean heap.
  */
@@ -22,7 +24,7 @@
 namespace roast {
 namespace sync {
 
-enum class Job : uint8_t { Curves, PushCurve, DeleteCurve, SaveRoast };
+enum class Job : uint8_t { Curves, PushCurve, DeleteCurve, SaveRoast, Update };
 
 constexpr const char* kCurvesFolder = "/Roast Curves";
 constexpr const char* kLogsFolder   = "/Roast Logs";
@@ -38,6 +40,8 @@ struct Status {
     uint32_t done = 0, total = 0;  // bytes of the current file
     int downloaded = 0, removed = 0, unchanged = 0, uploaded = 0;
     bool idle = false;  // SaveRoast: everything uploaded, waiting for a re-save or Finish()
+    std::string latest;  // Update: the latest release's version
+    bool upToDate = false;  // Update: nothing newer than this build
 };
 
 /// `arg`: PushCurve/DeleteCurve = local curve path, SaveRoast = log id. False if a job is already running.

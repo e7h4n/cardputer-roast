@@ -74,6 +74,24 @@ Rendered from the firmware's own drawing code by the desktop preview (`tools/pre
 Insert a FAT32 SD card for curves and logs; without one, the last roast stays in memory until you leave the
 summary.
 
+### Updates
+Every merge to main publishes a release, `v0.3.<commits on main>`. Roast cannot overwrite itself (it runs from the
+partition Launcher installed it in), so it downloads and Launcher installs:
+
+1. **Rules › SYNC › firmware** shows this build's version. Enter checks GitHub (Wi-Fi must be set up; the roaster
+   link closes for it). If the latest release is newer (or this build is not a release), Roast downloads it to the
+   SD card as `/roast/update/Roast.bin` and checks its size and SHA-256 against the release's `latest.json`. An image
+   already on the card with that hash is not downloaded again.
+2. **Enter** goes to Launcher. Press any key on its boot screen to stay in the menu.
+3. **In Launcher, press the key bound to `/roast/update/Roast.bin`.** Bind it once: SD browser › `roast/update/Roast.bin`
+   › *Bind to key* (for example U). Launcher installs it and starts the new Roast. If the flash is full it asks
+   which app partition to reuse: pick the old Roast (for example `roast0`). Launcher does not touch NVS, so rules, Wi-Fi and
+   Dropbox stay.
+
+Not while roasting: the check is only on the Rules page, which roasting does not show. The image is 1.93 MB and the
+slot Launcher made for Roast on the first install is 1.97 MB (0x1E0000): about 31 KB to spare. A larger image no
+longer fits there; then delete the old Roast in Launcher before installing.
+
 ## Using it
 Turn the *myERoast* app off first: the roaster accepts only one BLE connection at a time.
 
@@ -499,8 +517,10 @@ ESP-IDF **v5.4.2**:
 python3 fetch_repos.py        # clones M5GFX, M5Unified, mooncake, ... into components/
 idf.py build                  # -> build/cardputer-roast.bin (the Launcher app image)
 ```
-CI does the same in the `espressif/idf:v5.4.2` container. Pushing a `v*` tag publishes a release with the `.bin`
-attached.
+CI does the same in the `espressif/idf:v5.4.2` container. Every push to main publishes a release
+`v0.3.<commits on main>` (pushing a `v*` tag publishes that tag) with the `.bin`, `SHA256SUMS` and `latest.json`
+(`{"version","bin","size","sha256"}`, which the update check reads). The version is compiled in (`ROAST_VERSION` →
+`PROJECT_VER`); local builds use `git describe`.
 
 ### Desktop preview
 The UI can be checked without the device. `tools/preview/` compiles the real Roast code (pages, keys, curves,
