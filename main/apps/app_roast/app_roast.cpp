@@ -39,7 +39,6 @@ void RoastRules::load()
     coldBT    = s.GetInt("coldBT10", (int)lroundf(coldBT * 10)) / 10.0f;
     startFan  = s.GetInt("fan10", (int)lroundf(startFan * 10)) / 10.0f;
     greenG    = s.GetInt("green10", (int)lroundf(greenG * 10)) / 10.0f;
-    heatDrop  = s.GetInt("heatDrop10", (int)lroundf(heatDrop * 10)) / 10.0f;
     curveOffset = s.GetInt("curveOff10", (int)lroundf(curveOffset * 10)) / 10.0f;
     svLookahead = std::max(0, std::min(20, (int)s.GetInt("svLook", svLookahead)));
     floorCap    = std::max(10, std::min(80, (int)s.GetInt("floorCap10", (int)lroundf(floorCap * 10)))) / 10.0f;
@@ -62,7 +61,6 @@ void RoastRules::save() const
     s.SetInt("coldBT10", (int)lroundf(coldBT * 10));
     s.SetInt("fan10", (int)lroundf(startFan * 10));
     s.SetInt("green10", (int)lroundf(greenG * 10));
-    s.SetInt("heatDrop10", (int)lroundf(heatDrop * 10));
     s.SetInt("curveOff10", (int)lroundf(curveOffset * 10));
     s.SetInt("svLook", svLookahead);
     s.SetInt("floorCap10", (int)lroundf(floorCap * 10));
@@ -104,21 +102,15 @@ void AppRoast::onOpen()
     _phase    = Phase::Idle;
     _screen   = Screen::Connect;
     _view     = 0;
-    _manual   = false;
     _keySlot  = GetHAL().keyboard.onKeyEvent.connect([this](const Keyboard::KeyEvent_t& e) {
         if (e.isModifier) return;
         if (e.state) {
-            if (e.keyCode != KEY_COMMA && e.keyCode != KEY_LEFT && e.keyCode != KEY_SLASH && e.keyCode != KEY_RIGHT)
-                _heatHeld = 0;  // any other key ends a heater repeat
             _keys.push_back(e);
         } else if (e.keyCode == KEY_DOT || e.keyCode == KEY_DOWN) {
             _downHeld  = false;
             _barrierAt = -1;
-        } else if (e.keyCode == KEY_COMMA || e.keyCode == KEY_LEFT || e.keyCode == KEY_SLASH || e.keyCode == KEY_RIGHT) {
-            _heatHeld = 0;
         }
     });
-    _blockedByKeyboardApp = GetHAL().bleKeyboardInited();
     // Wi-Fi and Dropbox are required. Boot syncs the curves from Dropbox (must succeed) and restarts once with a
     // clean heap; that second boot (flagged in RTC memory) skips the sync and connects to the roaster.
     char ssid[33];
@@ -127,13 +119,13 @@ void AppRoast::onOpen()
     bool bypass = consumeBypass();
     bool skip   = consumeSkipSync();
     if (bypass) {  // test only: USB console `boot roast`
-        if (!_blockedByKeyboardApp) startLink();
+        startLink();
         toast("Test boot: no Dropbox sync", WARN, 4000);
     } else if (!roast_net_saved_wifi(ssid) || !roast_net_saved_dropbox()) {
         _netRequired = true;
         openNetwork();
     } else if (skip) {
-        if (!_blockedByKeyboardApp) startLink();
+        startLink();
     } else {
         startJob(sync::Job::Curves, "");
     }
@@ -158,7 +150,6 @@ void AppRoast::onClose()
         _link.reset();
     }
     g_activeLink = nullptr;
-    GetHAL().setRoastBleActive(false);
     _keys.clear();
     // Back to the community Launcher. Its bootloader starts the Launcher only after a power-on or a deep-sleep
     // wake-up (a plain esp_restart() boots this app again), so take a 0.2 s deep-sleep nap.
@@ -175,7 +166,6 @@ void AppRoast::startLink()
         _link->end();
         _link.reset();
     }
-    GetHAL().setRoastBleActive(true);
     _link.reset(CreateBleLink());
     g_activeLink = _link.get();
     if (!_link->begin()) toast("BLE init failed", ui::DROP);
@@ -187,19 +177,6 @@ void AppRoast::onRunning()
     pollLink();
     handleKeys();
     pollFanBarrier();
-    // ←/→ held in manual mode: repeat the heater step every 150 ms after 450 ms. A hold repeats at most 8 times,
-    // so a lost key-release event can never run the heater up on its own.
-    if (_heatHeld && _manual && _phase == Phase::Roasting) {
-        uint32_t now = GetHAL().millis();
-        if (now - _heatHeldMs > 450 && now - _heatRepMs > 150) {
-            adjustHeat(_heatHeld * (_heatHeldShift ? 1.0f : 5.0f));
-            _heatRepMs = now;
-            _dirty     = true;
-            if (++_heatReps >= 8) _heatHeld = 0;
-        }
-    } else {
-        _heatHeld = 0;
-    }
     pollSync();
     pollSave();
     if (_phase == Phase::Roasting || _phase == Phase::Cooling) tickRoast();
@@ -317,57 +294,44 @@ void AppRoast::charge()
         toast("Press S (fan) before charging", ui::WARN);
         return;
     }
+    if (!_hasCurve) {
+        toast("Pick a curve first (C)", ui::WARN);
+        return;
+    }
     if (_snap.has(4) && _snap.bt() >= _rules.coldBT &&
         !confirm(1000, "BT " + std::to_string((int)_snap.bt()) + "°C is warm: Enter again"))
         return;
 
-    std::vector<RegWrite> w;
-    _cardPid  = false;
-    _dev      = DevTrack();
-    _fcOffset = 0;
-    if (_hasCurve) {
-        // Cardputer PID: the roaster's PID stays off; pidTick() writes the heater from the first second on.
-        uint16_t t0 = (uint16_t)lroundf(ComputeSv(_curve, 0, NAN, false, svConfig()).sv * 10);
-        w.push_back({9, t0});  // shown on the roaster; its PID does not use it
-        w.push_back({2, 0});
-        w.push_back({15, 0});
-        _manual        = false;
-        _cardPid       = true;
-        PidReset(_pid, 0);
-        _fcOffset      = 0;
-        _lastHeatRaw   = -1;
-        _pidMs         = 0;
-    } else {
-        w.push_back({2, 0});
-        _manual  = true;
-        _heatSet = 0;
-    }
-    _link->command(w);
+    // The Cardputer PID sets the heater: the roaster's own PID stays off, pidTick() writes register 11 from the first
+    // second on. Register 9 only shows the curve's start on the roaster.
+    _link->command({{9, (uint16_t)lroundf(_curve.at(0) * 10)}, {2, 0}, {15, 0}});
+    _dev         = DevTrack();
+    _fcOffset    = 0;
+    _lastHeatRaw = -1;
+    _pidMs       = 0;
+    PidReset(_pid, 0);
     _chargeMs     = GetHAL().millis();
     _lastSampleT  = -1;
     _dropMs       = 0;
     _satRun       = 0;
-    _satWarned = _heatDropWarned = _rorWarned = _autoDropped = false;
+    _satWarned = _rorWarned = _autoDropped = false;
     _lastSv = NAN;
     _autoDropWhy.clear();
-    _session.reset(_hasCurve ? &_curve : nullptr, _rules.greenG, _bean);
+    _session.reset(&_curve, _rules.greenG, _bean);
     _session.openLog(NextLogId());
     {
         char b[40];
         snprintf(b, sizeof(b), "charge fan %.1f%% BT %.1f", _snap.has(12) ? _snap.fan() : _fanSet, _snap.bt());
         _session.addAction(0, b);
-        if (_hasCurve) {
-            char c[128];
-            snprintf(c, sizeof(c),
-                     "control: Cardputer PID P %.1f Ti %d s Td %d s, after F P %.1f Td %d s, feedforward %s%s",
-                     _rules.pidKp, _rules.pidTi, _rules.pidTd, _rules.pidFcKp, _rules.pidFcTd,
-                     _rules.pidFF ? "on" : "off", _rules.pidFF && _rules.pidObs ? " + self-heat estimate" : "");
-            _session.addAction(0, c);
-        }
+        char c[128];
+        snprintf(c, sizeof(c), "control: Cardputer PID P %.1f Ti %d s Td %d s, after F P %.1f Td %d s, feedforward %s%s",
+                 _rules.pidKp, _rules.pidTi, _rules.pidTd, _rules.pidFcKp, _rules.pidFcTd, _rules.pidFF ? "on" : "off",
+                 _rules.pidFF && _rules.pidObs ? " + self-heat estimate" : "");
+        _session.addAction(0, c);
     }
     _phase  = Phase::Roasting;
     _screen = Screen::Roast;
-    toast(!_hasCurve ? "Charged: manual heat (←→)" : "Charged: Cardputer PID", ui::GO);
+    toast("Charged: Cardputer PID", ui::GO);
 }
 
 void AppRoast::drop(const char* why)
@@ -459,53 +423,6 @@ void AppRoast::pollFanBarrier()
     toast(b, ui::HEAT, 1500);
 }
 
-void AppRoast::adjustHeat(float delta)
-{
-    if (!linkReady() || _phase != Phase::Roasting) return;
-    if (!_manual) {
-        toast("PID on curve: P for manual heat", ui::WARN);
-        return;
-    }
-    float nv = std::max(0.0f, std::min(100.0f, _heatSet + delta));
-    _link->command({{11, (uint16_t)lroundf(nv * 10)}});
-    char b[40];
-    snprintf(b, sizeof(b), "heat %.0f→%.0f%%", _heatSet, nv);
-    _session.addAction(roastT(), b);
-    _heatSet = nv;
-    toast(b, ui::HEAT, 1200);
-}
-
-void AppRoast::toggleManual()
-{
-    if (!linkReady() || _phase != Phase::Roasting) return;
-    if (!_hasCurve) {
-        toast("No curve: heat is manual", ui::WARN);
-        return;
-    }
-    int t = roastT();
-    if (!_manual) {
-        // PID off, then hold the heater at its average over the last 30 s: one reading can catch the PID mid-swing.
-        float nowHeat = _snap.has(11) ? _snap.heat() : 80.0f;
-        _heatSet      = HoldHeat(_session.samples(), t, 30, nowHeat);
-        _link->command({{15, 0}, {11, (uint16_t)lroundf(_heatSet * 10)}});
-        _manual = true;
-        char b[64];
-        snprintf(b, sizeof(b), "manual heat %.1f%% (30 s avg, now %.1f%%)", _heatSet, nowHeat);
-        _session.addAction(t, b);
-        snprintf(b, sizeof(b), "manual %.1f%% (30 s avg)", _heatSet);
-        toast(std::string(b) + "  ←→", ui::HEAT, 3000);
-    } else {
-        // Bumpless: the Cardputer PID starts from the heat being held now.
-        float bt = _snap.has(4) ? _snap.bt() : NAN;
-        PidPrime(_pid, _heatSet, pidAim(curveT()), bt, pidConfig());
-        _pidMs       = GetHAL().millis();
-        _lastHeatRaw = (int)lroundf(_heatSet * 10);
-        _manual      = false;
-        _session.addAction(t, "Cardputer PID on curve");
-        toast("PID on curve", ui::GO);
-    }
-}
-
 void AppRoast::toggleMark(Mark m)
 {
     if (_phase != Phase::Roasting) return;
@@ -516,7 +433,7 @@ void AppRoast::toggleMark(Mark m)
         _session.clearMark(m);
         toast(std::string("Cleared ") + MarkName(m), ui::WARN);
         if (m == Mark::FCs) {
-            _heatDropWarned = _rorWarned = false;
+            _rorWarned = false;
             fcAnchor(false);
         }
         return;
@@ -542,15 +459,6 @@ bool AppRoast::confirm(int key, const std::string& msg, bool quiet)
 }
 
 /* ------------------------------ curve follow ------------------------------ */
-SvConfig AppRoast::svConfig() const
-{
-    SvConfig c;
-    c.lookahead = _rules.svLookahead;
-    c.fcFloor   = false;  // the first-crack floor was for the roaster's own PID, which Roast no longer uses
-    c.floorCap  = _rules.floorCap;
-    return c;
-}
-
 PidConfig AppRoast::pidConfig() const
 {
     PidConfig c;
@@ -568,13 +476,11 @@ PidConfig AppRoast::pidConfig() const
 // `lookahead` seconds ahead (roast_control.h PidAim); after F the development, or the curve shifted to BT.
 PidAim AppRoast::pidAim(int t) const
 {
-    SvConfig c   = svConfig();
-    int fcT      = _session.markT(Mark::FCs);
-    int start    = ObserveStart(_curve.tagTime(PointTag::FCs), fcT, pidConfig().obsLead);
-    bool roast   = _phase == Phase::Roasting;
-    float bt     = _snap.has(4) ? _snap.bt() : NAN;
-    if (roast && _dev.active) return DevAim(_dev, t, c.lookahead);
-    return CardputerAim(_curve, t, bt, roast ? start : -1, roast && fcT >= 0, _fcOffset, c.lookahead, c.floorCap);
+    int fcT    = _session.markT(Mark::FCs);
+    int start  = ObserveStart(_curve.tagTime(PointTag::FCs), fcT, pidConfig().obsLead);
+    bool roast = _phase == Phase::Roasting;
+    if (roast && _dev.active) return DevAim(_dev, t, _rules.svLookahead);
+    return CardputerAim(_curve, t, roast ? start : -1, roast && fcT >= 0, _fcOffset, _rules.svLookahead);
 }
 
 // F set or cleared. With a curve that has first crack and drop points, development starts here: from where the
@@ -588,7 +494,7 @@ void AppRoast::fcAnchor(bool marked)
     int t     = curveT();
     _dev      = marked ? DevStart(_curve, t, bt) : DevTrack();
     _fcOffset = marked && !_dev.active ? FcAnchorOffset(_curve, t, bt, _rules.floorCap) : 0;
-    if (_cardPid && !_manual) PidPrime(_pid, _pid.out, pidAim(t), bt, pidConfig());
+    PidPrime(_pid, _pid.out, pidAim(t), bt, pidConfig());
     char b[96];
     if (marked && _dev.active)
         snprintf(b, sizeof(b), "development from %.1f: %.1f/min for %s, at most %.1f", bt, _dev.plan.speed * 60,
@@ -638,15 +544,7 @@ void AppRoast::tickRoast()
         sv  = aim.target;
     }
     _lastSv = sv;
-    if (_phase == Phase::Roasting && _cardPid && linkReady()) {
-        if (!_manual) {
-            pidTick(aim);
-        } else {  // heat held by hand: the self-heating estimate keeps up, so PID can take over again
-            uint32_t now = GetHAL().millis();
-            bool fresh   = _snap.has(4) && _snap.lastRxMs && now - _snap.lastRxMs < 3000;
-            ObserverStep(_pid.obs, fresh ? _snap.bt() : NAN, _heatSet, 1.0f, pidConfig());
-        }
-    }
+    if (_phase == Phase::Roasting && linkReady()) pidTick(aim);
 
     // 2) sample
     Sample s;
@@ -656,7 +554,7 @@ void AppRoast::tickRoast()
     s.heat10 = _snap.reg[11];
     s.fan10  = _snap.reg[12];
     s.mtime  = _snap.reg[2];
-    s.pid    = (_cardPid && !_manual && _phase == Phase::Roasting) ? 2 : (_snap.pidOn() ? 1 : 0);
+    s.pid    = _phase == Phase::Roasting ? 2 : (_snap.pidOn() ? 1 : 0);
     s.ror10  = INT16_MIN;
     bool cap = _phase == Phase::Cooling && _dropMs && GetHAL().millis() - _dropMs > 240000;
     if (!cap) _session.addSample(s);
@@ -703,7 +601,7 @@ void AppRoast::tickRoast()
     }
 
     // 5) heater saturation
-    if (heat >= 95.0f && !_manual) {
+    if (heat >= 95.0f) {
         if (++_satRun >= 20) _satWarned = true;
     } else {
         _satRun = 0;
@@ -711,18 +609,7 @@ void AppRoast::tickRoast()
 
     int fc = _session.markT(Mark::FCs);
     if (fc >= 0) {
-        int dev = t - fc;
-        // heater falling right after first crack (PID sees BT above target)
-        if (!_heatDropWarned && !_manual && dev <= 60) {
-            double sum = 0;
-            int n      = 0;
-            for (auto& x : _session.samples())
-                if (x.t >= fc - 30 && x.t < fc) {
-                    sum += x.heat10 / 10.0;
-                    n++;
-                }
-            if (n > 5 && heat < sum / n - _rules.heatDrop) _heatDropWarned = true;
-        }
+        int dev   = t - fc;
         float ror = _session.rorNow();
         if (!_rorWarned && dev >= 30 && !std::isnan(ror) && ror < _rules.rorLow) _rorWarned = true;
         // the drop window and "drop now" are drawn from the live values (bannerText); nothing to latch here
@@ -748,8 +635,6 @@ void AppRoast::finishRoast()
     _chargeMs = 0;
     _phase    = _fanRunning ? Phase::FanOn : Phase::Idle;
     _screen   = Screen::Prep;
-    _manual   = false;
-    _cardPid  = false;
     _view     = 0;
     if (_link) _link->clearQueue();
     _rules.save();
@@ -849,10 +734,6 @@ bool AppRoast::keyConnect(int code)
         return true;
     }
     if (code == KEY_ENTER || code == KEY_R) {
-        if (_blockedByKeyboardApp) {
-            toast("BLE busy: restart the device", DROP, 3000);
-            return true;
-        }
         startLink();
         return true;
     }
@@ -937,8 +818,8 @@ bool AppRoast::keyPrep(int code, bool shift)
             reloadCurves();
             _listSel = 0;
             for (size_t i = 0; i < _curves.size(); i++)
-                if (_hasCurve && _curves[i].name == _curve.name) _listSel = (int)i + 1;
-            _listTop = std::max(0, std::min(_listSel - 1, (int)_curves.size() + 1 - 3));
+                if (_hasCurve && _curves[i].name == _curve.name) _listSel = (int)i;
+            _listTop = std::max(0, std::min(_listSel - 1, (int)_curves.size() - 3));
             _screen  = Screen::Curves;
             return true;
         }
@@ -1009,19 +890,6 @@ bool AppRoast::keyRoast(int code, bool shift)
             return true;
         case KEY_DOWN:
             fanDown(shift ? 0.1f : 1.0f);
-            return true;
-        case KEY_LEFT:
-        case KEY_RIGHT: {
-            int dir = code == KEY_LEFT ? -1 : 1;
-            adjustHeat(dir * (shift ? 1.0f : 5.0f));
-            _heatHeld      = dir;
-            _heatHeldShift = shift;
-            _heatReps      = 0;
-            _heatHeldMs = _heatRepMs = GetHAL().millis();
-            return true;
-        }
-        case KEY_P:
-            toggleManual();
             return true;
         case KEY_TAB:
             _view ^= 1;
@@ -1130,7 +998,8 @@ bool AppRoast::keySummary(int code)
 
 bool AppRoast::keyCurves(int code)
 {
-    int n = (int)_curves.size() + 1;  // row 0 = "No curve"
+    int n = (int)_curves.size();
+    bool any = _listSel >= 0 && _listSel < n;
     switch (code) {
         case KEY_UP:
             if (_listSel > 0) _listSel--;
@@ -1139,27 +1008,22 @@ bool AppRoast::keyCurves(int code)
             if (_listSel < n - 1) _listSel++;
             break;
         case KEY_ENTER:
-            if (_listSel == 0) {
-                _hasCurve = false;
-                _noCurve  = true;
-                _curve    = Curve();
-                toast("No curve: heat by hand", HEAT);
-            } else {
-                selectCurve(_listSel - 1);
-                _noCurve = false;
-                toast("Curve: " + _curve.name, CURVE);
+            if (!any) {
+                toast("No curves: N for a new one", FAINT);
+                return true;
             }
+            selectCurve(_listSel);
+            toast("Curve: " + _curve.name, CURVE);
             _view   = 0;
             _screen = Screen::Prep;
             return true;
         case KEY_E:
-            if (_listSel == 0) {
+            if (!any) {
                 toast("Nothing to edit: N for a new curve", FAINT);
-            } else if (_curves[_listSel - 1].readOnly) {
+            } else if (_curves[_listSel].readOnly) {
                 toast(".alog curves are read-only", WARN);
             } else {
-                selectCurve(_listSel - 1);
-                _noCurve = false;
+                selectCurve(_listSel);
                 edLoad();
                 _view   = 0;
                 _screen = Screen::Editor;
@@ -1173,7 +1037,6 @@ bool AppRoast::keyCurves(int code)
             _curve.offset = _rules.curveOffset;
             _curve.build();
             _hasCurve = true;
-            _noCurve  = false;
             edLoad();
             _edDirty = true;
             _view    = 0;
@@ -1183,8 +1046,8 @@ bool AppRoast::keyCurves(int code)
             if (networkIdle("sync")) restartApp(false);
             return true;
         case KEY_BACKSPACE: {  // delete: on Dropbox, then on the card
-            if (_listSel == 0) return true;
-            const Curve& c = _curves[_listSel - 1];
+            if (!any) return true;
+            const Curve& c = _curves[_listSel];
             if (c.builtin) {
                 toast("Built-in curves cannot be deleted", WARN);
                 return true;
@@ -1416,7 +1279,6 @@ bool AppRoast::keyEditor(const Keyboard::KeyEvent_t& e, int code)
                 for (size_t i = 0; i < _curves.size(); i++)
                     if (_curves[i].path == _curve.path) selectCurve((int)i);
                 _edDirty = false;
-                _noCurve = false;
                 _view    = 0;
                 startJob(sync::Job::PushCurve, _curve.path);  // overwrite on Dropbox, then restart
             } else {
@@ -1480,7 +1342,6 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     rowI("after curve end", &_rules.afterEnd, nullptr, 0, 900, 10, " s");
     group("ALERTS", WARN);
     rowF("low RoR below", &_rules.rorLow, nullptr, 0, 30, 0.5f, "");
-    rowF("heat drop after FC", &_rules.heatDrop, nullptr, 1, 50, 1, "%");
     group("MACHINE", FAN);
     rowF("start fan", &_rules.startFan, nullptr, 20, 100, 1, "%");
     rowF("cold below", &_rules.coldBT, nullptr, 20, 80, 1, "°");
@@ -1731,7 +1592,6 @@ void AppRoast::pollSave()
             _link->end();
             _link.reset();
         }
-        GetHAL().setRoastBleActive(false);
         _linkState = _prevLinkState = LinkState::Off;
         // The curve library keeps every curve's 1 Hz table (~3 KB each); the summary cannot open it and Roast
         // restarts after the save, so give that memory to Wi-Fi + TLS.
@@ -1789,7 +1649,6 @@ bool AppRoast::startJob(sync::Job job, const std::string& arg)
         _link->end();
         _link.reset();
     }
-    GetHAL().setRoastBleActive(false);
     _linkState = _prevLinkState = LinkState::Off;
     _session.release();  // the roast's samples are saved; free them for TLS
     _screen = Screen::Sync;
@@ -1885,7 +1744,6 @@ void AppRoast::openNetwork()
         _link->end();
         _link.reset();
     }
-    GetHAL().setRoastBleActive(false);
     _linkState = _prevLinkState = LinkState::Off;
     _netOpen = roast_net_open();
     if (!_netOpen) toast("Setup could not start", DROP, 3000);

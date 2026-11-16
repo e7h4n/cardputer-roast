@@ -4,45 +4,6 @@
 
 namespace roast {
 
-int FcFloorStart(int curveFcT, int fcMarkT, int lead)
-{
-    int fromCurve = curveFcT >= 0 ? std::max(0, curveFcT - lead) : -1;
-    if (fromCurve < 0) return fcMarkT;
-    if (fcMarkT < 0) return fromCurve;
-    return std::min(fromCurve, fcMarkT);
-}
-
-SvResult ComputeSv(const Curve& c, int t, float bt, bool inWindow, const SvConfig& cfg)
-{
-    SvResult r;
-    int la  = std::max(0, std::min(20, cfg.lookahead));
-    r.ahead = c.at(t + la);  // Curve::at holds the last value past the end
-    r.sv    = r.ahead;
-    if (cfg.fcFloor && inWindow && !std::isnan(bt) && !std::isnan(r.ahead)) {
-        float floorV = bt + cfg.floorDelta;
-        if (floorV > r.ahead) {
-            float cap = c.at(t) + cfg.floorCap;
-            r.floored = true;
-            r.capped  = floorV > cap;
-            r.sv      = std::max(r.ahead, std::min(floorV, cap));
-        }
-    }
-    return r;
-}
-
-float HoldHeat(const std::vector<Sample>& samples, int now, int window, float fallback)
-{
-    double sum = 0;
-    int n      = 0;
-    for (auto it = samples.rbegin(); it != samples.rend(); ++it) {
-        if (it->t > now) continue;
-        if (it->t <= now - window) break;
-        sum += it->heat10 / 10.0;
-        n++;
-    }
-    return n ? (float)(std::round(sum / n * 10) / 10) : fallback;
-}
-
 float FeedForwardHeat(float sv, float svRate, const PlantModel& m)
 {
     if (std::isnan(sv) || m.gain <= 0 || m.rate <= 0) return 0;
@@ -193,27 +154,23 @@ float FcAnchorOffset(const Curve& c, int tF, float btAtF, float cap)
 
 int ObserveStart(int curveFcT, int fcMarkT, int lead)
 {
-    return FcFloorStart(curveFcT, fcMarkT, lead);
+    int fromCurve = curveFcT >= 0 ? std::max(0, curveFcT - lead) : -1;
+    if (fromCurve < 0) return fcMarkT;
+    if (fcMarkT < 0) return fromCurve;
+    return std::min(fromCurve, fcMarkT);
 }
 
-PidAim CardputerAim(const Curve& c, int t, float bt, int windowStart, bool fcMarked, float fcOffset, int lookahead,
-                    float cap)
+PidAim CardputerAim(const Curve& c, int t, int observeFrom, bool fcMarked, float fcOffset, int lookahead)
 {
     int la = std::max(0, std::min(20, lookahead));
+    float off = fcMarked ? fcOffset : 0;
     PidAim a;
-    a.observe = windowStart >= 0 && t >= windowStart;
-    a.ffRate = CurveRate(c, t + la);
-    a.rate   = CurveRate(c, t);
-    if (fcMarked) {
-        a.afterF = true;
-        a.target = c.at(t) + fcOffset;
-        a.ffTemp = c.at(t + la) + fcOffset;
-        return a;
-    }
-    a.target = c.at(t);
-    a.ffTemp = c.at(t + la);
-    (void)bt;  // no hold before F any more: it let BT run 2 degC ahead into the crack (2026-11-14)
-    (void)cap;
+    a.observe = observeFrom >= 0 && t >= observeFrom;
+    a.afterF  = fcMarked;
+    a.target  = c.at(t) + off;
+    a.ffTemp  = c.at(t + la) + off;
+    a.ffRate  = CurveRate(c, t + la);
+    a.rate    = CurveRate(c, t);
     return a;
 }
 

@@ -17,9 +17,8 @@ constexpr uint32_t INK   = 0x181818;
 constexpr uint32_t WHITE = 0xFFFFFF;
 // functions
 constexpr uint32_t FAN        = 0x266CF0;  // S, ↑↓, fan value and line
-constexpr uint32_t HEAT       = 0xF0761C;  // P, ←→, heater value and area
+constexpr uint32_t HEAT       = 0xF0761C;  // heater value and area
 constexpr uint32_t HEAT_AREA  = 0xF8CEA8;
-constexpr uint32_t HEAT_TINT  = 0xFDE8D6;
 constexpr uint32_t CURVE      = 0x7E54D6;  // C, E, Tab, target, PID
 constexpr uint32_t CURVE_TINT = 0xD2C8EC;
 constexpr uint32_t DRY        = 0xDEAA22;  // Y: end of drying (starts Maillard)

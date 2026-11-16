@@ -81,10 +81,6 @@ public:
         auto it = _tx.find(id);
         return it == _tx.end() ? TxStatus::Failed : it->second;
     }
-    void setTarget(uint16_t raw) override
-    {
-        _target = raw;
-    }
     void setHeat(uint16_t raw) override
     {
         apply(11, raw);

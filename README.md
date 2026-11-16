@@ -4,7 +4,7 @@
 
 Cardputer Roast turns an **M5Stack Cardputer ADV** into a pocket controller for the **E-Roast / E-Meter621 BLE**
 fluid-bed coffee roaster (the machine normally driven by the *myERoast* phone app). It talks to the roaster over
-Bluetooth LE, follows a roast curve with its own PID (or the roaster's), and walks you through a roast on the 240×135
+Bluetooth LE, follows a roast curve with its own PID, and walks you through a roast on the 240×135
 screen: charge, drying, first crack, development, drop, cooling, and a summary that is saved to the SD card and
 opens in Artisan. It runs as an app under the community [Launcher](https://github.com/bmorcelli/Launcher).
 
@@ -18,17 +18,15 @@ opens in Artisan. It runs as an app under the community [Launcher](https://githu
 > unattended, and keep the machine's own controls within reach.
 
 ## Features
-- **Curve following.** A PID on the Cardputer (or, if you choose, the roaster's own) follows a curve set by two
-  points, first crack and drop (built-in samples, your own curves, or Artisan/myERoast `.alog` files). No curve =
-  heat by hand.
+- **Curve following.** A PID on the Cardputer follows a curve set by two points, first crack and drop (built-in
+  samples, your own curves, or Artisan/myERoast `.alog` files). Every roast follows a curve.
 - **Development by plan.** The curve's first crack → drop sets the development: how long, how fast (rate of rise)
   and how hot at most. After F, Roast rises at that rate from where the beans actually cracked and drops when the
   time is over or the temperature is reached. Y (yellowing) and G (first crack end) are marks for the log.
-- **Alerts and safety nets.** Colour bars for the coming drop, heater pinned or falling after first crack, low RoR
+- **Alerts and safety nets.** Colour bars for the coming drop, heater pinned, low RoR
   and BLE loss. Roast makes no sound: alerts are on screen only. Besides the development, Roast drops by
   itself at the safety temperature or long after the curve has ended.
 - **Fan control with floors.** Fan ±1 % or ±0.1 %; going below 50 % and 40 % needs a deliberate long press.
-- **Manual heat.** P switches between PID and manual heat at any time; ← → step the heater.
 - **Curve editor.** Start temperature, first crack and drop (time and temperature), edited on the device with the
   curve and its development beside them, saved to the SD card.
 - **Logs.** Every roast is written as `.csv` (1 Hz), `.json` summary and `.alog` for Artisan.
@@ -101,13 +99,13 @@ The page walks through four steps: curve → batch → fan → charge.
 
 | Key | Action |
 |---|---|
-| C | Curve library. "No curve" (heat by hand) is the first entry; Enter uses, E edits, N starts a new curve. |
+| C | Curve library: Enter uses, E edits, N starts a new curve. |
 | E | Edit the selected curve (or start a new one). |
 | W / B | Batch sheet: green weight and bean name in one place (Tab switches field). |
 | O | Rules and alerts. |
 | S | Fan on, no heat. Use it to find a fan setting with cold air before adding beans. |
 | ↑ ↓ (`;` `.`) | Fan ±1 % (Aa held: ±0.1 %). While idle this changes only the start-fan preset. |
-| Enter | Charge: starts the timer and heater control along the curve (the Cardputer PID by default). Needs the fan on. |
+| Enter | Charge: starts the timer and the Cardputer PID along the curve. Needs the fan on and a curve. |
 | X X | Stop the fan. |
 | Tab | Curve preview. |
 | Esc Esc | Back to Launcher. Blocked while the fan is running. |
@@ -118,7 +116,6 @@ The page walks through four steps: curve → batch → fan → charge.
 | Y / F / G | Mark drying end / first crack / end of first crack. Press the same key twice more to clear the mark. |
 | D D or Space Space | Drop. After the first press the bottom row asks for the second. |
 | ↑ ↓ | Fan ±1 % (Aa: ±0.1 %). |
-| P | Manual heat: PID off, heater held at its current output. ← → change it by ±5 % (Aa: ±1 %; holding repeats, at most 8 steps per hold). P again returns to the curve. |
 | Tab | Numbers / chart (bean black, target violet, RoR grey, heater orange area). |
 
 The phase bar runs through the whole roast: drying (sage) → Maillard (yellow, starts at Y) → development (brown,
@@ -268,8 +265,7 @@ heater output (register 11) once a second (`roast_control.h`, `PidStep`):
     heater's movement and the error.
   - The heater moves at most 3 %/s.
   - Anti-windup: the integral stops while the output is pinned or slew-limited, and is capped at ±30 %.
-  - At charge the controller starts from 0 % with no integral. When P hands back from manual, it picks up the
-    heat being held (bumpless).
+  - At charge the controller starts from 0 % with no integral.
 - **First crack.**
   - *Before F* the curve is followed as everywhere else. (A hold, BT above the curve counting as no error, was
     removed after the 2026-11-14 roast: it let BT run 2 °C ahead into the crack.)
@@ -282,8 +278,8 @@ heater output (register 11) once a second (`roast_control.h`, `PidStep`):
   - With the heater already at 100 % no controller can lift the rate of rise. That has to be planned in the curve;
     the "heater pinned" alert shows it.
 - **Stale reading:** if BT is more than 3 s old, the output is held.
-- **Drop:** cancels any heater write still queued, so it cannot land after the drop. In manual mode the roaster
-  zeroes the heater at drop (seen in R0014).
+- **Drop:** cancels any heater write still queued, so it cannot land after the drop. With its own PID off the
+  roaster zeroes the heater at drop (seen in R0014).
 
 > **Link loss.** With the Cardputer PID the roaster's PID is off. Tested on the machine (empty, 2026-11-13): when
 > Bluetooth dropped, the roaster kept its fan and timer and kept heating at the last output for ~17–19 s, then cut
@@ -338,8 +334,7 @@ least at BT + 1 °C around first crack (*FC floor*). Both are gone with the opti
 - **Floor cap** (1–8 °C, default 8): on a curve without first-crack and drop points, F shifts the rest of the curve
   to BT by at most this much.
 
-The log's `target` column records the Cardputer PID's target (the curve now, after F the development). **P** (manual
-heat) holds the heater at its mean over the last 30 s rather than one reading.
+The log's `target` column records the Cardputer PID's target (the curve now, after F the development).
 
 ### Fan floors
 The roaster's own minimum fan register reads 50 %. A short press of ↓ stops at **50 %** and again at **40 %**.
@@ -355,15 +350,13 @@ shown underneath, and range rules (window, rise) take the lower then the upper e
 | Safety auto-drop temperature | 225 °C |
 | Auto-drop after the curve ends | 120 s |
 | Low-RoR alert | below 5 |
-| Heat-drop-after-FC alert | 5 % |
 | Start fan | 53 % |
 | Cold temperature | 40 °C |
 | Curve offset | 0 °C |
 | SV lookahead | 8 s |
 | Floor cap (shift at F, curves without FC/DROP) | 8 °C |
 
-The bottom bar turns green ("auto-drop") in the last 10 s or 1 °C of the development. It turns yellow for a heater pinned at 95 % or more for 20 s, heater output falling after first
-crack, or low RoR 30 s after first crack.
+The bottom bar turns green ("auto-drop") in the last 10 s or 1 °C of the development. It turns yellow for a heater pinned at 95 % or more for 20 s, or low RoR 30 s after first crack.
 
 On BLE loss the reading greys out and the bar turns red: the roaster keeps the last heater output for ~17–19 s and
 then cuts it, so watch for it. Roast then reconnects on its own.
@@ -391,7 +384,7 @@ The card must be FAT32. Without one, logs live only in memory until the summary 
 |---|---|
 | `roast/curves/*.json` | Curves (format below). |
 | `roast/curves/*.alog` | Artisan or myERoast exports, read-only; `temp2` is the target. |
-| `roast/logs/<id>.csv` | One row per second: `t,bt,target,heat,fan,ror,pid,machine_t,heat_cmd,ff,p,i,d,obs`. `pid`: 0 manual, 1 roaster PID, 2 Cardputer PID. The last six columns (only with the Cardputer PID) are the heater output written and its feedforward, P, I and D terms, in %, and `obs`: what the self-heating estimate took off the feedforward's rate, °C/min. Marks and actions are lines starting with `#`. |
+| `roast/logs/<id>.csv` | One row per second: `t,bt,target,heat,fan,ror,pid,machine_t,heat_cmd,ff,p,i,d,obs`. `pid`: 2 while the Cardputer PID runs, 1 if the roaster's own PID is on, otherwise 0. The last six columns (only with the Cardputer PID) are the heater output written and its feedforward, P, I and D terms, in %, and `obs`: what the self-heating estimate took off the feedforward's rate, °C/min. Marks and actions are lines starting with `#`. |
 | `roast/logs/<id>.json` | Roast summary. |
 | `roast/logs/<id>.alog` | Opens in Artisan. |
 
@@ -450,14 +443,12 @@ The phone app's JavaScript was run in Node and compared with this C++ code case 
 | Curve generation | **No longer the same.** The phone app cuts the preset to the total time and stretches it linearly between nodes, which puts a rate-of-rise step at every node. Roast stretches the preset smoothly onto first crack and continues at the development rate ([Curves and development](#curves-and-development)). |
 | RoR | \|BT − BT 29 readings earlier\| ÷ 0.5, shown after 35 s. |
 | Curve time base | Machine timer (register 2), falling back to the local timer if they differ by more than 5 s. |
-| Commands | Same registers and values for start, charge without a curve, fan ±1, drop and stop. |
+| Commands | Same registers and values for start, fan ±1, drop and stop. |
 
 Deliberate differences:
 - With a curve the roaster's own PID stays off: Roast writes the heater output (register 11) once a second
   (Cardputer PID). The first target still goes to register 9 at charge, for the roaster's display.
-- Switching to manual (P) writes the current heater value (register 11), so the output does not jump.
-- P hands back to the Cardputer PID mid-roast.
-- Heater steps are sent only in manual mode.
+- A roast needs a curve.
 - The curve end does not force a drop (see *auto-drop after end*); the end of the development does.
 - Curves are built smoothly from first crack and drop only (see above).
 

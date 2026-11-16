@@ -80,12 +80,6 @@ public:
     }
     uint32_t command(const std::vector<RegWrite>& writes) override;
     TxStatus txStatus(uint32_t id) override;
-    void setTarget(uint16_t raw) override
-    {
-        Lock l(_mtx);
-        _targetPending = true;
-        _targetRaw     = raw;
-    }
     void setHeat(uint16_t raw) override
     {
         Lock l(_mtx);
@@ -112,8 +106,7 @@ public:
         Lock l(_mtx);
         for (auto& c : _cmds) _txResult[c.id] = TxStatus::Failed;
         _cmds.clear();
-        _targetPending = false;
-        _heatPending   = false;
+        _heatPending = false;
     }
 
     // NimBLE glue (public for static trampolines)
@@ -173,8 +166,6 @@ private:
     std::deque<Cmd> _cmds;
     std::map<uint32_t, TxStatus> _txResult;
     uint32_t _nextTx    = 1;
-    bool _targetPending = false;
-    uint16_t _targetRaw = 0;
     bool _heatPending   = false;
     uint16_t _heatRaw   = 0;
     uint32_t _cycle     = 0;
@@ -241,21 +232,6 @@ static int mtu_cb(uint16_t conn, const struct ble_gatt_error* err, uint16_t mtu,
 {
     ESP_LOGI("roast-ble", "mtu exchange status %d mtu %u", err ? err->status : -1, mtu);
     static_cast<BleLink*>(arg)->afterMtu();
-    return 0;
-}
-static int read_cb(uint16_t conn, const struct ble_gatt_error* err, struct ble_gatt_attr* attr, void* arg)
-{
-    if (err->status == 0 && attr) {
-        uint8_t buf[24];
-        uint16_t len = OS_MBUF_PKTLEN(attr->om);
-        if (len > sizeof(buf)) len = sizeof(buf);
-        os_mbuf_copydata(attr->om, 0, len, buf);
-        char hx[3 * 24 + 1] = {0};
-        for (int i = 0; i < len; i++) snprintf(hx + 3 * i, 4, "%02X ", buf[i]);
-        ESP_LOGI(TAG, "read h%u len%u: %s", attr->handle, len, hx);
-    } else if (err->status != BLE_HS_EDONE) {
-        ESP_LOGI(TAG, "read status %d", err->status);
-    }
     return 0;
 }
 static int write_cb(uint16_t conn, const struct ble_gatt_error* err, struct ble_gatt_attr* attr, void* arg)
@@ -878,23 +854,6 @@ void BleLink::workerLoop()
         }
 
         pumpCommands();
-
-        // Curve target (latest value wins)
-        bool haveTarget = false;
-        uint16_t target = 0;
-        {
-            Lock l(_mtx);
-            if (_targetPending) {
-                haveTarget     = true;
-                target         = _targetRaw;
-                _targetPending = false;
-            }
-        }
-        if (haveTarget) {
-            writeReg(9, target, 2, 1500);
-            waitGap(200);
-            pumpCommands();
-        }
 
         // Heater output from the Cardputer PID (latest value wins)
         bool haveHeat = false;

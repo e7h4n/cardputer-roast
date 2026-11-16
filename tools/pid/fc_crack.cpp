@@ -7,6 +7,7 @@
 // Neither is measured: the literature disputes where roasting turns exothermic, and R0012-R0014 show no heat sink at
 // the crack. F 2 s after onset (reaction time). One step per second; uses the firmware's roast_curve.cpp and roast_control.cpp.
 #include <apps/app_roast/roast_control.h>
+#include "roaster_sv.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -112,10 +113,10 @@ static Out run(bool isNew, Plant pl, const Curve& c)
         if (isNew && dev.active) {
             a = DevAim(dev, t, 8);
         } else if (isNew) {
-            a = CardputerAim(c, t, bt, ObserveStart(c.tagTime(PointTag::FCs), o.f, pc.obsLead), false, 0, 8, 8);
+            a = CardputerAim(c, t, ObserveStart(c.tagTime(PointTag::FCs), o.f, pc.obsLead), false, 0, 8);
         } else {  // main: hold from the window on, through the crack
             bool in  = t >= FcFloorStart(c.tagTime(PointTag::FCs), o.f, 20);
-            a        = CardputerAim(c, t, bt, -1, false, 0, 8, 8);
+            a        = CardputerAim(c, t, -1, false, 0, 8);
             if (in && bt > a.target) a.target = std::min(bt, a.target + 8.0f);
             a.rate   = 0;
         }

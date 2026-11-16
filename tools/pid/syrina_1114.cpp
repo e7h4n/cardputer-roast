@@ -4,6 +4,7 @@
 // without self-heating, hold before F) against this one. Real roast: drop at 24 s by temperature (209.1), RoR after F
 // 15.5 on average, 17 at the drop.
 #include <apps/app_roast/roast_control.h>
+#include "roaster_sv.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -84,7 +85,7 @@ static Out run(Fw fw)
         if (dev.active) {
             a = DevAim(dev, t, 8);
         } else {
-            a = CardputerAim(c, t, bt, ObserveStart(c.tagTime(PointTag::FCs), o.f, pc.obsLead), false, 0, 8, 8);
+            a = CardputerAim(c, t, ObserveStart(c.tagTime(PointTag::FCs), o.f, pc.obsLead), false, 0, 8);
             if (firmware3b08 && t >= win && bt > a.target) a.target = std::min(bt, a.target + 8.0f);  // its hold
         }
         float heat = std::round(PidStep(ps, a, bt, 1.0f, pc).heat * 10) / 10;
