@@ -80,8 +80,9 @@ public:
         return _active;
     }
     void addSample(const Sample& s);
-    /// Cardputer PID terms for the next sample's CSV row (heat_cmd,ff,p,i,d); only on SD, not kept in memory.
-    void setControl(float heat, float ff, float p, float i, float d);
+    /// Cardputer PID terms for the next sample's CSV row (heat_cmd,ff,p,i,d,obs); only on SD, not kept in memory.
+    /// obs: degC/min the self-heating estimate took off the feedforward's rate.
+    void setControl(float heat, float ff, float p, float i, float d, float obs = 0);
     const std::vector<Sample>& samples() const
     {
         return _samples;
@@ -192,7 +193,7 @@ private:
     int _sinceFlush  = 0;
     bool _ctlSet     = false;
     void writeControl();
-    float _ctl[5]    = {};
+    float _ctl[6]    = {};
     std::vector<float> _curveTable;
     AudioInfo _audio;
 };

@@ -34,8 +34,10 @@ struct RoastRules {
     float pidKp      = 1.5f;  // % heat per degC, 0.1..10 (roast_control.h PidConfig)
     int pidTi        = 60;    // integral time, s (0: no integral)
     int pidTd        = 0;     // derivative time before F, s
-    int pidFcTd      = 0;     // derivative time from F on, s (rate-of-rise shortfall; off: tools/pid fc_crack)
+    float pidFcKp    = 4.0f;  // % heat per degC from F on, 0.1..10
+    int pidFcTd      = 3;     // derivative time from F on, s (rate-of-rise shortfall against the development speed)
     bool pidFF       = true;  // model feedforward
+    bool pidObs      = true;  // self-heating estimate in the feedforward near first crack (roast_control.h Observer)
     void load();
     void save() const;
 };

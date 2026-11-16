@@ -32,15 +32,22 @@ struct Out {
     float btF = 0, btDrop = 0, aheadAtF = 0, ror6 = 0, rorDev = 0, rorMax = 0, heatF = 0, heatDrop = 0;
 };
 
-static Out run(bool firmware3b08, float fcTd)
+enum Fw { Fw3b08, Fw1cb0, FwNow };
+
+static Out run(Fw fw)
 {
+    bool firmware3b08 = fw == Fw3b08;
     srand(1);
     Curve c;
     c.pts = {{0, 50, PointTag::Charge}, {425, 200.1f, PointTag::FCs}, {470, 208.5f, PointTag::Drop}};
     c.build();
     DevPlan plan = c.devPlan();
     PidConfig pc;
-    pc.fcTd = fcTd;
+    if (fw != FwNow) {  // before the self-heating estimate: P 1.5 after F too, no D
+        pc.fcKp    = 0;
+        pc.fcTd    = 0;
+        pc.observe = false;
+    }
     if (firmware3b08) {  // the model before the self-heating term
         pc.model.gain  = 2.2f;
         pc.model.rate  = 0.0175f;
@@ -52,7 +59,7 @@ static Out run(bool firmware3b08, float fcTd)
     DevTrack dev;
     std::deque<double> bts;
     Out o;
-    int win = FcFloorStart(c.tagTime(PointTag::FCs), -1, 20);
+    int win = FcFloorStart(c.tagTime(PointTag::FCs), -1, 20);  // 3b08be9's hold
     for (int t = 0; t < 900; t++) {
         float bt = std::round((pl.bt + ((rand() % 100) - 50) / 2000.0) * 10) / 10;
         if (o.f < 0 && bt >= 202.9f) {
@@ -60,13 +67,7 @@ static Out run(bool firmware3b08, float fcTd)
             o.btF      = bt;
             o.aheadAtF = bt - c.at(t);
             dev        = DevStart(c, t, bt);
-            PidAim a;
-            a.target = dev.target(t);
-            a.ffTemp = dev.target(t + 8);
-            a.ffRate = dev.rate(t + 8);
-            a.rate   = dev.rate(t);
-            a.afterF = true;
-            PidPrime(ps, ps.out, a, bt, pc);
+            PidPrime(ps, ps.out, DevAim(dev, t, 8), bt, pc);
             o.heatF = ps.out;
         }
         if (o.f >= 0) {
@@ -81,13 +82,9 @@ static Out run(bool firmware3b08, float fcTd)
         }
         PidAim a;
         if (dev.active) {
-            a.target = dev.target(t);
-            a.ffTemp = dev.target(t + 8);
-            a.ffRate = dev.rate(t + 8);
-            a.rate   = dev.rate(t);
-            a.afterF = true;
+            a = DevAim(dev, t, 8);
         } else {
-            a = CardputerAim(c, t, bt, win, false, 0, 8, 8);
+            a = CardputerAim(c, t, bt, ObserveStart(c.tagTime(PointTag::FCs), o.f, pc.obsLead), false, 0, 8, 8);
             if (firmware3b08 && t >= win && bt > a.target) a.target = std::min(bt, a.target + 8.0f);  // its hold
         }
         float heat = std::round(PidStep(ps, a, bt, 1.0f, pc).heat * 10) / 10;
@@ -107,14 +104,13 @@ int main()
     printf("2026-11-14 Syrina D replayed (plan: 6:00 RoR 15.0; after F 11.2 degC/min for 45 s, at most 208.5)\n");
     printf("%-40s %5s %6s %7s | %5s %-4s %4s %6s | %7s %7s | %6s %6s %6s\n", "firmware", "F", "BT F", "ahead", "drop", "why",
            "dev", "BT", "RoR dev", "RoR max", "RoR6", "heatF", "heatD");
-    struct V { const char* name; bool old; float td; } vs[] = {
-        {"PR #5 as roasted (3b08be9)", true, 0},
-        {"this: self-heating model, no hold", false, 0},
-        {"this + D after F 10 s", false, 10},
-        {"this + D after F 20 s", false, 20},
+    struct V { const char* name; Fw fw; } vs[] = {
+        {"PR #5 as roasted (3b08be9)", Fw3b08},
+        {"1cb0df1: self-heating model, no hold", Fw1cb0},
+        {"this: + estimate, after F P 4 Td 3", FwNow},
     };
     for (auto& v : vs) {
-        Out o = run(v.old, v.td);
+        Out o = run(v.fw);
         printf("%-40s %5s %6.1f %+7.1f | %5s %-4s %4d %6.1f | %7.1f %7.1f | %6.1f %6.1f %6.1f\n", v.name, FormatMmSs(o.f).c_str(),
                o.btF, o.aheadAtF, FormatMmSs(o.drop).c_str(), o.why, o.drop - o.f, o.btDrop, o.rorDev, o.rorMax, o.ror6, o.heatF,
                o.heatDrop);

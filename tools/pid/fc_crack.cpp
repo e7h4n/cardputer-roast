@@ -77,7 +77,11 @@ static Out run(bool isNew, Plant pl, const Curve& c)
     DevPlan plan = c.devPlan();
     DevTrack dev;
     Out o;
-    int winStart = FcFloorStart(c.tagTime(PointTag::FCs), -1, 20);
+    if (!isNew) {  // main before the development rule: P throughout, no self-heating estimate
+        pc.fcKp    = 0;
+        pc.fcTd    = 0;
+        pc.observe = false;
+    }
     for (int t = 0; t < 900; t++) {
         float bt = std::round((pl.bt + ((rand() % 100) - 50) / 2000.0f) * 10) / 10;
         if (o.f < 0 && pl.crackAt >= 0 && t >= pl.crackAt + 2) {
@@ -85,13 +89,7 @@ static Out run(bool isNew, Plant pl, const Curve& c)
             o.btF = bt;
             if (isNew) {
                 dev = DevStart(c, t, bt);
-                PidAim da;
-                da.target = dev.target(t);
-                da.ffTemp = dev.target(t + 8);
-                da.ffRate = dev.rate(t + 8);
-                da.rate   = dev.rate(t);
-                da.afterF = true;
-                PidPrime(ps, ps.out, da, bt, pc);  // as fcAnchor
+                PidPrime(ps, ps.out, DevAim(dev, t, 8), bt, pc);  // as fcAnchor
             }
         }
         if (o.f >= 0 && o.drop < 0) {
@@ -112,13 +110,9 @@ static Out run(bool isNew, Plant pl, const Curve& c)
         }
         PidAim a;
         if (isNew && dev.active) {
-            a.target = dev.target(t);
-            a.ffTemp = dev.target(t + 8);
-            a.ffRate = dev.rate(t + 8);
-            a.rate   = dev.rate(t);
-            a.afterF = true;
+            a = DevAim(dev, t, 8);
         } else if (isNew) {
-            a = CardputerAim(c, t, bt, winStart, false, 0, 8, 8);
+            a = CardputerAim(c, t, bt, ObserveStart(c.tagTime(PointTag::FCs), o.f, pc.obsLead), false, 0, 8, 8);
         } else {  // main: hold from the window on, through the crack
             bool in  = t >= FcFloorStart(c.tagTime(PointTag::FCs), o.f, 20);
             a        = CardputerAim(c, t, bt, -1, false, 0, 8, 8);
