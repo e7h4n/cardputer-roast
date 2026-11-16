@@ -45,10 +45,7 @@ void RoastRules::load()
     curveOffset = s.GetInt("curveOff10", (int)lroundf(curveOffset * 10)) / 10.0f;
     micGain     = std::max(0, std::min(rec::kMaxGainDb, (int)s.GetInt("micGain", micGain)));
     svLookahead = std::max(0, std::min(20, (int)s.GetInt("svLook", svLookahead)));
-    fcFloor     = s.GetInt("fcFloor", fcFloor ? 1 : 0) != 0;
-    floorDelta  = std::max(0, std::min(50, (int)s.GetInt("floorD10", (int)lroundf(floorDelta * 10)))) / 10.0f;
     floorCap    = std::max(10, std::min(80, (int)s.GetInt("floorCap10", (int)lroundf(floorCap * 10)))) / 10.0f;
-    cardPid     = s.GetInt("cardPid", cardPid ? 1 : 0) != 0;
     pidKp       = std::max(1, std::min(100, (int)s.GetInt("pidKp10", (int)lroundf(pidKp * 10)))) / 10.0f;
     pidTi       = std::max(0, std::min(600, (int)s.GetInt("pidTi", pidTi)));
     pidTd       = std::max(0, std::min(30, (int)s.GetInt("pidTd", pidTd)));
@@ -72,10 +69,7 @@ void RoastRules::save() const
     s.SetInt("curveOff10", (int)lroundf(curveOffset * 10));
     s.SetInt("micGain", micGain);
     s.SetInt("svLook", svLookahead);
-    s.SetInt("fcFloor", fcFloor ? 1 : 0);
-    s.SetInt("floorD10", (int)lroundf(floorDelta * 10));
     s.SetInt("floorCap10", (int)lroundf(floorCap * 10));
-    s.SetInt("cardPid", cardPid ? 1 : 0);
     s.SetInt("pidKp10", (int)lroundf(pidKp * 10));
     s.SetInt("pidTi", pidTi);
     s.SetInt("pidTd", pidTd);
@@ -342,7 +336,7 @@ void AppRoast::charge()
     _cardPid  = false;
     _dev      = DevTrack();
     _fcOffset = 0;
-    if (_hasCurve && _rules.cardPid) {
+    if (_hasCurve) {
         // Cardputer PID: the roaster's PID stays off; pidTick() writes the heater from the first second on.
         uint16_t t0 = (uint16_t)lroundf(ComputeSv(_curve, 0, NAN, false, svConfig()).sv * 10);
         w.push_back({9, t0});  // shown on the roaster; its PID does not use it
@@ -350,18 +344,10 @@ void AppRoast::charge()
         w.push_back({15, 0});
         _manual        = false;
         _cardPid       = true;
-        _lastTargetRaw = t0;
         PidReset(_pid, 0);
         _fcOffset      = 0;
         _lastHeatRaw   = -1;
         _pidMs         = 0;
-    } else if (_hasCurve) {
-        uint16_t t0 = (uint16_t)lroundf(ComputeSv(_curve, 0, NAN, false, svConfig()).sv * 10);
-        w.push_back({9, t0});
-        w.push_back({2, 0});
-        w.push_back({15, 1});
-        _manual        = false;
-        _lastTargetRaw = t0;
     } else {
         w.push_back({2, 0});
         _manual  = true;
@@ -373,8 +359,7 @@ void AppRoast::charge()
     _dropMs       = 0;
     _satRun       = 0;
     _satWarned = _heatDropWarned = _rorWarned = _autoDropped = false;
-    _svFloored = _floorLogged = false;
-    _lastSv                   = NAN;
+    _lastSv = NAN;
     _autoDropWhy.clear();
     _session.reset(_hasCurve ? &_curve : nullptr, _rules.greenG, _bean);
     _session.openLog(NextLogId());
@@ -385,13 +370,10 @@ void AppRoast::charge()
         _session.addAction(0, b);
         if (_hasCurve) {
             char c[128];
-            if (_cardPid)
-                snprintf(c, sizeof(c),
-                         "control: Cardputer PID P %.1f Ti %d s Td %d s, after F P %.1f Td %d s, feedforward %s%s",
-                         _rules.pidKp, _rules.pidTi, _rules.pidTd, _rules.pidFcKp, _rules.pidFcTd,
-                         _rules.pidFF ? "on" : "off", _rules.pidFF && _rules.pidObs ? " + self-heat estimate" : "");
-            else
-                snprintf(c, sizeof(c), "control: roaster PID");
+            snprintf(c, sizeof(c),
+                     "control: Cardputer PID P %.1f Ti %d s Td %d s, after F P %.1f Td %d s, feedforward %s%s",
+                     _rules.pidKp, _rules.pidTi, _rules.pidTd, _rules.pidFcKp, _rules.pidFcTd,
+                     _rules.pidFF ? "on" : "off", _rules.pidFF && _rules.pidObs ? " + self-heat estimate" : "");
             _session.addAction(0, c);
         }
     }
@@ -400,8 +382,7 @@ void AppRoast::charge()
     // quiet roast (see quietRoast()): no key clicks either, until the log ends
     audio::set_keyboard_sfx_enable(false);
     _beepQueue.clear();
-    toast(!_hasCurve ? "Charged: manual heat (←→)" : (_cardPid ? "Charged: Cardputer PID" : "Charged: PID follows curve"),
-          ui::GO);
+    toast(!_hasCurve ? "Charged: manual heat (←→)" : "Charged: Cardputer PID", ui::GO);
     startRecording();  // last, so a failure toast is not covered by the charge toast
 }
 
@@ -531,7 +512,7 @@ void AppRoast::toggleManual()
         _session.addAction(t, b);
         snprintf(b, sizeof(b), "manual %.1f%% (30 s avg)", _heatSet);
         toast(std::string(b) + "  ←→", ui::HEAT, 3000);
-    } else if (_cardPid) {
+    } else {
         // Bumpless: the Cardputer PID starts from the heat being held now.
         float bt = _snap.has(4) ? _snap.bt() : NAN;
         PidPrime(_pid, _heatSet, pidAim(curveT()), bt, pidConfig());
@@ -539,13 +520,6 @@ void AppRoast::toggleManual()
         _lastHeatRaw = (int)lroundf(_heatSet * 10);
         _manual      = false;
         _session.addAction(t, "Cardputer PID on curve");
-        toast("PID on curve", ui::GO);
-    } else {
-        uint16_t tgt = (uint16_t)lroundf(svAt(curveT()).sv * 10);
-        _link->command({{9, tgt}, {15, 1}});
-        _lastTargetRaw = tgt;
-        _manual = false;
-        _session.addAction(t, "PID on curve");
         toast("PID on curve", ui::GO);
     }
 }
@@ -592,10 +566,9 @@ bool AppRoast::confirm(int key, const std::string& msg, bool quiet)
 SvConfig AppRoast::svConfig() const
 {
     SvConfig c;
-    c.lookahead  = _rules.svLookahead;
-    c.fcFloor    = _rules.fcFloor;
-    c.floorDelta = _rules.floorDelta;
-    c.floorCap   = _rules.floorCap;
+    c.lookahead = _rules.svLookahead;
+    c.fcFloor   = false;  // the first-crack floor was for the roaster's own PID, which Roast no longer uses
+    c.floorCap  = _rules.floorCap;
     return c;
 }
 
@@ -613,9 +586,7 @@ PidConfig AppRoast::pidConfig() const
 }
 
 // What the Cardputer PID aims at, at curve second t: error against the curve now, feedforward from the curve
-// `lookahead` seconds ahead (roast_control.h PidAim). Around first crack the floor holds: while BT is above the curve
-// the error is 0, the integral stops and the heater stays on the plan (feedforward); "floor above BT" is for the
-// roaster PID only. With +1 the integral kept pushing BT up and the drop came 4-5 degC over the curve (tools/pid).
+// `lookahead` seconds ahead (roast_control.h PidAim); after F the development, or the curve shifted to BT.
 PidAim AppRoast::pidAim(int t) const
 {
     SvConfig c   = svConfig();
@@ -672,15 +643,6 @@ void AppRoast::pidTick(const PidAim& aim)
     _session.setControl(o.heat, o.ff, o.p, o.i, o.d, o.obs * 60);
 }
 
-SvResult AppRoast::svAt(int t) const
-{
-    SvConfig c = svConfig();
-    int start  = FcFloorStart(_curve.tagTime(PointTag::FCs), _session.markT(Mark::FCs), c.floorLead);
-    bool in    = _phase == Phase::Roasting && start >= 0 && t >= start;
-    float bt   = _snap.has(4) ? _snap.bt() : NAN;
-    return ComputeSv(_curve, t, bt, in, c);
-}
-
 /* ------------------------------ roast ticks ------------------------------ */
 void AppRoast::tickRoast()
 {
@@ -689,49 +651,21 @@ void AppRoast::tickRoast()
     _lastSampleT = t;
     _dirty       = true;
 
-    // 1) target (SV) for the machine PID: curve with lookahead, floored at BT + delta around first crack
+    // 1) what the Cardputer PID aims at: the curve now, or after F the development
     float sv = NAN;
     PidAim aim;
-    if (_hasCurve && _cardPid) {  // what the Cardputer PID aims at: the curve now, held around first crack
-        aim        = pidAim(curveT());
-        sv         = aim.target;
-        _svFloored = _phase == Phase::Roasting && aim.floored;
-        if (_svFloored && !_floorLogged) {
-            char b[64];
-            snprintf(b, sizeof(b), "FC hold on: BT %.1f above curve %.1f", _snap.bt(), _curve.at(curveT()));
-            _session.addAction(t, b);
-            _floorLogged = true;
-        }
-    } else if (_hasCurve && _dev.active && _phase == Phase::Roasting) {  // roaster PID, after F: the development
-        sv         = _dev.target(curveT() + std::max(0, std::min(20, _rules.svLookahead)));
-        _svFloored = false;
-    } else if (_hasCurve) {
-        SvResult r = svAt(curveT());
-        sv         = r.sv;
-        _svFloored = _phase == Phase::Roasting && r.floored;
-        if (_svFloored && !_floorLogged) {
-            char b[64];
-            snprintf(b, sizeof(b), "FC floor on: SV %.1f (BT %+.1f, curve %.1f)", r.sv, _rules.floorDelta, r.ahead);
-            _session.addAction(t, b);
-            _floorLogged = true;
-        }
+    if (_hasCurve) {
+        aim = pidAim(curveT());
+        sv  = aim.target;
     }
     _lastSv = sv;
-    if (_phase == Phase::Roasting && _hasCurve && linkReady()) {
-        if (_cardPid) {
-            if (!_manual) {
-                pidTick(aim);
-            } else {  // heat held by hand: the self-heating estimate keeps up, so PID can take over again
-                uint32_t now = GetHAL().millis();
-                bool fresh   = _snap.has(4) && _snap.lastRxMs && now - _snap.lastRxMs < 3000;
-                ObserverStep(_pid.obs, fresh ? _snap.bt() : NAN, _heatSet, 1.0f, pidConfig());
-            }
-        } else {
-            int raw = (int)lroundf(sv * 10);
-            if (raw != _lastTargetRaw) {
-                _link->setTarget((uint16_t)raw);
-                _lastTargetRaw = raw;
-            }
+    if (_phase == Phase::Roasting && _cardPid && linkReady()) {
+        if (!_manual) {
+            pidTick(aim);
+        } else {  // heat held by hand: the self-heating estimate keeps up, so PID can take over again
+            uint32_t now = GetHAL().millis();
+            bool fresh   = _snap.has(4) && _snap.lastRxMs && now - _snap.lastRxMs < 3000;
+            ObserverStep(_pid.obs, fresh ? _snap.bt() : NAN, _heatSet, 1.0f, pidConfig());
         }
     }
 
@@ -739,7 +673,7 @@ void AppRoast::tickRoast()
     Sample s;
     s.t      = (int16_t)t;
     s.bt10   = _snap.has(4) ? _snap.reg[4] : (_session.samples().empty() ? 0 : _session.samples().back().bt10);
-    s.tgt10  = _hasCurve ? (int16_t)lroundf(sv * 10) : 0;  // SV written, or the Cardputer PID's target
+    s.tgt10  = _hasCurve ? (int16_t)lroundf(sv * 10) : 0;  // the Cardputer PID's target
     s.heat10 = _snap.reg[11];
     s.fan10  = _snap.reg[12];
     s.mtime  = _snap.reg[2];
@@ -1603,10 +1537,6 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     rowF("cold below", &_rules.coldBT, nullptr, 20, 80, 1, "°");
     rowF("curve offset", &_rules.curveOffset, nullptr, -30, 30, 0.5f, "°");
     group("CURVE FOLLOW", CURVE);
-    RuleRow cardRow;
-    cardRow.label  = "PID on Cardputer";
-    cardRow.toggle = &_rules.cardPid;
-    v.push_back(cardRow);
     rowF("P", &_rules.pidKp, nullptr, 0.1f, 10, 0.1f, "%/°");
     rowI("I time", &_rules.pidTi, nullptr, 0, 600, 5, " s");
     rowI("D time", &_rules.pidTd, nullptr, 0, 30, 1, " s");
@@ -1621,11 +1551,6 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     obsRow.toggle = &_rules.pidObs;
     v.push_back(obsRow);
     rowI("SV lookahead", &_rules.svLookahead, nullptr, 0, 20, 1, " s");
-    RuleRow floorRow;
-    floorRow.label  = "FC floor";
-    floorRow.toggle = &_rules.fcFloor;
-    v.push_back(floorRow);
-    rowF("floor above BT", &_rules.floorDelta, nullptr, 0, 5, 0.5f, "°");
     rowF("floor cap", &_rules.floorCap, nullptr, 1, 8, 0.5f, "°");
     group("AUDIO", DROP);  // every roast is recorded (when there is an SD card); only the gain is a setting
     rowI("mic gain", &_rules.micGain, nullptr, 0, rec::kMaxGainDb, 3, " dB");
