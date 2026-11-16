@@ -594,8 +594,6 @@ void AppRoast::renderDash()
     } else if (_manual) {
         text(4, 32, "manual heat", F11(), HEAT);
         if (_hasCurve) text(4, 45, signed1(bt - tgt) + "° vs curve", F11(), DIM);
-    } else if (_hasCurve && _svFloored) {  // first-crack floor: SV held at BT + delta, above the curve
-        text(4, 32, _cardPid ? std::string("FC hold: heat on plan") : "FC floor SV " + fmt1(_lastSv), F11(), CURVE);
     } else if (_hasCurve && _dev.active) {  // after F: the development plan, from where the beans cracked
         text(4, 32, "plan " + fmt1(_lastSv), F11(), CURVE);
         text(4, 45, signed1(bt - _lastSv) + "°", F14(), INK);
@@ -666,7 +664,12 @@ bool AppRoast::renderAlertBar()
     int t    = roastT();
     float bt = _snap.has(4) ? _snap.bt() : _session.lastBT();
     if (!linkReady()) {
-        snprintf(b, sizeof(b), "BLE lost · holding %.0f° · retrying", _lastTargetRaw > 0 ? _lastTargetRaw / 10.0 : bt);
+        // the roaster keeps the last heater output for ~17-19 s, then cuts it by itself
+        float h = _manual ? _heatSet : (_lastHeatRaw >= 0 ? _lastHeatRaw / 10.0f : NAN);
+        if (std::isnan(h))
+            snprintf(b, sizeof(b), "BLE lost · retrying");
+        else
+            snprintf(b, sizeof(b), "BLE lost · last heat %.0f%% · retrying", h);
         bar(DROP, b);
         return true;
     }

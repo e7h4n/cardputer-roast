@@ -224,8 +224,7 @@ The two points set the **development**, the part that matters most:
 time is over or BT reaches the drop temperature**, whichever comes first. This is not a setting. A crack later or
 hotter than planned therefore drops early on temperature (in the simulation below, 20–26 s after F instead of
 45 s); one cooler than planned runs the full time and ends below the drop temperature. Without F, Roast drops at
-the drop temperature or at the curve's drop time. Pressing F twice clears it and goes back to the curve. Both
-controllers follow the development (the roaster PID through SV). A bar says "auto-drop" in the last 10 s or 1 °C.
+the drop temperature or at the curve's drop time. Pressing F twice clears it and goes back to the curve. A bar says "auto-drop" in the last 10 s or 1 °C.
 
 `roast_curve.cpp` builds the 1 Hz target:
 
@@ -263,9 +262,9 @@ reaches the crack 0.4 °C ahead instead of 2.3 and holds 11.2 °C/min to the dro
 though, so a 208.5 °C limit still leaves only ~30 s at 11.2 °C/min: that is the curve's to change.
 
 ### Curve following: the Cardputer PID
-By default the Cardputer sets the heater itself (Rules › CURVE FOLLOW › *PID on Cardputer*). At charge it switches
-the roaster's own PID off (register 15 = 0) and then writes the heater output (register 11) once a second
-(`roast_control.h`, `PidStep`):
+With a curve, the Cardputer always sets the heater itself; the roaster's own PID is not used (it was an option
+until 2026-11-16, see below). At charge Roast switches the roaster's PID off (register 15 = 0) and then writes the
+heater output (register 11) once a second (`roast_control.h`, `PidStep`):
 
     heat = feedforward + P × (e + ∫e dt / Ti + Td × (planned rate − dBT/dt)),   e = target(t) − BT
 
@@ -356,20 +355,17 @@ The roaster's own PID (registers 20–23: cycle 1000 ms, P 6, I 1, D 8) fits as 
 (R² 0.995–0.998 on all three roasts): an integral time of ~14 s against a ~50 s bean time constant, so it reacts
 late and then overshoots.
 
-**Roaster PID** (*PID on Cardputer* off): Roast writes the roaster's target (SV, register 9) once a second and the
-roaster's PID sets the heater. Two rules shape SV:
+The roaster PID rows above are kept as the comparison that settled it. Until 2026-11-16 *PID on Cardputer* could be
+turned off: Roast then wrote the roaster's target (SV, register 9) once a second, curve(t + *SV lookahead*), held at
+least at BT + 1 °C around first crack (*FC floor*). Both are gone with the option. Two curve-follow rules remain:
 
-- **SV lookahead** (0–20 s, default 8): SV = curve(t + lookahead). The PID acts late (heater → air → beans), so it
-  aims where the curve will be. Artisan follows a background curve the same way. Past the curve's end the last
-  value holds. With the Cardputer PID, the lookahead applies to the feedforward only.
-- **FC floor** (default on): in the first-crack window, SV is never below BT + *floor above BT* (default 1 °C), so
-  the PID does not cut heat just to get back onto the line. The floor is capped at curve(t) + *floor cap*. With an
-  integral this keeps pushing BT up: about +4 °C over the curve at the drop in the simulator, and up to +8.6 °C
-  with an +8 °C cap. Drop-now and the safety drop are unchanged. The first time the floor lifts SV it is logged as
-  an action; the Roast page then shows "FC floor SV …" (with the Cardputer PID: "FC hold: heat on plan").
+- **SV lookahead** (0–20 s, default 8): the feedforward aims at curve(t + lookahead), where the curve will be once
+  the heater change reaches the beans. Past the curve's end the last value holds.
+- **Floor cap** (1–8 °C, default 8): on a curve without first-crack and drop points, F shifts the rest of the curve
+  to BT by at most this much.
 
-The log's `target` column records the SV written (with the Cardputer PID: its target, the curve now). **P** (manual heat) holds the heater at its mean over the
-last 30 s rather than one reading.
+The log's `target` column records the Cardputer PID's target (the curve now, after F the development). **P** (manual
+heat) holds the heater at its mean over the last 30 s rather than one reading.
 
 ### Fan floors
 The roaster's own minimum fan register reads 50 %. A short press of ↓ stops at **50 %** and again at **40 %**.
@@ -390,9 +386,7 @@ shown underneath, and range rules (window, rise) take the lower then the upper e
 | Cold temperature | 40 °C |
 | Curve offset | 0 °C |
 | SV lookahead | 8 s |
-| FC floor | on |
-| Floor above BT | 1 °C |
-| Floor cap (above the curve) | 8 °C |
+| Floor cap (shift at F, curves without FC/DROP) | 8 °C |
 | Mic gain | 18 dB |
 
 The bottom bar turns green ("auto-drop") in the last 10 s or 1 °C of the development. It turns yellow for a heater pinned at 95 % or more for 20 s, heater output falling after first
@@ -497,12 +491,13 @@ The phone app's JavaScript was run in Node and compared with this C++ code case 
 | Curve generation | **No longer the same.** The phone app cuts the preset to the total time and stretches it linearly between nodes, which puts a rate-of-rise step at every node. Roast stretches the preset smoothly onto first crack and continues at the development rate ([Curves and development](#curves-and-development)). |
 | RoR | \|BT − BT 29 readings earlier\| ÷ 0.5, shown after 35 s. |
 | Curve time base | Machine timer (register 2), falling back to the local timer if they differ by more than 5 s. |
-| Commands | Same registers and values for start, charge without a curve, fan ±1, drop, stop, and the per-second target write. |
+| Commands | Same registers and values for start, charge without a curve, fan ±1, drop and stop. |
 
 Deliberate differences:
-- Charging with a curve writes the first target (register 9) before starting the PID.
-- Turning PID off also writes the current heater value (register 11), so the output does not jump.
-- P re-enables PID mid-roast.
+- With a curve the roaster's own PID stays off: Roast writes the heater output (register 11) once a second
+  (Cardputer PID). The first target still goes to register 9 at charge, for the roaster's display.
+- Switching to manual (P) writes the current heater value (register 11), so the output does not jump.
+- P hands back to the Cardputer PID mid-roast.
 - Heater steps are sent only in manual mode.
 - The curve end does not force a drop (see *auto-drop after end*); the end of the development does.
 - Curves are built smoothly from first crack and drop only (see above).

@@ -26,11 +26,8 @@ struct RoastRules {
     float heatDrop   = 5.0f;  // heater drop around first crack that triggers a hint
     float curveOffset = 0.0f; // shift the whole curve (myERoast tempCompensation), -30..30
     int micGain      = 18;    // microphone PGA gain, 0..30 dB in 3 dB steps
-    int svLookahead  = 8;     // SV = curve(t + this), 0..20 s (roast_control.h)
-    bool fcFloor     = true;  // around first crack, SV >= BT + floorDelta (capped at curve + 8)
-    float floorDelta = 1.0f;  // 0..5 degC
-    float floorCap   = 8.0f;  // the floor never exceeds curve(t) + this, 1..8 degC
-    bool cardPid     = true;  // the Cardputer computes the heater output; off: the roaster's own PID follows SV
+    int svLookahead  = 8;     // the feedforward aims at curve(t + this), 0..20 s (roast_control.h PidAim)
+    float floorCap   = 8.0f;  // after F on a curve without FC/DROP points: shift to BT by at most this, 1..8 degC
     float pidKp      = 1.5f;  // % heat per degC, 0.1..10 (roast_control.h PidConfig)
     int pidTi        = 60;    // integral time, s (0: no integral)
     int pidTd        = 0;     // derivative time before F, s
@@ -116,9 +113,6 @@ private:
     float _fanSet        = 0;
     uint32_t _fanSetMs   = 0;
     float _heatSet       = 0;
-    int _lastTargetRaw   = -1;
-    bool _svFloored      = false;  // last SV came from the first-crack floor
-    bool _floorLogged    = false;  // the floor's first use is in the log
     float _lastSv        = NAN;
     roast::SvConfig svConfig() const;
     roast::PidConfig pidConfig() const;
@@ -132,7 +126,6 @@ private:
     void fcAnchor(bool marked);
     void pidTick(const roast::PidAim& aim);
     roast::PidAim pidAim(int t) const;
-    roast::SvResult svAt(int t) const;  // what to write as SV at curve second t (lookahead, first-crack floor)
 
     // ---- alerts
     int _satRun          = 0;
