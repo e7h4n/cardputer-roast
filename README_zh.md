@@ -51,6 +51,15 @@ Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE*
 
 请插入 FAT32 格式的 SD 卡来存放曲线和记录。没有 SD 卡时，最近一锅的记录只保存在内存里，离开总结页就没有了。
 
+### 升级
+每次合并到 main 都会自动发布一个 Release，版本号 `v0.3.<main 上的提交数>`。Roast 不能覆盖自己（它运行在 Launcher 给它装的那个分区上），所以由 Roast 下载、Launcher 安装：
+
+1. **规则 › SYNC › firmware** 显示当前固件版本。按 Enter 检查 GitHub（需要已经配好 Wi-Fi；检查时会断开和烘豆机的连接）。如果最新 Release 更新（或者当前不是正式 Release 版本），就下载到 SD 卡的 `/roast/update/Roast.bin`，并按 Release 里的 `latest.json` 核对大小和 SHA-256。卡上已经有同一个文件就不重复下载。
+2. **按 Enter** 回到 Launcher，在它的启动画面按任意键停在菜单。
+3. **在 Launcher 里按绑定到 `/roast/update/Roast.bin` 的那个键。**第一次要先绑定：SD 浏览 › `roast/update/Roast.bin` › *Bind to key*（比如 U）。Launcher 安装后会直接启动新的 Roast。flash 满了时它会问用哪个 app 分区：选旧的 Roast（比如 `roast0`）。Launcher 安装不动 NVS，规则、Wi-Fi 和 Dropbox 设置都保留。
+
+烘焙中不能升级：检查只在规则页里，烘焙时进不去。现在的镜像 1.93 MB，第一次安装时 Launcher 给 Roast 分的分区是 1.97 MB（0x1E0000），只剩约 31 KB 余量。镜像再大就放不进去，那时要先在 Launcher 里删掉旧 Roast 再装。
+
 ## 使用说明
 先关掉手机上的 *myERoast*：烘豆机同一时间只接受一个蓝牙连接。
 
@@ -353,7 +362,7 @@ SD 卡需要 FAT32 格式。没有 SD 卡时，记录只保存在内存里，关
 python3 fetch_repos.py        # 把 M5GFX、M5Unified、mooncake 等依赖克隆到 components/
 idf.py build                  # 生成 build/cardputer-roast.bin（Launcher 安装用的 app 镜像）
 ```
-CI 在 `espressif/idf:v5.4.2` 容器里执行同样的步骤。推送 `v*` 标签会自动发布 Release，并附上 `.bin`。
+CI 在 `espressif/idf:v5.4.2` 容器里执行同样的步骤。每次推送到 main 都会发布 Release `v0.3.<main 上的提交数>`（推送 `v*` 标签则用那个标签），附上 `.bin`、`SHA256SUMS` 和 `latest.json`（`{"version","bin","size","sha256"}`，升级检查读的就是它）。版本号会编进固件（`ROAST_VERSION` → `PROJECT_VER`）；本地编译用 `git describe`。
 
 ### 桌面预览
 不用设备也能检查界面。`tools/preview/` 把 Roast 的真实代码（页面、按键、曲线、记录、模拟器）编译成桌面程序，用替身 HAL 和假时钟跑一锅预设的模拟烘焙，把每个页面导出为 240×135 的 PNG：

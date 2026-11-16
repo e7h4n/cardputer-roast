@@ -1,8 +1,10 @@
 // Desktop stand-in for main/apps/app_roast/roast_sync.cpp, on the fake clock; nothing touches the network.
 // Curve jobs "run" for 1.5 s. SaveRoast uploads for 4 s, then idles (summary still open) until Finish();
-// Resave() adds 1.5 s. ROAST_PREVIEW_SYNC_FAIL=1 makes jobs fail.
+// Resave() adds 1.5 s. Update checks for 1 s, then "downloads" v0.3.60 for 3 s. ROAST_PREVIEW_SYNC_FAIL=1 makes jobs
+// fail.
 #include <apps/app_roast/roast_sync.h>
 #include <hal/hal.h>
+#include <algorithm>
 #include <cstdlib>
 
 namespace roast {
@@ -22,7 +24,7 @@ bool Start(Job job, const std::string& arg)
     s_id         = arg;
     s_finish     = false;
     s_t0         = GetHAL().millis();
-    s_busyUntil  = s_t0 + (job == Job::SaveRoast ? 4000 : 1500);
+    s_busyUntil  = s_t0 + (job == Job::SaveRoast || job == Job::Update ? 4000 : 1500);
     return true;
 }
 
@@ -67,7 +69,14 @@ Status Get()
         }
         return s;
     }
-    if (s.job == Job::Curves) {
+    if (s.job == Job::Update) {
+        bool down = now >= s_t0 + 1000;
+        s.step    = down ? "downloading" : "checking GitHub";
+        s.file    = down ? "v0.3.60" : "";
+        s.latest  = down ? "v0.3.60" : "";
+        s.total   = down ? 1934608 : 0;
+        s.done    = down ? (uint32_t)((uint64_t)s.total * std::min<uint32_t>(now - s_t0 - 1000, 3000) / 3000) : 0;
+    } else if (s.job == Job::Curves) {
         s.step       = "downloading";
         s.file       = "Gotiti_200g_V4.json";
         s.downloaded = 1;
