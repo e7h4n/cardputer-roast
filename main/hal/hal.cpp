@@ -5,7 +5,6 @@
  */
 #include "hal.h"
 #include "hal_config.h"
-#include <apps/utils/audio/audio.h>
 #include <mooncake_log.h>
 #include <M5Unified.hpp>
 #include <esp_mac.h>
@@ -29,7 +28,6 @@ void Hal::init()
 
     M5.begin();
     M5.Display.setBrightness(0);
-    M5.Speaker.begin();  // Codec takes some time to initialize
 
     display_init();
     i2c_scan();

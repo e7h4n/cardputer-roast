@@ -25,7 +25,6 @@ struct RoastRules {
     float greenG     = 200.f; // default batch
     float heatDrop   = 5.0f;  // heater drop around first crack that triggers a hint
     float curveOffset = 0.0f; // shift the whole curve (myERoast tempCompensation), -30..30
-    int micGain      = 18;    // microphone PGA gain, 0..30 dB in 3 dB steps
     int svLookahead  = 8;     // the feedforward aims at curve(t + this), 0..20 s (roast_control.h PidAim)
     float floorCap   = 8.0f;  // after F on a curve without FC/DROP points: shift to BT by at most this, 1..8 degC
     float pidKp      = 1.5f;  // % heat per degC, 0.1..10 (roast_control.h PidConfig)
@@ -51,7 +50,6 @@ public:
 private:
     enum class Screen : uint8_t { Connect, Prep, Roast, Cool, Summary, Curves, Editor, Settings, Help, Network, Sync };
     enum class Phase : uint8_t { Idle, FanOn, Roasting, Cooling, Done };
-    enum class Tone : uint8_t { Key, Info, Good, Warn };
 
     struct Input {
         bool active = false;
@@ -76,7 +74,6 @@ private:
         int* i[2]    = {nullptr, nullptr};  // int value(s)
         float lo = 0, hi = 0, step = 1;
         const char* unit = "";
-        bool simToggle = false;
         bool* toggle   = nullptr;  // on/off row
         bool network   = false;    // opens the Wi-Fi & Dropbox setup screen
         bool firmware  = false;    // shows this build's version; Enter checks GitHub for a newer release
@@ -100,7 +97,6 @@ private:
     Screen _backScreen = Screen::Prep;
     Phase _phase       = Phase::Idle;
     int _view          = 0;  // 0 numbers, 1 chart
-    bool _muted        = false;
     bool _blockedByKeyboardApp = false;
     bool _fanRunning   = false;  // machine fan on (S/charge) until X X stop, independent of the log
     bool _noCurve      = false;  // "No curve" picked explicitly: manual heat
@@ -188,7 +184,6 @@ private:
 
     // ---- Wi-Fi & Dropbox setup (net/roast_net.h): pairs with the Coffee Watch setup page over Bluetooth
     bool _netOpen    = false;  // setup running: the roaster link is closed meanwhile
-    bool _netWasSim  = false;  // reopen the simulator rather than BLE when setup closes
     Screen _setBack  = Screen::Prep;  // where Esc on the rules page returns
     std::string _netSummary;          // rules page value: saved network and Dropbox state
     void openNetwork();
@@ -220,16 +215,8 @@ private:
     void renderNetwork();
     void openSettings();
 
-    // ---- audio recording (roast_audio.h): charge -> end of the log
-    bool _recording      = false;
-    uint32_t _recStartMs = 0;
-    int32_t _markMs[(int)roast::Mark::Count];  // ms after charge, -1 = not set (for the recording's event times)
-    void startRecording();
-    void stopRecording();
-    void pollRecording();
-
     // ---- logic (app_roast.cpp)
-    void startLink(bool sim);
+    void startLink();
     void pollLink();
     void handleKeys();
     void onKey(const Keyboard::KeyEvent_t& e);
@@ -244,7 +231,6 @@ private:
     void keyInput(const Keyboard::KeyEvent_t& e, int code);
     void keyBatch(const Keyboard::KeyEvent_t& e);
     void openBatch(int field);
-    void setSimulator(bool on);
     bool confirm(int key, const std::string& msg, bool quiet = false);
     bool confirmPending(int key) const;
 
@@ -270,16 +256,6 @@ private:
         return _linkState == roast::LinkState::Ready;
     }
     void toast(const std::string& msg, uint32_t color = 0xFFFFFF, uint32_t ms = 2200);
-    /// From charge until the log ends the speaker stays off: no key clicks, chimes, warnings or alarms. Alerts are
-    /// shown on screen only, and the microphone can record (it shares the codec and its clocks with the speaker).
-    bool quietRoast() const
-    {
-        return _phase == Phase::Roasting || _phase == Phase::Cooling;
-    }
-    void beep(Tone t);
-    void pumpBeep();
-    std::deque<std::pair<int, int>> _beepQueue;
-    uint32_t _beepNextMs = 0;
     void openInput(const std::string& title, const std::string& init, bool numeric, const std::string& hint,
                    std::function<void(const std::string&)> done);
 

@@ -8,7 +8,6 @@
 #include <mooncake_log.h>
 #include <mooncake.h>
 #include <apps/app_roast/app_roast.h>
-#include <apps/utils/audio/audio.h>
 #include <hal.h>
 #include <apps/app_roast/roast_debug.h>
 
@@ -34,7 +33,6 @@ extern "C" void app_main(void)
     GetMooncake().openApp(roastId);
 
     // Main loop
-    audio::set_keyboard_sfx_enable(true);
     roast::DebugStart();
     while (1) {
         GetHAL().feedTheDog();

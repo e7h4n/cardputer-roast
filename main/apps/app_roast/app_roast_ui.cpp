@@ -4,7 +4,7 @@
  *  - one hero number per screen; secondary numbers are small cards with a colour bar
  *  - the bottom row always shows the keys that work right now; it turns into a full-width colour bar only when
  *    something needs a hand (green = drop window, red = act now, yellow = attention)
- *  - top-right status corner: battery, link dot / SIM tag, mute, missing SD, REC while recording
+ *  - top-right status corner: battery, link dot, missing SD
  */
 #include "app_roast.h"
 #include "fonts/roast_fonts.h"
@@ -99,7 +99,7 @@ std::string mmss(int s)
 
 bool lightColour(uint32_t c)
 {
-    return c == DRY || c == WARN || c == SIM || c == ui::WHITE || c == CARD || c == FAINT;
+    return c == DRY || c == WARN || c == ui::WHITE || c == CARD || c == FAINT;
 }
 
 void dot(int cx, int cy, int r, uint32_t c)
@@ -366,38 +366,15 @@ int AppRoast::renderStatus(bool draw)
         }
         x -= 19 + tw(pct, F11());
     }
-    if (_muted) {  // speaker with a red slash
-        x -= 13;
-        if (draw) {
-            cv().fillRect(x, 4, 3, 5, DIM);
-            cv().fillTriangle(x + 2, 6, x + 7, 1, x + 7, 11, DIM);
-            cv().drawLine(x - 1, 11, x + 9, 1, DROP);
-        }
-    }
     if (!_sdOk) {
         int w = tw("SD", F10()) + 8;
         x -= w + 4;
         if (draw) pill(x, 1, "SD", DROP);
     }
-    if (_link && _link->isSimulated()) {
-        int w = tw("SIM", F10()) + 8;
-        x -= w + 4;
-        if (draw) pill(x, 1, "SIM", SIM);
-    } else {
-        x -= 8;
-        uint32_t c = _linkState == LinkState::Ready ? GO : (_linkState == LinkState::Lost ? DROP : FAINT);
-        if (draw) dot(x, 6, 3, c);
-        x -= 3;
-    }
-    if (_recording) {  // red dot + REC, like a camera
-        int w = tw("REC", F10()) + 14;
-        x -= w + 4;
-        if (draw) {
-            rbox(x, 1, x + w, 12, 5, DROP);
-            dot(x + 6, 6, 2, ui::WHITE);
-            text(x + 10, 7, "REC", F10(), ui::WHITE, Datum::middle_left);
-        }
-    }
+    x -= 8;
+    uint32_t c = _linkState == LinkState::Ready ? GO : (_linkState == LinkState::Lost ? DROP : FAINT);
+    if (draw) dot(x, 6, 3, c);
+    x -= 3;
     return x;
 }
 
@@ -447,7 +424,7 @@ void AppRoast::renderConnect()
             text(W - 42, 104, std::to_string(r.rssi) + " dBm", F10(), DIM, Datum::middle_right);
         }
     }
-    keybar({{"Enter", INK, "retry"}, {"D", SIM, "simulator"}, {"O", INK, "rules"}, {"Esc", FAINT, "exit"}});
+    keybar({{"Enter", INK, "retry"}, {"O", INK, "rules"}, {"Esc", FAINT, "exit"}});
 }
 
 /* ================================================================== prep */
@@ -913,8 +890,8 @@ void AppRoast::renderSummary()
     snprintf(b, sizeof(b), "RoR %s→%s · max heat %s%% · err %s°", fmt1(m.rorAtFC).c_str(), fmt1(m.rorFC30).c_str(),
              fmt0(m.maxHeat).c_str(), fmt1(m.meanAbsErr).c_str());
     text(4, 91, b, F11(), DIM);
-    // bottom line: only what needs a hand. Save progress, the recording's length and clipping are in the JSON; a
-    // failed Dropbox save is toasted, and Enter explains why the summary cannot close while it saves.
+    // bottom line: only what needs a hand. A failed Dropbox save is toasted, and Enter explains why the summary cannot
+    // close while it saves.
     bool sdFailed = !_saveMsg.empty() && _saveMsg.rfind("Updated", 0) != 0 && _saveMsg.rfind("Saved", 0) != 0;
     int right     = _fanRunning ? W - 6 - (tw("fan still on", F10()) + 8) : W - 4;
     if (sdFailed) text(4, 111, clipTo(_saveMsg, right - 4, F10()), F10(), DROP, Datum::middle_left);
@@ -1140,7 +1117,6 @@ void AppRoast::renderSettings()
     auto one = [&](float v, bool isInt) { return isInt ? std::to_string((int)lroundf(v)) : fmt1(v); };
     auto whole = [&](const RuleRow& r) { return r.i[0] != nullptr || r.step >= 1; };
     auto value = [&](const RuleRow& r, bool live) {
-        if (r.simToggle) return std::string(_link && _link->isSimulated() ? "on" : "off");
         if (r.toggle) return std::string(*r.toggle ? "on" : "off");
         if (r.network) return clipTo(_netSummary, W - 30 - tw(r.label, F12()), F12());
         if (r.firmware) return clipTo(update::Installed(), W - 30 - tw(r.label, F12()), F12());
@@ -1356,7 +1332,7 @@ void AppRoast::renderHelp()
         {FAN, "fan", "S on · ↑↓ ±1 · Aa ±0.1 · X X stop"}, {HEAT, "heat", "P manual/PID · ←→ ±5 · Aa ±1"},
         {DRY, "marks", "Y dry · F 1st crack · G FC end"}, {DROP, "drop", "D D or Space Space · X X stop"},
         {CURVE, "curve", "C library · E edit · Tab chart"},   {INK, "roast", "Enter charge · W batch · O rules"},
-        {FAINT, "app", "M mute · H keys · Esc back"},
+        {FAINT, "app", "H keys · Esc back"},
     };
     int y = 18;
     for (auto& g : groups) {

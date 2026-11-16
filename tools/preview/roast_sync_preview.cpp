@@ -54,8 +54,8 @@ Status Get()
             bool first = now < s_t0 + 4000;
             s.idle     = false;
             s.step     = "uploading";
-            s.file     = s_id + (first ? ".wav" : ".json");
-            s.total    = first ? 58 * 1048576 : 900;
+            s.file     = s_id + (first ? ".csv" : ".json");
+            s.total    = first ? 19 * 1024 : 900;
             s.done     = first ? (uint32_t)((uint64_t)s.total * (now - s_t0) / 4000) : 450;
         } else {
             s.idle     = true;
