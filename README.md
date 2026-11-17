@@ -139,10 +139,12 @@ and the rise to drop, RoR at first crack and 30 s later, peak heater output and 
 With Prokuon's [Cap TFT V2](https://github.com/Prokuon/CardputerADV_Cap_TFT_V2) (a 2.8" ILI9341, 320×240) the
 chart has its own screen:
 
-- **Roasting and cooling:** the live chart (bean, target, RoR up to the drop, heater area, marks) under a header with
-  the time, bean temperature, RoR (fan while cooling), heater output and the next step: first crack in …, the
-  development's time against its plan, or the time since the drop.
-- **Summary:** the whole roast with total time, development, drop temperature and weight loss.
+- **Roasting and cooling:** the live chart (bean, target, RoR up to the drop, heater area, marks) under four equal
+  cells: time, bean temperature, RoR, and the next milestone. Before F that is when first crack is expected (the
+  curve's first-crack temperature, reached with BT's current lead or lag on the curve); after F the development left
+  (its time, or sooner the drop temperature at the current RoR); while cooling the time since the drop.
+- **Summary:** the whole roast under four cells: total time, development (time and %), drop temperature, weight
+  loss.
 - **Otherwise:** the selected curve.
 
 Wiring (as in the Cap TFT V2): SCK 40 and MOSI 14 (shared with the SD card, SPI2), CS 5, DC 6, RST 3; the backlight
