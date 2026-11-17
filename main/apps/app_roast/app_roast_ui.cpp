@@ -804,53 +804,59 @@ uint32_t AppRoast::externalKey()
     return h;
 }
 
-// The external screen's frame, in frame coordinates minus `top`: a two-line header and the chart below it.
+// Before F: when the beans should crack, if they keep their lead (or lag) on the curve until its first-crack
+// temperature. -1: the curve has no first-crack point.
+static int PredictFc(const Curve& c, int t, float bt)
+{
+    int planFc = c.tagTime(PointTag::FCs);
+    if (planFc < 0 || std::isnan(bt)) return -1;
+    float fcTemp = c.at(planFc), lead = bt - c.at(t);
+    for (int s = t; s <= planFc + 300; s++)
+        if (c.at(s) + lead >= fcTemp) return s;
+    return planFc;
+}
+
+// One of the header's four equal cells: a small label over the value, centred.
+static void ExtCell(int col, int o, const std::string& label, const std::string& value, uint32_t c)
+{
+    const int cw = EW / 4, cx = col * cw + cw / 2;
+    if (col > 0) cv().drawFastVLine(col * cw, o + 5, kHeadH - 10, LINE);
+    text(cx, o + 2, label, F10(), DIM, Datum::top_center);
+    text(cx, o + 13, value, F19(), c, Datum::top_center);
+}
+
+// The external screen's frame, in frame coordinates minus `top`: a header of four equal cells, the chart below it.
+// Roasting: time, bean temperature, RoR, and the first crack expected (before F) or the development left (after F).
 void AppRoast::renderExternal(int top)
 {
     const int o = -top;
     bool live   = _phase == Phase::Roasting || _phase == Phase::Cooling;
     if (live) {
-        int t    = roastT();
-        float bt = _snap.has(4) ? _snap.bt() : _session.lastBT();
-        int x    = 6 + text(6, o + 5, mmss(t), F23(), INK);
-        x += 14;
-        int bw = text(x, o + 5, fmt1(bt), F23(), linkReady() ? INK : FAINT);
-        text(x + bw + 2, o + 6, "°C", F11(), DIM);
+        int t     = roastT();
+        float bt  = _snap.has(4) ? _snap.bt() : _session.lastBT();
         float ror = _session.rorNow();
-        if (_phase == Phase::Cooling)
-            text(178, o + 3, "fan " + fmt0(_snap.fan()) + "%", F11(), FAN);
-        else
-            text(178, o + 3, "RoR " + (std::isnan(ror) ? std::string("--") : fmt1(ror)), F11(), ROR);
-        text(178, o + 18, "heat " + fmt0(_snap.heat()) + "%", F11(), HEAT);
-        std::string a, b;
-        uint32_t ac = DIM;
+        ExtCell(0, o, "time", mmss(t), INK);
+        ExtCell(1, o, "bean °C", std::isnan(bt) ? "--" : fmt1(bt), linkReady() ? INK : FAINT);
+        ExtCell(2, o, "RoR °C/min", std::isnan(ror) || _phase == Phase::Cooling ? "--" : fmt1(ror), INK);
         if (_phase == Phase::Cooling) {
             int since = _dropMs ? (int)((GetHAL().millis() - _dropMs) / 1000) : 0;
-            a         = "cooling +" + mmss(since);
-            ac        = FAN;
+            ExtCell(3, o, "since drop", mmss(since), FAN);
         } else if (_dev.active) {
-            a  = "dev " + mmss(curveT() - _dev.tF) + "/" + mmss(_dev.plan.dur);
-            ac = FC;
-            b  = signed1(bt - _lastSv) + "° vs plan";
+            // whichever ends the development first: its time, or the drop temperature at the current RoR
+            int left = _dev.plan.dur - (curveT() - _dev.tF);
+            if (!std::isnan(ror) && ror > 0.5f && !std::isnan(bt))
+                left = std::min(left, (int)((_dev.plan.dropBT - bt) / ror * 60));
+            ExtCell(3, o, "dev left", mmss(std::max(0, left)), FC);
         } else {
-            int planFc = _curve.tagTime(PointTag::FCs);
-            if (planFc > t) a = "FC in " + mmss(planFc - t);
-            b = signed1(bt - _lastSv) + "° vs curve";
+            int fc = PredictFc(_curve, curveT(), bt);
+            ExtCell(3, o, "FC expected", fc >= 0 ? mmss(fc) : "--", FC);
         }
-        text(EW - 6, o + 3, a, F11(), ac, Datum::top_right);
-        text(EW - 6, o + 18, b, F11(), DIM, Datum::top_right);
     } else if (_phase == Phase::Done) {
-        RoastMetrics m   = _session.metrics();
-        std::string head = _session.logId().empty() ? std::string("Roast") : _session.logId();
-        int x            = 6 + text(6, o + 2, head, F14(), INK);
-        std::string sub  = _bean;
-        if (_hasCurve) sub += (sub.empty() ? "" : " · ") + _curve.name;
-        text(x + 8, o + 4, clipTo(sub, EW - x - 14, F11()), F11(), DIM);
-        std::string line = "total " + mmss(m.total);
-        if (m.dev >= 0) line += " · dev " + mmss(m.dev) + " (" + fmt1(m.devPct) + "%)";
-        if (m.markT[3] >= 0) line += " · drop " + fmt1(m.markBT[3]) + "°";
-        if (!std::isnan(m.lossPct)) line += " · loss " + fmt1(m.lossPct) + "%";
-        text(6, o + 19, clipTo(line, EW - 12, F11()), F11(), INK);
+        RoastMetrics m = _session.metrics();
+        ExtCell(0, o, "total", mmss(m.total), INK);
+        ExtCell(1, o, m.dev >= 0 ? "dev " + fmt1(m.devPct) + "%" : "dev", m.dev >= 0 ? mmss(m.dev) : "--", FC);
+        ExtCell(2, o, "drop °C", m.markT[3] >= 0 ? fmt1(m.markBT[3]) : "--", DROP);
+        ExtCell(3, o, "loss", std::isnan(m.lossPct) ? "--" : fmt1(m.lossPct) + "%", INK);
     } else if (_hasCurve) {
         text(6, o + 2, clipTo(_curve.name, EW - 12, F14()), F14(), INK);
         std::string sum;
@@ -864,6 +870,9 @@ void AppRoast::renderExternal(int top)
     }
     cv().drawFastHLine(0, o + kHeadH, EW, LINE);
     renderChart(0, o + kHeadH + 2, EW - 1, o + EH - 1, live);
+    if (_phase == Phase::Done)  // which roast: the chart's top right
+        text(EW - 4, o + kHeadH + 5, clipTo(_session.logId() + (_hasCurve ? " · " + _curve.name : ""), EW / 2, F10()),
+             F10(), DIM, Datum::top_right);
 }
 
 // One strip per call: a frame starts when what the screen shows has changed (at most once a second), and is pushed
