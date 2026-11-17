@@ -1,10 +1,10 @@
-// Desktop preview: runs the real Roast app (app_roast*.cpp, curves, session) against a fake HAL, a fake clock and a
-// fake roaster, drives it with scripted key presses through a whole roast, and writes every page as a 240x135 PNG.
+// Desktop preview: runs the real Roast app (app_roast*.cpp, curves, session, simulator) against a fake HAL and a
+// fake clock, drives it with scripted key presses through a whole roast, and writes every page as a 240x135 PNG.
 //
 //   tools/preview/build.sh && build_preview/preview build_preview/shots
 //
-// The "BLE" link here is preview_roaster.cpp (a thermal model) under the real roaster's name, so pages look like the
-// real thing; nothing talks to hardware.
+// The "BLE" link here is the built-in simulator (roast_link_sim.cpp) under the real roaster's name, so pages look like
+// the real thing; nothing talks to hardware.
 #include <apps/app_roast/app_roast.h>
 #include <apps/app_roast/roast_debug.h>
 #include <apps/app_roast/roast_link.h>
@@ -34,20 +34,16 @@ void DebugPollMain() {}
 static bool g_bleLost        = false;
 static uint32_t g_bleReadyIn = 2500;
 
-namespace roast {
-RoasterLink* CreateFakeRoaster();  // preview_roaster.cpp
-}
-
 struct PreviewBle : roast::RoasterLink {
-    std::unique_ptr<roast::RoasterLink> fake{roast::CreateFakeRoaster()};
+    std::unique_ptr<roast::RoasterLink> sim{roast::CreateSimLink()};
     uint32_t readyAt = 0;
     roast::RegSnapshot last;
     bool begin() override
     {
         readyAt = g_ms + g_bleReadyIn;
-        return fake->begin();
+        return sim->begin();
     }
-    void end() override { fake->end(); }
+    void end() override { sim->end(); }
     roast::LinkState state() override
     {
         if (g_ms < readyAt) return roast::LinkState::Scanning;
@@ -59,14 +55,14 @@ struct PreviewBle : roast::RoasterLink {
     roast::RegSnapshot snapshot() override
     {
         if (g_bleLost) return last;  // frozen at the moment the link dropped
-        last          = fake->snapshot();
+        last          = sim->snapshot();
         last.lastRxMs = g_ms;
         return last;
     }
-    uint32_t command(const std::vector<roast::RegWrite>& w) override { return fake->command(w); }
-    roast::TxStatus txStatus(uint32_t id) override { return fake->txStatus(id); }
-    void setHeat(uint16_t raw) override { fake->setHeat(raw); }
-    void clearQueue() override { fake->clearQueue(); }
+    uint32_t command(const std::vector<roast::RegWrite>& w) override { return sim->command(w); }
+    roast::TxStatus txStatus(uint32_t id) override { return sim->txStatus(id); }
+    void setHeat(uint16_t raw) override { sim->setHeat(raw); }
+    void clearQueue() override { sim->clearQueue(); }
 };
 roast::RoasterLink* roast::CreateBleLink() { return new PreviewBle(); }
 
@@ -318,7 +314,8 @@ int main(int argc, char** argv)
 
     // Wi-Fi & Dropbox setup: the rules row, then a whole (simulated) pairing
     press("o");
-    for (int i = 0; i < 30; i++) press("down", 30);  // network is the last row
+    for (int i = 0; i < 30; i++) press("down", 30);  // the last row (simulator), then up to network
+    press("up", 60);
     shot("rules_sync");
     press("enter");
     step(600);
@@ -335,6 +332,7 @@ int main(int argc, char** argv)
     step(3000);  // back on Connect, then Prep once the (preview) roaster answers
     press("o");
     for (int i = 0; i < 30; i++) press("down", 30);
+    press("up", 60);
     shot("rules_sync_saved");
     // Firmware update: the rules row, the download from GitHub (simulated), then what to do in the Launcher
     for (int i = 0; i < 30; i++) press("up", 30);  // firmware is the first row
@@ -417,6 +415,12 @@ int main(int argc, char** argv)
     step(3500);
     shot("prep_after");
 
+    press("o");
+    for (int i = 0; i < 30; i++) press("down", 30);  // simulator, the last row
+    press("enter");
+    shot("rules_simulator");
+    press("esc");
+    shot("prep_simulator");
     press("esc");
     shot("exit_confirm");
     return 0;

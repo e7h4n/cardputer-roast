@@ -76,6 +76,7 @@ private:
         bool* toggle   = nullptr;  // on/off row
         bool network   = false;    // opens the Wi-Fi & Dropbox setup screen
         bool firmware  = false;    // shows this build's version; Enter checks GitHub for a newer release
+        bool simToggle = false;    // simulator on/off
     };
     std::vector<RuleRow> ruleRows();
 
@@ -202,7 +203,9 @@ private:
     void openSettings();
 
     // ---- logic (app_roast.cpp)
-    void startLink();
+    void startLink(bool sim = false);
+    void setSimulator(bool on);
+    bool _netWasSim = false;  // reopen the simulator rather than BLE when network setup closes
     void pollLink();
     void handleKeys();
     void onKey(const Keyboard::KeyEvent_t& e);

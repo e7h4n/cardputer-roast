@@ -4,7 +4,7 @@
  *  - one hero number per screen; secondary numbers are small cards with a colour bar
  *  - the bottom row always shows the keys that work right now; it turns into a full-width colour bar only when
  *    something needs a hand (green = drop window, red = act now, yellow = attention)
- *  - top-right status corner: battery, link dot, missing SD
+ *  - top-right status corner: battery, link dot / SIM tag, missing SD
  */
 #include "app_roast.h"
 #include "fonts/roast_fonts.h"
@@ -102,7 +102,7 @@ std::string mmss(int s)
 
 bool lightColour(uint32_t c)
 {
-    return c == DRY || c == WARN || c == ui::WHITE || c == CARD || c == FAINT;
+    return c == DRY || c == WARN || c == SIM || c == ui::WHITE || c == CARD || c == FAINT;
 }
 
 void dot(int cx, int cy, int r, uint32_t c)
@@ -374,10 +374,16 @@ int AppRoast::renderStatus(bool draw)
         x -= w + 4;
         if (draw) pill(x, 1, "SD", DROP);
     }
-    x -= 8;
-    uint32_t c = _linkState == LinkState::Ready ? GO : (_linkState == LinkState::Lost ? DROP : FAINT);
-    if (draw) dot(x, 6, 3, c);
-    x -= 3;
+    if (_link && _link->isSimulated()) {
+        int w = tw("SIM", F10()) + 8;
+        x -= w + 4;
+        if (draw) pill(x, 1, "SIM", SIM);
+    } else {
+        x -= 8;
+        uint32_t c = _linkState == LinkState::Ready ? GO : (_linkState == LinkState::Lost ? DROP : FAINT);
+        if (draw) dot(x, 6, 3, c);
+        x -= 3;
+    }
     return x;
 }
 
@@ -427,7 +433,7 @@ void AppRoast::renderConnect()
             text(W - 42, 104, std::to_string(r.rssi) + " dBm", F10(), DIM, Datum::middle_right);
         }
     }
-    keybar({{"Enter", INK, "retry"}, {"O", INK, "rules"}, {"Esc", FAINT, "exit"}});
+    keybar({{"Enter", INK, "retry"}, {"D", SIM, "simulator"}, {"O", INK, "rules"}, {"Esc", FAINT, "exit"}});
 }
 
 /* ================================================================== prep */
@@ -1221,6 +1227,7 @@ void AppRoast::renderSettings()
         if (r.toggle) return std::string(*r.toggle ? "on" : "off");
         if (r.network) return clipTo(_netSummary, W - 30 - tw(r.label, F12()), F12());
         if (r.firmware) return clipTo(update::Installed(), W - 30 - tw(r.label, F12()), F12());
+        if (r.simToggle) return std::string(_link && _link->isSimulated() ? "on" : "off");
         bool isInt = whole(r);
         float v0   = live ? _setVal[0] : (r.f[0] ? *r.f[0] : (float)*r.i[0]);
         if (r.f[1] || r.i[1]) {

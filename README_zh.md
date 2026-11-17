@@ -20,6 +20,7 @@ Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE*
 - **烘焙记录。** 每锅都会保存 `.csv`（每秒一行）、`.json` 总结，以及可导入 Artisan 的 `.alog`。
 - **Wi-Fi 和 Dropbox 配对。** 和手表一样，在 Chrome 里打开 [Coffee Watch 配置页](https://e7h4n.github.io/coffee-watch/)，通过加密蓝牙配好 Wi-Fi 和你自己的 Dropbox app（App folder 权限）。两者都是必需的。
 - **Dropbox 同步。** 曲线以 Dropbox 为准：每次开机同步一次，在设备上保存或删除曲线会马上写回 Dropbox。每锅的记录在总结页、风机关掉之后存到 Dropbox。
+- **模拟器。** 内置简单的热学模型，没有机器也能练习和测试；开启时右上角显示黄色 SIM 标签。
 - **按功能着色的界面。** 颜色 = 它控制什么：风机蓝、火力橙、曲线/PID 紫、打点黄/棕、排豆和报警红、"可以进行"绿。底栏永远显示当前能按的键。
 
 ## 截图
@@ -60,9 +61,9 @@ Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE*
 ## 使用说明
 先关掉手机上的 *myERoast*：烘豆机同一时间只接受一个蓝牙连接。
 
-Roast 会自动搜索名为 `E-Meter…BLE` 的设备并连接。
+Roast 会自动搜索名为 `E-Meter…BLE` 的设备并连接。没有机器想先试用，可以在连接页按 **D**，或在规则页（**O**）里打开 *simulator*（模拟器）。只有机器没在运行时才能切换模拟器。
 
-任何页面按 **H** 都能看到按颜色分组的按键说明。右上角显示电量、连接状态（绿点），没插 SD 卡时显示红色 **SD** 标签。
+任何页面按 **H** 都能看到按颜色分组的按键说明。右上角显示电量、连接状态（绿点，模拟器时是 SIM 标签），没插 SD 卡时显示红色 **SD** 标签。
 
 ### 准备页
 页面按四步引导：曲线 → 批次 → 开风 → 投豆。
@@ -72,7 +73,7 @@ Roast 会自动搜索名为 `E-Meter…BLE` 的设备并连接。
 | C | 曲线库：Enter 选用，E 编辑，N 新建曲线。 |
 | E | 编辑当前曲线（没有曲线时新建）。 |
 | W / B | 批次卡：在一处填写生豆重量和豆名（Tab 切换输入框）。 |
-| O | 规则和提醒。 |
+| O | 规则、提醒和模拟器开关。 |
 | S | 开风，不加热。放豆前先用冷风试吹，找到合适的风力。 |
 | ↑ ↓（`;` `.`） | 风力 ±1%（按住 Aa：±0.1%）。待机时只改开风的预设值，不会向机器发指令。 |
 | Enter | 投豆：开始计时，Cardputer PID 开始按曲线控制火力。必须先开风、选好曲线。 |
@@ -342,7 +343,7 @@ idf.py build                  # 生成 build/cardputer-roast.bin（Launcher 安�
 CI 在 `espressif/idf:v5.4.2` 容器里执行同样的步骤。每次推送到 main 都会发布 Release `v0.3.<main 上的提交数>`（推送 `v*` 标签则用那个标签），附上 `.bin`、`SHA256SUMS` 和 `latest.json`（`{"version","bin","size","sha256"}`，升级检查读的就是它）。版本号会编进固件（`ROAST_VERSION` → `PROJECT_VER`）；本地编译用 `git describe`。
 
 ### 桌面预览
-不用设备也能检查界面。`tools/preview/` 把 Roast 的真实代码（页面、按键、曲线、记录）编译成桌面程序，用替身 HAL、假时钟和替身烘豆机（`preview_roaster.cpp`，一个热学模型）跑一锅预设的烘焙，把每个页面导出为 240×135 的 PNG：
+不用设备也能检查界面。`tools/preview/` 把 Roast 的真实代码（页面、按键、曲线、记录）编译成桌面程序，用替身 HAL、假时钟和内置模拟器（`roast_link_sim.cpp`）跑一锅预设的烘焙，把每个页面导出为 240×135 的 PNG：
 ```sh
 export IDF_PATH=~/esp/esp-idf-v5.4.2      # 用到其中的 cJSON
 tools/preview/build.sh && build_preview/preview build_preview/shots
