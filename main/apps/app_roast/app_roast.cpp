@@ -159,14 +159,14 @@ void AppRoast::onClose()
     esp_deep_sleep_start();
 }
 
-void AppRoast::startLink()
+void AppRoast::startLink(bool sim)
 {
     if (_link) {
         g_activeLink = nullptr;
         _link->end();
         _link.reset();
     }
-    _link.reset(CreateBleLink());
+    _link.reset(sim ? CreateSimLink() : CreateBleLink());
     g_activeLink = _link.get();
     if (!_link->begin()) toast("BLE init failed", ui::DROP);
     _linkState = _link->state();
@@ -730,6 +730,10 @@ void AppRoast::onKey(const Keyboard::KeyEvent_t& e)
 
 bool AppRoast::keyConnect(int code)
 {
+    if (code == KEY_D) {
+        setSimulator(true);
+        return true;
+    }
     if (code == KEY_O) {  // rules, including Wi-Fi & Dropbox setup, also while the roaster is off
         openSettings();
         return true;
@@ -743,6 +747,23 @@ bool AppRoast::keyConnect(int code)
         return true;
     }
     return false;
+}
+
+// Simulator on/off. Only from Connect and Rules, and never while the machine runs: during a roast D means "drop".
+void AppRoast::setSimulator(bool on)
+{
+    if (_fanRunning || _phase != Phase::Idle) {
+        toast("Stop the machine first", WARN, 2500);
+        return;
+    }
+    if (on) {
+        startLink(true);
+        if (_screen == Screen::Connect) _screen = Screen::Prep;
+        toast("Simulator: no roaster", SIM, 3000);
+    } else {
+        startLink(false);
+        _screen = Screen::Connect;
+    }
 }
 
 void AppRoast::openBatch(int field)
@@ -1368,6 +1389,11 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     netRow.label   = "network";
     netRow.network = true;
     v.push_back(netRow);
+    group("MODE", SIM);
+    RuleRow sim;
+    sim.label     = "simulator";
+    sim.simToggle = true;
+    v.push_back(sim);
     return v;
 }
 
@@ -1391,6 +1417,10 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
                 if (_setSel < n - 1) _setSel++;
                 return true;
             case KEY_ENTER:
+                if (r.simToggle) {
+                    setSimulator(!(_link && _link->isSimulated()));
+                    return true;
+                }
                 if (r.network) {
                     openNetwork();
                     return true;
@@ -1742,6 +1772,7 @@ void AppRoast::openNetwork()
         return;
     }
     releaseExternal();
+    _netWasSim = _link && _link->isSimulated();
     if (_link) {
         g_activeLink = nullptr;
         _link->clearQueue();
@@ -1774,7 +1805,7 @@ void AppRoast::closeNetwork()
         esp_restart();
     }
     refreshNetSummary();
-    startLink();
+    startLink(_netWasSim);
     _screen = Screen::Connect;  // pollLink() moves on to Prep when the roaster answers
 }
 

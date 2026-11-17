@@ -35,6 +35,8 @@ opens in Artisan. It runs as an app under the community [Launcher](https://githu
   Both are required.
 - **Dropbox sync.** Curves live in Dropbox: synced at every boot, and every curve saved or deleted on the device is
   written to Dropbox at once. Each roast's logs are saved to Dropbox from its summary once the fan is off.
+- **Simulator.** A built-in thermal model for practising and testing without a machine; a yellow SIM tag shows when
+  it is on.
 - **Colour-keyed UI.** Colour = what it controls: fan blue, heat orange, curve/PID violet, marks yellow/brown, drop
   and alarms red, "go" green. The bottom row always shows the keys that work right now.
 
@@ -89,10 +91,12 @@ longer fits there; then delete the old Roast in Launcher before installing.
 ## Using it
 Turn the *myERoast* app off first: the roaster accepts only one BLE connection at a time.
 
-Roast scans for a device named `E-Meter…BLE` and connects on its own.
+Roast scans for a device named `E-Meter…BLE` and connects on its own. To try it without a machine, press **D** on
+the connect screen, or switch *simulator* on in Rules (**O**). The simulator can only be switched while the
+machine is not running.
 
 **H** shows the key map on every page, grouped by colour. The top-right corner shows the battery, the link (green
-dot) and a red **SD** tag without a card.
+dot, or the SIM tag) and a red **SD** tag without a card.
 
 ### Prep
 The page walks through four steps: curve → batch → fan → charge.
@@ -102,7 +106,7 @@ The page walks through four steps: curve → batch → fan → charge.
 | C | Curve library: Enter uses, E edits, N starts a new curve. |
 | E | Edit the selected curve (or start a new one). |
 | W / B | Batch sheet: green weight and bean name in one place (Tab switches field). |
-| O | Rules and alerts. |
+| O | Rules, alerts and simulator. |
 | S | Fan on, no heat. Use it to find a fan setting with cold air before adding beans. |
 | ↑ ↓ (`;` `.`) | Fan ±1 % (Aa held: ±0.1 %). While idle this changes only the start-fan preset. |
 | Enter | Charge: starts the timer and the Cardputer PID along the curve. Needs the fan on and a curve. |
@@ -485,8 +489,8 @@ CI does the same in the `espressif/idf:v5.4.2` container. Every push to main pub
 
 ### Desktop preview
 The UI can be checked without the device. `tools/preview/` compiles the real Roast code (pages, keys, curves,
-logs) against a stand-in HAL, a fake clock and a stand-in roaster (`preview_roaster.cpp`, a thermal model), plays a
-scripted roast and writes every page as a 240×135 PNG:
+logs and the simulator) against a stand-in HAL and a fake clock, plays a scripted roast on the simulator and writes
+every page as a 240×135 PNG:
 ```sh
 export IDF_PATH=~/esp/esp-idf-v5.4.2      # for cJSON
 tools/preview/build.sh && build_preview/preview build_preview/shots
