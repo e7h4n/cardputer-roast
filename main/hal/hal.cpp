@@ -33,6 +33,7 @@ void Hal::init()
     keyboard_init();
     nvs_init();
     spi_init();
+    ext_init();
 }
 
 void Hal::update()
@@ -66,6 +67,16 @@ void Hal::nvs_init()
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+}
+
+void Hal::ext_init()
+{
+    mclog::tagInfo(_tag, "external screen init");
+
+    // After spi_init(): the bus is the SD card's, the panel only adds itself to it.
+    if (!ext.init()) mclog::tagError(_tag, "external screen init failed");
+    ext.setRotation(1);
+    ext.fillScreen(TFT_BLACK);
 }
 
 void Hal::keyboard_init()

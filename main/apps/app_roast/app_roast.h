@@ -259,6 +259,17 @@ private:
     void renderInput();
     void renderBanner();
     void renderToast();
+
+    // ---- external screen (hal/ext_display.h, 320x240): the chart while roasting and on the summary, the selected
+    // curve otherwise. No room for a 150 KB frame: each frame is drawn in 320x16 strips, one strip per loop pass.
+    LGFX_Sprite _extStrip;
+    int _extRow         = -1;  // next strip of the frame being drawn; -1: no frame in progress
+    uint32_t _extKey    = 0;   // what the screen shows now (externalKey())
+    uint32_t _extDrawMs = 0;   // when the last frame started
+    uint32_t externalKey();
+    void pumpExternal();
+    void renderExternal(int top);  // the whole frame, shifted up by `top` (the strip's first row)
+    void releaseExternal();        // free the strip (before Wi-Fi + TLS); the next frame allocates it again
     int renderStatus(bool draw = true);  // returns the left edge of the status corner
     int statusLeft()
     {

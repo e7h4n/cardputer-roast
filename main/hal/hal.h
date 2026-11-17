@@ -5,6 +5,7 @@
  */
 #pragma once
 #include "keyboard/keyboard.h"
+#include "ext_display.h"
 #include <M5Unified.hpp>
 #include <M5GFX.h>
 #include <cstdint>
@@ -34,6 +35,8 @@ public:
     {
         canvas.pushSprite(0, 0);
     }
+    // The Cap TFT V2's 320x240 screen (ext_display.h); drawing to it without the cap attached is harmless.
+    ExtDisplay ext;
 
     /* ---------------------------------- Input --------------------------------- */
     m5::Button_Class& homeButton = M5.BtnA;
@@ -58,6 +61,7 @@ private:
     void keyboard_init();
     void nvs_init();
     void spi_init();
+    void ext_init();
     void sd_card_init();
 };
 
