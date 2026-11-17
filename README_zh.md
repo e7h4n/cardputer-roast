@@ -98,6 +98,15 @@ Roast 会自动搜索名为 `E-Meter…BLE` 的设备并连接。
 
 总结页显示：总时长、发展比例和失重率，阶段条上的整锅进程，一爆时间和到排豆的升温，一爆时和 30 秒后的 RoR，最大火力和跟随曲线的误差。
 
+### 外屏（Cap TFT V2）
+装上 Prokuon 的 [Cap TFT V2](https://github.com/Prokuon/CardputerADV_Cap_TFT_V2)（2.8" ILI9341，320×240）后，曲线显示在外屏上：
+
+- **烘焙和冷却中：**实时曲线（豆温、目标、到排豆为止的 RoR、火力面积、打点）。顶部显示时间、豆温、RoR（冷却时换成风力）、火力，以及下一步：离一爆还有多久、发展时间和计划比、或者排豆后过了多久。
+- **总结页：**整锅曲线，加上总时长、发展、排豆温度和失重率。
+- **其他时候：**显示当前选中的曲线。
+
+接线（与 Cap TFT V2 一致）：SCK 40、MOSI 14（和 SD 卡共用 SPI2）、CS 5、DC 6、RST 3，背光直接接 3.3 V。外屏每次写入都会先锁住总线，SD 卡照常工作。Cardputer 没有 PSRAM，放不下整帧缓冲：每帧分成 320×16 的条带，主循环每转一次画一条，最多每秒一帧，内容没变就不画。Wi-Fi 和 TLS 运行期间（同步、保存记录）外屏保留最后一帧。没装外屏时一切照旧。
+
 ### Wi-Fi 和 Dropbox
 按 **O**（连接页也可以）› *network* 进入配置页。进入前会先断开烘豆机（配置要独占蓝牙），所以只能在风机关着时进入。按 **Esc** 退出配置，Roast 会重启（几秒钟）再重新连接烘豆机：蓝牙、Wi-Fi 和 HTTPS 用过之后内存碎片太多，不够开始烘焙，重启能拿回完整的内存。
 
@@ -362,7 +371,8 @@ python3 tools/rdbg.py raw 'ls /sdcard/roast/logs' 2
 ## 许可证
 [MIT](LICENSE)。本项目基于 M5Stack 的 [M5Cardputer-UserDemo](https://github.com/m5stack/M5Cardputer-UserDemo)（`CardputerADV` 分支，MIT 许可证），其版权声明保留在 `LICENSE` 中。第三方部分遵循各自的许可证：
 - Space Grotesk 字体：SIL Open Font License 1.1（`tools/fonts/OFL.txt`）；
-- 由 `fetch_repos.py` 拉取的 M5GFX、M5Unified、mooncake、mooncake_log、smooth_ui_toolkit：见各自的仓库。
+- `main/hal/Panel_ILI9341.hpp` 来自 LovyanGFX：FreeBSD 许可证（见文件头部）；
+- 由 `fetch_repos.py` 拉取的 M5GFX、M5Unified、mooncake、mooncake_log：见各自的仓库。
 
 本仓库的其余内容，包括 `main/apps/app_roast/preset_dark.h` 中的深烘预设数据，均以 MIT 许可证发布。
 

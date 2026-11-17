@@ -151,6 +151,34 @@ static void shot(const char* name)
     printf("%s\n", path);
 }
 
+// The external screen as it is now (a frame takes 15 strips, one per 50 ms step): `<n>_<name>_ext.png`, 320x240.
+static void extShot(const char* name)
+{
+    step(2100);
+    size_t len = 0;
+    void* png  = GetHAL().ext.createPng(&len, 0, 0, 320, 240);
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%02d_%s_ext.png", g_out.c_str(), ++g_shot, name);
+    FILE* f = fopen(path, "wb");
+    if (!f || !png) {
+        fprintf(stderr, "cannot write %s\n", path);
+        exit(1);
+    }
+    fwrite(png, 1, len, f);
+    fclose(f);
+    free(png);
+    printf("%s\n", path);
+}
+
+static bool makeScreens()
+{
+    auto& cv = GetHAL().canvas;
+    cv.setColorDepth(16);
+    auto& ex = GetHAL().ext;
+    ex.setColorDepth(16);
+    return cv.createSprite(240, 135) && ex.createSprite(320, 240);
+}
+
 // advance the simulated roast one second at a time until cond() or the timeout
 static void until(const std::function<bool()>& cond, int maxSec)
 {
@@ -182,9 +210,7 @@ static int fcScenario(int lookahead, const std::string& tag, int cap10)
     s.SetString("curve", "A");
     s.SetInt("svLook", lookahead);
     s.SetInt("floorCap10", cap10);
-    auto& cv = GetHAL().canvas;
-    cv.setColorDepth(16);
-    if (!cv.createSprite(240, 135)) return 1;
+    if (!makeScreens()) return 1;
     AppRoast app;
     g_app = &app;
     app.onOpen();
@@ -218,9 +244,7 @@ int main(int argc, char** argv)
     if (argc > 2 && std::string(argv[2]) == "syncfail") {  // boot sync failure screen
         setenv("ROAST_PREVIEW_SYNC_FAIL", "1", 1);
         mkdir(g_out.c_str(), 0755);
-        auto& cv = GetHAL().canvas;
-        cv.setColorDepth(16);
-        if (!cv.createSprite(240, 135)) return 1;
+        if (!makeScreens()) return 1;
         AppRoast app;
         g_app = &app;
         app.onOpen();
@@ -239,9 +263,7 @@ int main(int argc, char** argv)
 #ifdef ROAST_SD_ROOT
     mkdir(ROAST_SD_ROOT, 0755);
 #endif
-    auto& cv = GetHAL().canvas;
-    cv.setColorDepth(16);
-    if (!cv.createSprite(240, 135)) return 1;
+    if (!makeScreens()) return 1;
 
     AppRoast app;
     g_app = &app;
@@ -252,6 +274,7 @@ int main(int argc, char** argv)
     shot("connect");
     step(2500);  // link comes up
     shot("prep");
+    extShot("prep");
 
     press("w");
     type("0");
@@ -336,6 +359,7 @@ int main(int argc, char** argv)
     shot("roast_dry_marked");
     step(60 * 1000);
     shot("roast_maillard");
+    extShot("roast_maillard");
     press("tab");
     shot("roast_chart");
     press("tab");
@@ -345,6 +369,7 @@ int main(int argc, char** argv)
     shot("roast_fc");
     step(20 * 1000);
     shot("roast_dev");
+    extShot("roast_dev");
     press("d");
     shot("roast_confirm_drop");
     step(2600);
@@ -362,6 +387,7 @@ int main(int argc, char** argv)
     shot("cool");
     step(60 * 1000);
     shot("cool_later");
+    extShot("cool_later");
     press("tab");
     shot("cool_chart");
     press("tab");
@@ -386,6 +412,7 @@ int main(int argc, char** argv)
     shot("summary_resave");
     step(1600);
     shot("summary_saved");
+    extShot("summary");
     press("enter");  // done: close, restart
     step(3500);
     shot("prep_after");

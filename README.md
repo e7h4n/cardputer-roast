@@ -131,6 +131,22 @@ starts at F). After first crack it outlines the development (its time; the bar u
 The summary shows total time, development percentage and weight loss, the whole roast on the phase bar, first crack
 and the rise to drop, RoR at first crack and 30 s later, peak heater output and curve-following error.
 
+### External screen (Cap TFT V2)
+With Prokuon's [Cap TFT V2](https://github.com/Prokuon/CardputerADV_Cap_TFT_V2) (a 2.8" ILI9341, 320×240) the
+chart has its own screen:
+
+- **Roasting and cooling:** the live chart (bean, target, RoR up to the drop, heater area, marks) under a header with
+  the time, bean temperature, RoR (fan while cooling), heater output and the next step: first crack in …, the
+  development's time against its plan, or the time since the drop.
+- **Summary:** the whole roast with total time, development, drop temperature and weight loss.
+- **Otherwise:** the selected curve.
+
+Wiring (as in the Cap TFT V2): SCK 40 and MOSI 14 (shared with the SD card, SPI2), CS 5, DC 6, RST 3; the backlight
+is tied to 3.3 V. The screen takes the bus lock for each write, so the SD card keeps working. There is no frame buffer
+for it (the Cardputer has no PSRAM): each frame is drawn in 320×16 strips, one per loop pass, at most once a second
+and only when something changed. While Wi-Fi and TLS run (sync, saving a roast) the screen keeps its last frame.
+Without the cap attached nothing changes.
+
 ### Wi-Fi & Dropbox
 **O** (also from the Connect page) › *network* opens the setup screen. It closes the roaster link first (setup needs
 Bluetooth for itself), so it is only available with the fan off. **Esc** closes setup and restarts Roast (a few
@@ -508,8 +524,8 @@ The console accepts:
 [MIT](LICENSE). Built on the M5Stack [M5Cardputer-UserDemo](https://github.com/m5stack/M5Cardputer-UserDemo)
 (`CardputerADV` branch, MIT), whose notice is kept in `LICENSE`. Third-party parts keep their own licenses:
 - Space Grotesk font: SIL Open Font License 1.1 (`tools/fonts/OFL.txt`);
-- M5GFX, M5Unified, mooncake, mooncake_log and smooth_ui_toolkit, fetched by `fetch_repos.py`: see their
-  repositories.
+- `main/hal/Panel_ILI9341.hpp`, from LovyanGFX: FreeBSD license (in the file's header);
+- M5GFX, M5Unified, mooncake and mooncake_log, fetched by `fetch_repos.py`: see their repositories.
 
 Everything else in this repository, including the dark-roast preset table in
 `main/apps/app_roast/preset_dark.h`, is released under the MIT license.

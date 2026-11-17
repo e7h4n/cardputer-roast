@@ -36,9 +36,12 @@ Font F19() { return font::s19b(); }
 Font F23() { return font::s23b(); }
 Font F47() { return font::s47b(); }
 
+// What the drawing helpers draw on: the internal screen's canvas, or the external screen's strip (pumpExternal).
+LGFX_Sprite* g_target = nullptr;
+
 LGFX_Sprite& cv()
 {
-    return GetHAL().canvas;
+    return g_target ? *g_target : GetHAL().canvas;
 }
 
 int tw(const std::string& s, Font f)
@@ -716,9 +719,10 @@ void AppRoast::renderChart(int x0, int y0, int x1, int y1, bool withText)
         }
     }
     if (live) {
-        // rate of rise in the lower part (0..30 °C/min mapped onto 20..155 °C of the axis)
-        int rpx = -1, rpy = -1;
+        // rate of rise in the lower part (0..30 °C/min mapped onto 20..155 °C of the axis), up to the drop
+        int rpx = -1, rpy = -1, dropT = _session.markT(Mark::Drop);
         for (auto& s : ss) {
+            if (dropT >= 0 && s.t > dropT) break;
             if (s.ror10 == INT16_MIN) continue;
             int nx = PX(s.t), ny = PY(yMin + std::min(30.0f, s.ror10 / 10.0f) * 4.5f);
             if (rpx >= 0) cv().drawLine(rpx, rpy, nx, ny, ROR);
@@ -765,6 +769,130 @@ void AppRoast::renderChart(int x0, int y0, int x1, int y1, bool withText)
         }
         dot(PX(0), PY(_curve.at(0)), 2, INK);
     }
+}
+
+/* ======================================================== external screen */
+constexpr int EW = 320, EH = 240, kStripH = 16, kHeadH = 34;
+
+uint32_t AppRoast::externalKey()
+{
+    uint32_t h = 2166136261u;
+    auto mix   = [&](uint32_t v) { h = (h ^ v) * 16777619u; };
+    auto mixS  = [&](const std::string& s) {
+        for (unsigned char c : s) mix(c);
+    };
+    bool live = _phase == Phase::Roasting || _phase == Phase::Cooling;
+    mix((uint32_t)_phase);
+    mix(_hasCurve);
+    if (_hasCurve) {
+        mixS(_curve.name);
+        for (auto& p : _curve.pts) mix((uint32_t)(p.t * 4096 + (int)lroundf(p.c * 10)));
+    }
+    if (live || _phase == Phase::Done) {
+        mix((uint32_t)_session.lastT());
+        for (int m = 0; m < (int)Mark::Count; m++) mix((uint32_t)_session.markT((Mark)m));
+        mixS(_session.logId());
+        mixS(_bean);
+        mix((uint32_t)lroundf(_session.roastedWeight() * 10));
+    }
+    return h;
+}
+
+// The external screen's frame, in frame coordinates minus `top`: a two-line header and the chart below it.
+void AppRoast::renderExternal(int top)
+{
+    const int o = -top;
+    bool live   = _phase == Phase::Roasting || _phase == Phase::Cooling;
+    if (live) {
+        int t    = roastT();
+        float bt = _snap.has(4) ? _snap.bt() : _session.lastBT();
+        int x    = 6 + text(6, o + 5, mmss(t), F23(), INK);
+        x += 14;
+        int bw = text(x, o + 5, fmt1(bt), F23(), linkReady() ? INK : FAINT);
+        text(x + bw + 2, o + 6, "°C", F11(), DIM);
+        float ror = _session.rorNow();
+        if (_phase == Phase::Cooling)
+            text(178, o + 3, "fan " + fmt0(_snap.fan()) + "%", F11(), FAN);
+        else
+            text(178, o + 3, "RoR " + (std::isnan(ror) ? std::string("--") : fmt1(ror)), F11(), ROR);
+        text(178, o + 18, "heat " + fmt0(_snap.heat()) + "%", F11(), HEAT);
+        std::string a, b;
+        uint32_t ac = DIM;
+        if (_phase == Phase::Cooling) {
+            int since = _dropMs ? (int)((GetHAL().millis() - _dropMs) / 1000) : 0;
+            a         = "cooling +" + mmss(since);
+            ac        = FAN;
+        } else if (_dev.active) {
+            a  = "dev " + mmss(curveT() - _dev.tF) + "/" + mmss(_dev.plan.dur);
+            ac = FC;
+            b  = signed1(bt - _lastSv) + "° vs plan";
+        } else {
+            int planFc = _curve.tagTime(PointTag::FCs);
+            if (planFc > t) a = "FC in " + mmss(planFc - t);
+            b = signed1(bt - _lastSv) + "° vs curve";
+        }
+        text(EW - 6, o + 3, a, F11(), ac, Datum::top_right);
+        text(EW - 6, o + 18, b, F11(), DIM, Datum::top_right);
+    } else if (_phase == Phase::Done) {
+        RoastMetrics m   = _session.metrics();
+        std::string head = _session.logId().empty() ? std::string("Roast") : _session.logId();
+        int x            = 6 + text(6, o + 2, head, F14(), INK);
+        std::string sub  = _bean;
+        if (_hasCurve) sub += (sub.empty() ? "" : " · ") + _curve.name;
+        text(x + 8, o + 4, clipTo(sub, EW - x - 14, F11()), F11(), DIM);
+        std::string line = "total " + mmss(m.total);
+        if (m.dev >= 0) line += " · dev " + mmss(m.dev) + " (" + fmt1(m.devPct) + "%)";
+        if (m.markT[3] >= 0) line += " · drop " + fmt1(m.markBT[3]) + "°";
+        if (!std::isnan(m.lossPct)) line += " · loss " + fmt1(m.lossPct) + "%";
+        text(6, o + 19, clipTo(line, EW - 12, F11()), F11(), INK);
+    } else if (_hasCurve) {
+        text(6, o + 2, clipTo(_curve.name, EW - 12, F14()), F14(), INK);
+        std::string sum;
+        int fcT = _curve.tagTime(PointTag::FCs);
+        if (fcT >= 0) sum += "FC " + mmss(fcT) + " · ";
+        sum += "drop " + mmss(_curve.endTime()) + " · " + fmt0(_curve.at(_curve.endTime())) + "°";
+        text(6, o + 19, sum, F11(), DIM);
+    } else {
+        text(6, o + 2, "No curve", F14(), INK);
+        text(6, o + 19, "C to pick one", F11(), DIM);
+    }
+    cv().drawFastHLine(0, o + kHeadH, EW, LINE);
+    renderChart(0, o + kHeadH + 2, EW - 1, o + EH - 1, live);
+}
+
+// One strip per call: a frame starts when what the screen shows has changed (at most once a second), and is pushed
+// strip by strip so the internal screen and the keys never wait for the whole 320x240.
+void AppRoast::pumpExternal()
+{
+    if (_screen == Screen::Sync || _screen == Screen::Network || saveBusy()) {  // Wi-Fi + TLS need the heap
+        if (_extStrip.getBuffer()) releaseExternal();
+        return;
+    }
+    uint32_t now = GetHAL().millis();
+    if (_extRow < 0) {
+        uint32_t key = externalKey();
+        if (key == _extKey || now - _extDrawMs < 1000) return;
+        if (!_extStrip.getBuffer()) {
+            _extStrip.setColorDepth(16);
+            if (!_extStrip.createSprite(EW, kStripH)) return;  // no heap now: try again later
+        }
+        _extKey    = key;
+        _extDrawMs = now;
+        _extRow    = 0;
+    }
+    g_target = &_extStrip;
+    _extStrip.fillScreen(BG);
+    renderExternal(_extRow * kStripH);
+    g_target = nullptr;
+    _extStrip.pushSprite(&GetHAL().ext, 0, _extRow * kStripH);
+    if (++_extRow * kStripH >= EH) _extRow = -1;
+}
+
+void AppRoast::releaseExternal()
+{
+    _extStrip.deleteSprite();
+    _extRow = -1;
+    _extKey = 0;  // draw again once there is room
 }
 
 /* ================================================================== cool */

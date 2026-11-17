@@ -25,6 +25,7 @@ struct FakeButton {
 class Hal {
 public:
     LGFX_Sprite canvas;
+    LGFX_Sprite ext;  // the external 320x240 screen (firmware: hal/ext_display.h)
     FakeDisplay display;
     FakeButton homeButton;
     Keyboard keyboard;

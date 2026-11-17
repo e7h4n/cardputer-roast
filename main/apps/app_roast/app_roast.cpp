@@ -205,6 +205,7 @@ void AppRoast::onRunning()
         _lastRender = now;
         _dirty      = false;
     }
+    pumpExternal();
 }
 
 /* --------------------------------- link ---------------------------------- */
@@ -1596,6 +1597,7 @@ void AppRoast::pollSave()
         // The curve library keeps every curve's 1 Hz table (~3 KB each); the summary cannot open it and Roast
         // restarts after the save, so give that memory to Wi-Fi + TLS.
         std::vector<Curve>().swap(_curves);
+        releaseExternal();
         _saveStarted = sync::Start(sync::Job::SaveRoast, _session.logId());
         if (!_saveStarted) toast("Dropbox save could not start", DROP, 3000);
         _dirty = true;
@@ -1643,6 +1645,7 @@ void AppRoast::resaveEdited()
 bool AppRoast::startJob(sync::Job job, const std::string& arg)
 {
     // BLE + Wi-Fi + TLS do not fit together: close the roaster link first (the app restarts afterwards).
+    releaseExternal();
     if (_link) {
         g_activeLink = nullptr;
         _link->clearQueue();
@@ -1738,6 +1741,7 @@ void AppRoast::openNetwork()
         toast("Stop the fan before network setup", WARN);
         return;
     }
+    releaseExternal();
     if (_link) {
         g_activeLink = nullptr;
         _link->clearQueue();
