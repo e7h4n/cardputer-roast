@@ -860,9 +860,14 @@ void AppRoast::renderExternalPlan(int o)
         text(x, o + 98, value, F23(), INK, Datum::top_center);
         text(x, o + 129, detail, F12(), DIM, Datum::top_center);
     };
-    cell(61, "Planned FC °C", fc >= 0 ? fmt0(_curve.at(fc)) : "--", fc >= 0 ? "at " + mmss(fc) : "--");
-    cell(160, "Planned drop °C", drop >= 0 ? fmt0(_curve.at(drop)) : "--",
-         drop >= 0 ? "at " + mmss(drop) : "--");
+    auto temperature = [&](int t) {
+        if (t < 0) return std::string("--");
+        std::string value = fmt1(_curve.at(t));
+        if (value.size() > 2 && value.compare(value.size() - 2, 2, ".0") == 0) value.resize(value.size() - 2);
+        return value;
+    };
+    cell(61, "Planned FC °C", temperature(fc), fc >= 0 ? "at " + mmss(fc) : "--");
+    cell(160, "Planned drop °C", temperature(drop), drop >= 0 ? "at " + mmss(drop) : "--");
     cell(259, "Development", dev > 0 ? mmss(dev) : "--", dev > 0 ? fmt1(100.0f * dev / drop) + "% of total" : "--");
     cv().drawFastVLine(111, o + 73, 69, LINE);
     cv().drawFastVLine(209, o + 73, 69, LINE);
