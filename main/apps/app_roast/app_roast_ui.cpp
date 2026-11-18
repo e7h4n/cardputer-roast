@@ -856,12 +856,12 @@ void AppRoast::renderExternalPlan(int o)
     const int drop = _curve.tagTime(PointTag::Drop);
     const int dev = fc > 0 && drop > fc ? drop - fc : 0;
     auto cell = [&](int x, const char* label, const std::string& value, const std::string& detail) {
-        text(x, o + 73, label, F12(), DIM, Datum::top_center);
+        text(x, o + 73, label, F11(), DIM, Datum::top_center);
         text(x, o + 98, value, F23(), INK, Datum::top_center);
         text(x, o + 129, detail, F12(), DIM, Datum::top_center);
     };
-    cell(61, "Planned FC", fc >= 0 ? fmt0(_curve.at(fc)) + " °C" : "--", fc >= 0 ? "at " + mmss(fc) : "--");
-    cell(160, "Planned drop", drop >= 0 ? fmt0(_curve.at(drop)) + " °C" : "--",
+    cell(61, "Planned FC °C", fc >= 0 ? fmt0(_curve.at(fc)) : "--", fc >= 0 ? "at " + mmss(fc) : "--");
+    cell(160, "Planned drop °C", drop >= 0 ? fmt0(_curve.at(drop)) : "--",
          drop >= 0 ? "at " + mmss(drop) : "--");
     cell(259, "Development", dev > 0 ? mmss(dev) : "--", dev > 0 ? fmt1(100.0f * dev / drop) + "% of total" : "--");
     cv().drawFastVLine(111, o + 73, 69, LINE);
