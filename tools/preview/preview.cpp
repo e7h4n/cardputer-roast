@@ -282,6 +282,10 @@ int main(int argc, char** argv)
 
     press("c");
     shot("curves");
+    extShot("curves");
+    press("down");
+    extShot("curves_highlight");
+    press("up");
     press("enter");
     step(2500);
 
@@ -300,6 +304,7 @@ int main(int argc, char** argv)
     press("down");
     press("down");
     shot("rules");
+    extShot("rules");
     press("enter");
     press("right");
     shot("rules_edit");

@@ -687,11 +687,12 @@ void AppRoast::renderKeysBar()
 }
 
 /* ================================================================= chart */
-void AppRoast::renderChart(int x0, int y0, int x1, int y1, bool withText)
+void AppRoast::renderChart(int x0, int y0, int x1, int y1, bool withText, const Curve* preview)
 {
-    const bool live = _session.active() || _phase == Phase::Done;
+    const Curve* target = preview ? preview : (_hasCurve ? &_curve : nullptr);
+    const bool live = !preview && (_session.active() || _phase == Phase::Done);
     int lastT       = live ? _session.lastT() : 0;
-    int tMax        = std::max({_hasCurve ? _curve.endTime() + 30 : 0, lastT + 30, 360});
+    int tMax        = std::max({target ? target->endTime() + 30 : 0, lastT + 30, 360});
     tMax            = ((tMax + 59) / 60) * 60;
     const float yMin = 20, yMax = 235;
     const int pl     = 18;  // left gutter for temperature labels
@@ -714,11 +715,11 @@ void AppRoast::renderChart(int x0, int y0, int x1, int y1, bool withText)
         }
     }
     // target curve
-    if (_hasCurve) {
+    if (target) {
         int step = std::max(1, tMax / (x1 - x0));
-        int px = PX(0), py = PY(_curve.at(0));
-        for (int s = step; s <= _curve.endTime(); s += step) {
-            int nx = PX(s), ny = PY(_curve.at(s));
+        int px = PX(0), py = PY(target->at(0));
+        for (int s = step; s <= target->endTime(); s += step) {
+            int nx = PX(s), ny = PY(target->at(s));
             cv().drawLine(px, py, nx, ny, CURVE);
             px = nx;
             py = ny;
@@ -759,47 +760,58 @@ void AppRoast::renderChart(int x0, int y0, int x1, int y1, bool withText)
                 lx += 10 + text(lx + 10, ly, l.second, F10(), DIM) + 6;
             }
         }
-    } else if (_hasCurve) {
+    } else if (target) {
         // curve preview: label the key nodes in their mark colours
-        for (auto& p : _curve.pts) {
+        for (auto& p : target->pts) {
             uint32_t c = p.tag == PointTag::Dry ? DRY : p.tag == PointTag::FCs ? FC : p.tag == PointTag::Drop ? DROP : 0;
             if (!c) continue;
-            int px = PX(p.t), py = PY(_curve.at(p.t));
+            int px = PX(p.t), py = PY(target->at(p.t));
             dot(px, py, 3, c);
             if (p.tag == PointTag::Dry)
-                text(px + 5, py + 3, "dry " + mmss(p.t) + " · " + fmt0(_curve.at(p.t)) + "°", F10(), c);
+                text(px + 5, py + 3, "dry " + mmss(p.t) + " · " + fmt0(target->at(p.t)) + "°", F10(), c);
             else if (p.tag == PointTag::FCs)
-                text(px - 4, py - 3, "FC " + mmss(p.t) + " · " + fmt0(_curve.at(p.t)) + "°", F10(), c, Datum::bottom_right);
+                text(px - 4, py - 3, "FC " + mmss(p.t) + " · " + fmt0(target->at(p.t)) + "°", F10(), c, Datum::bottom_right);
             else
                 text(px, py + 6, "drop " + mmss(p.t), F10(), c, Datum::top_right);
         }
-        dot(PX(0), PY(_curve.at(0)), 2, INK);
+        dot(PX(0), PY(target->at(0)), 2, INK);
     }
 }
 
 /* ======================================================== external screen */
 constexpr int EW = 320, EH = 240, kStripH = 16, kHeadH = 34;
 
-uint32_t AppRoast::externalKey()
+uint32_t AppRoast::externalKey(const Curve* preview)
 {
     uint32_t h = 2166136261u;
     auto mix   = [&](uint32_t v) { h = (h ^ v) * 16777619u; };
     auto mixS  = [&](const std::string& s) {
         for (unsigned char c : s) mix(c);
     };
-    bool live = _phase == Phase::Roasting || _phase == Phase::Cooling;
+    mix((uint32_t)_screen);
     mix((uint32_t)_phase);
-    mix(_hasCurve);
-    if (_hasCurve) {
-        mixS(_curve.name);
-        for (auto& p : _curve.pts) mix((uint32_t)(p.t * 4096 + (int)lroundf(p.c * 10)));
+    const Curve* curve = _screen == Screen::Curves ? preview : (_hasCurve ? &_curve : nullptr);
+    if (curve) {
+        mixS(curve->name);
+        mix(curve->endTime());
+        mix((uint32_t)lroundf(curve->offset * 10));
+        for (auto& p : curve->pts) {
+            mix(p.t);
+            mix((uint32_t)lroundf(p.c * 10));
+            mix((uint32_t)p.tag);
+        }
     }
-    if (live || _phase == Phase::Done) {
+    if (_screen == Screen::Curves) mix(_listSel);
+    if (_screen == Screen::Prep || _screen == Screen::Connect) {
+        mix((uint32_t)_linkState);
+        mix(_link && _link->isSimulated());
+    }
+    if (_phase == Phase::Roasting || _phase == Phase::Cooling || _phase == Phase::Done) {
         mix((uint32_t)_session.lastT());
         for (int m = 0; m < (int)Mark::Count; m++) mix((uint32_t)_session.markT((Mark)m));
         mixS(_session.logId());
-        mixS(_bean);
-        mix((uint32_t)lroundf(_session.roastedWeight() * 10));
+        mixS(fmt1(_session.roastedWeight()));
+        mix(linkReady());
     }
     return h;
 }
@@ -825,9 +837,60 @@ static void ExtCell(int col, int o, const std::string& label, const std::string&
     text(cx, o + 13, value, F19(), c, Datum::top_center);
 }
 
+void AppRoast::renderExternalPlan(int o)
+{
+    const bool sim = _link && _link->isSimulated();
+    const char* link = sim ? "SIM" : linkReady() ? "Connected" : "Connecting";
+    text(12, o + 10, "Roast plan", F11(), DIM);
+    text(EW - 12, o + 10, link, F11(), sim ? WARN : linkReady() ? GO : DIM, Datum::top_right);
+    if (!_hasCurve) {
+        text(12, o + 31, "No curve selected", F16(), INK);
+        text(12, o + 59, "C to pick a curve", F12(), DIM);
+        return;
+    }
+
+    text(12, o + 28, clipTo(_curve.name, EW - 24, F16()), F16(), INK);
+    cv().drawFastHLine(12, o + 56, EW - 24, LINE);
+
+    const int fc = _curve.tagTime(PointTag::FCs);
+    const int drop = _curve.tagTime(PointTag::Drop);
+    const int dev = fc > 0 && drop > fc ? drop - fc : 0;
+    auto cell = [&](int x, const char* label, const std::string& value, const std::string& detail) {
+        text(x, o + 73, label, F11(), DIM, Datum::top_center);
+        text(x, o + 98, value, F23(), INK, Datum::top_center);
+        text(x, o + 129, detail, F12(), DIM, Datum::top_center);
+    };
+    auto temperature = [&](int t) {
+        if (t < 0) return std::string("--");
+        std::string value = fmt1(_curve.at(t));
+        if (value.size() > 2 && value.compare(value.size() - 2, 2, ".0") == 0) value.resize(value.size() - 2);
+        return value;
+    };
+    cell(61, "Planned FC °C", temperature(fc), fc >= 0 ? "at " + mmss(fc) : "--");
+    cell(160, "Planned drop °C", temperature(drop), drop >= 0 ? "at " + mmss(drop) : "--");
+    cell(259, "Development", dev > 0 ? mmss(dev) : "--", dev > 0 ? fmt1(100.0f * dev / drop) + "% of total" : "--");
+    cv().drawFastVLine(111, o + 73, 69, LINE);
+    cv().drawFastVLine(209, o + 73, 69, LINE);
+
+    if (drop <= 0) return;
+    constexpr int start = 14, end = EW - 15, y = 180;
+    cv().drawFastHLine(start, o + y, end - start + 1, CURVE);
+    if (dev > 0) {
+        const int crack = start + (end - start) * fc / drop;
+        cv().drawFastHLine(crack, o + y, end - crack + 1, FC);
+        dot(crack, o + y, 3, FC);
+        // Keep the labels legible even when first crack and drop are close together.
+        text(std::min(crack, end - 28), o + y + 11, "FC", F10(), DIM, Datum::top_right);
+    }
+    dot(start, o + y, 3, CURVE);
+    dot(end, o + y, 3, DROP);
+    text(start, o + y + 11, "Charge", F10(), DIM);
+    text(end, o + y + 11, "Drop", F10(), DIM, Datum::top_right);
+}
+
 // The external screen's frame, in frame coordinates minus `top`: a header of four equal cells, the chart below it.
 // Roasting: time, bean temperature, RoR, and the first crack expected (before F) or the development left (after F).
-void AppRoast::renderExternal(int top)
+void AppRoast::renderExternal(int top, const Curve* preview)
 {
     const int o = -top;
     bool live   = _phase == Phase::Roasting || _phase == Phase::Cooling;
@@ -857,36 +920,54 @@ void AppRoast::renderExternal(int top)
         ExtCell(1, o, m.dev >= 0 ? "dev " + fmt1(m.devPct) + "%" : "dev", m.dev >= 0 ? mmss(m.dev) : "--", FC);
         ExtCell(2, o, "drop °C", m.markT[3] >= 0 ? fmt1(m.markBT[3]) : "--", DROP);
         ExtCell(3, o, "loss", std::isnan(m.lossPct) ? "--" : fmt1(m.lossPct) + "%", INK);
-    } else if (_hasCurve) {
-        text(6, o + 2, clipTo(_curve.name, EW - 12, F14()), F14(), INK);
-        std::string sum;
-        int fcT = _curve.tagTime(PointTag::FCs);
-        if (fcT >= 0) sum += "FC " + mmss(fcT) + " · ";
-        sum += "drop " + mmss(_curve.endTime()) + " · " + fmt0(_curve.at(_curve.endTime())) + "°";
-        text(6, o + 19, sum, F11(), DIM);
+    } else if (_screen == Screen::Curves) {
+        if (!preview) {
+            text(6, o + 2, "No curves", F14(), INK);
+            return;
+        }
+        text(6, o + 2, clipTo(preview->name, EW - 12, F14()), F14(), INK);
+        const int fc = preview->tagTime(PointTag::FCs);
+        const int drop = preview->tagTime(PointTag::Drop);
+        std::string detail;
+        if (fc >= 0) detail = "FC " + mmss(fc) + " · " + fmt0(preview->at(fc)) + "°";
+        if (drop >= 0) {
+            if (!detail.empty()) detail += "   ";
+            detail += "Drop " + mmss(drop) + " · " + fmt0(preview->at(drop)) + "°";
+        }
+        text(6, o + 19, detail, F11(), DIM);
     } else {
-        text(6, o + 2, "No curve", F14(), INK);
-        text(6, o + 19, "C to pick one", F11(), DIM);
+        renderExternalPlan(o);
+        return;
     }
     cv().drawFastHLine(0, o + kHeadH, EW, LINE);
-    renderChart(0, o + kHeadH + 2, EW - 1, o + EH - 1, live);
+    renderChart(0, o + kHeadH + 2, EW - 1, o + EH - 1, live, preview);
     if (_phase == Phase::Done)  // which roast: the chart's top right
         text(EW - 4, o + kHeadH + 5, clipTo(_session.logId() + (_hasCurve ? " · " + _curve.name : ""), EW / 2, F10()),
              F10(), DIM, Datum::top_right);
 }
 
-// One strip per call: a frame starts when what the screen shows has changed (at most once a second), and is pushed
-// strip by strip so the internal screen and the keys never wait for the whole 320x240.
+// One strip per call keeps the controls responsive while updating the external display.
 void AppRoast::pumpExternal()
 {
-    if (_screen == Screen::Sync || _screen == Screen::Network || saveBusy()) {  // Wi-Fi + TLS need the heap
+    const bool live = _phase == Phase::Roasting || _phase == Phase::Cooling;
+    const bool visible = live || _screen == Screen::Summary || _screen == Screen::Curves ||
+                         _screen == Screen::Connect || _screen == Screen::Prep;
+    if (!visible) {
+        blankExternal();
+        return;
+    }
+    if (saveBusy()) {  // Keep the completed chart on screen while Wi-Fi + TLS use the heap.
         if (_extStrip.getBuffer()) releaseExternal();
         return;
     }
+    const Curve* preview = nullptr;
+    if (_screen == Screen::Curves && _listSel >= 0 && _listSel < (int)_curves.size())
+        preview = &_curves[_listSel];
     uint32_t now = GetHAL().millis();
+    uint32_t key = live && _extRow >= 0 ? _extKey : externalKey(preview);
+    if (key != _extKey && !live) _extRow = -1;  // discard a partial frame when navigating
     if (_extRow < 0) {
-        uint32_t key = externalKey();
-        if (key == _extKey || now - _extDrawMs < 1000) return;
+        if (key == _extKey || (live && now - _extDrawMs < 1000)) return;
         if (!_extStrip.getBuffer()) {
             _extStrip.setColorDepth(16);
             if (!_extStrip.createSprite(EW, kStripH)) return;  // no heap now: try again later
@@ -897,10 +978,19 @@ void AppRoast::pumpExternal()
     }
     g_target = &_extStrip;
     _extStrip.fillScreen(BG);
-    renderExternal(_extRow * kStripH);
+    renderExternal(_extRow * kStripH, preview);
     g_target = nullptr;
     _extStrip.pushSprite(&GetHAL().ext, 0, _extRow * kStripH);
+    _extVisible = true;
     if (++_extRow * kStripH >= EH) _extRow = -1;
+}
+
+void AppRoast::blankExternal()
+{
+    if (!_extVisible) return;
+    releaseExternal();
+    GetHAL().ext.fillScreen(0);  // The cap's backlight is wired to 3.3 V.
+    _extVisible = false;
 }
 
 void AppRoast::releaseExternal()

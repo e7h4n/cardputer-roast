@@ -153,6 +153,7 @@ void AppRoast::onClose()
     _keys.clear();
     // Back to the community Launcher. Its bootloader starts the Launcher only after a power-on or a deep-sleep
     // wake-up (a plain esp_restart() boots this app again), so take a 0.2 s deep-sleep nap.
+    blankExternal();
     GetHAL().display.fillScreen(0);
     GetHAL().delay(100);
     esp_sleep_enable_timer_wakeup(200 * 1000);

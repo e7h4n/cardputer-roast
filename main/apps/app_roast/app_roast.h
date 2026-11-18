@@ -252,7 +252,7 @@ private:
     void renderPrep();
     void renderRoast();
     void renderDash();
-    void renderChart(int x, int y, int w, int h, bool withText);
+    void renderChart(int x, int y, int w, int h, bool withText, const roast::Curve* preview = nullptr);
     void renderCool();
     void renderSummary();
     void renderCurves();
@@ -269,9 +269,12 @@ private:
     int _extRow         = -1;  // next strip of the frame being drawn; -1: no frame in progress
     uint32_t _extKey    = 0;   // what the screen shows now (externalKey())
     uint32_t _extDrawMs = 0;   // when the last frame started
-    uint32_t externalKey();
+    bool _extVisible = false;
+    uint32_t externalKey(const roast::Curve* preview);
     void pumpExternal();
-    void renderExternal(int top);  // the whole frame, shifted up by `top` (the strip's first row)
+    void renderExternalPlan(int y);
+    void renderExternal(int top, const roast::Curve* preview);  // the whole frame, shifted up by `top` (the strip's first row)
+    void blankExternal();
     void releaseExternal();        // free the strip (before Wi-Fi + TLS); the next frame allocates it again
     int renderStatus(bool draw = true);  // returns the left edge of the status corner
     int statusLeft()
