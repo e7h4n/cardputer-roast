@@ -31,8 +31,7 @@ typedef struct {
 typedef void (*rn_dbx_entry_cb)(const rn_dbx_entry_t *entry, void *ctx);
 typedef void (*rn_dbx_progress_cb)(uint32_t done, uint32_t total, void *ctx);
 
-/// Loads the saved account, sets the clock (SNTP) and gets a fresh access token. `listing`: room for folder listings
-/// (16 KB replies) rather than 4 KB. err: a short reason.
+/// Loads the saved account, waits for the clock and gets a fresh access token.
 bool rn_dbx_open(char *err, size_t errlen);
 void rn_dbx_close(void);
 /// Files directly in `folder` (a missing folder lists as empty).

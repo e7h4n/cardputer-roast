@@ -176,18 +176,25 @@ static int http(const char *url, const char *body, size_t length, const char *ty
         if (sent && esp_http_client_fetch_headers(h) >= 0) {
             int used = 0, got = 0;
             const bool listing = !strcmp(url, LIST_URL) || !strcmp(url, LIST_MORE_URL);
-            do {
-                if (used == (int)response_cap - 1) {
-                    if (!listing || response_cap >= RESPONSE_SYNC) break;
-                    size_t next = response_cap * 2;
-                    char *larger = realloc(response, next);
-                    if (!larger) break;
-                    response = larger;
-                    response_cap = next;
-                }
+            for (;;) {
                 got = esp_http_client_read(h, response + used, (int)response_cap - 1 - used);
-                if (got > 0) used += got;
-            } while (got > 0 && !esp_http_client_is_complete_data_received(h));
+                if (got <= 0) break;
+                used += got;
+                if (used != (int)response_cap - 1) continue;
+
+                char extra;
+                got = esp_http_client_read(h, &extra, 1);
+                if (got <= 0) break;
+                size_t next = response_cap * 2;
+                char *larger = listing && next <= RESPONSE_SYNC ? realloc(response, next) : NULL;
+                if (!larger) {
+                    got = -1;
+                    break;
+                }
+                response = larger;
+                response_cap = next;
+                response[used++] = extra;
+            }
             response[used] = 0;
             if (got >= 0 && esp_http_client_is_complete_data_received(h)) status = esp_http_client_get_status_code(h);
         }

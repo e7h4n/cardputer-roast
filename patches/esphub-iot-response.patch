@@ -14,7 +14,7 @@
          memcpy(r->data + r->len, e->data, e->data_len);
          r->len += e->data_len;
      }
-@@ -55,10 +62,9 @@
+@@ -55,15 +62,14 @@
          return NULL;
      snprintf(url, sizeof(url), "%s/api/device/iot/%s", base, operation);
      response_t r = {.limit = 16384};
@@ -26,6 +26,12 @@
          esp_http_client_config_t cfg = {.url = url,
                                          .method = HTTP_METHOD_POST,
                                          .crt_bundle_attach = esp_crt_bundle_attach,
+                                         .disable_auto_redirect = true,
+-                                        .timeout_ms = 10000,
++                                        .timeout_ms = 25000,
+                                         .event_handler = receive,
+                                         .user_data = &r};
+         esp_http_client_handle_t client = esp_http_client_init(&cfg);
 @@ -73,8 +79,8 @@
              esp_http_client_set_post_field(client, payload, strlen(payload));
              if (esp_http_client_perform(client) == ESP_OK) {
