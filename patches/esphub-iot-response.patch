@@ -1,0 +1,39 @@
+--- a/firmware/components/okou_agent/src/okou_iot.c
++++ b/firmware/components/okou_agent/src/okou_iot.c
+@@ -43,6 +43,13 @@
+             r->overflow = true;
+             return ESP_FAIL;
+         }
++        // Keep the handshake heap available until the response actually arrives.
++        char *data = realloc(r->data, r->len + (size_t)e->data_len + 1);
++        if (!data) {
++            r->overflow = true;
++            return ESP_ERR_NO_MEM;
++        }
++        r->data = data;
+         memcpy(r->data + r->len, e->data, e->data_len);
+         r->len += e->data_len;
+     }
+@@ -55,10 +62,9 @@
+         return NULL;
+     snprintf(url, sizeof(url), "%s/api/device/iot/%s", base, operation);
+     response_t r = {.limit = 16384};
+-    r.data = okou_malloc_large(r.limit + 1);
+     char *payload = cJSON_PrintUnformatted(body);
+     cJSON *answer = NULL;
+-    if (r.data && payload) {
++    if (payload) {
+         esp_http_client_config_t cfg = {.url = url,
+                                         .method = HTTP_METHOD_POST,
+                                         .crt_bundle_attach = esp_crt_bundle_attach,
+@@ -73,8 +79,8 @@
+             esp_http_client_set_post_field(client, payload, strlen(payload));
+             if (esp_http_client_perform(client) == ESP_OK) {
+                 *status = esp_http_client_get_status_code(client);
+-                r.data[r.len] = 0;
+-                if (*status == 200 && !r.overflow)
++                if (r.data) r.data[r.len] = 0;
++                if (*status == 200 && r.data && !r.overflow)
+                     answer = cJSON_Parse(r.data);
+             }
+             esp_http_client_cleanup(client);

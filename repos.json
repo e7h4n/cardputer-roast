@@ -22,6 +22,7 @@
     {
         "url": "https://github.com/okou-ai/esphub.git",
         "path": ".deps/esphub",
-        "branch": "73bfa3d162c29f6117c8dfbbc7a3ddb6fc18ad09"
+        "branch": "73bfa3d162c29f6117c8dfbbc7a3ddb6fc18ad09",
+        "patch": "patches/esphub-iot-response.patch"
     }
 ]
