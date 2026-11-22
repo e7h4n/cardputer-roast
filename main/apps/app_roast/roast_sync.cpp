@@ -1,4 +1,5 @@
 #include "roast_sync.h"
+#include "okou_agent.h"
 #include "net/roast_net.h"
 #include "net/roast_dropbox.h"
 #include <freertos/FreeRTOS.h>
@@ -200,6 +201,15 @@ void run(void*)
     if (!roast_net_wait_for_network(kWifiWait, s_err, sizeof s_err)) {
         fail(s_err);
     } else {
+        if (s_job == Job::Curves && !okou_connected()) {
+            step("waiting for ESP Hub");
+            // Boot sync shares internal RAM with MQTT enrollment and its first TLS handshake.
+            // Keep Dropbox available when the Hub is unreachable.
+            const TickType_t start = xTaskGetTickCount();
+            while (!okou_connected() && xTaskGetTickCount() - start < pdMS_TO_TICKS(kWifiWait)) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+        }
         step("signing in to Dropbox");
         if (!rn_dbx_open(s_job == Job::Curves, s_err, sizeof s_err)) {
             fail(s_err);
