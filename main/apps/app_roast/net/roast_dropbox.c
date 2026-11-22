@@ -141,12 +141,30 @@ static bool clock_ready(void)
     return ready;
 }
 
+// The Hub and Dropbox must not create simultaneous outgoing HTTPS sessions on this board.
+extern void roast_https_acquire(void);
+extern void roast_https_release(void);
+
+static esp_http_client_handle_t https_client_init(const esp_http_client_config_t *cfg)
+{
+    roast_https_acquire();
+    esp_http_client_handle_t h = esp_http_client_init(cfg);
+    if (!h) roast_https_release();
+    return h;
+}
+
+static void https_client_cleanup(esp_http_client_handle_t h)
+{
+    esp_http_client_cleanup(h);
+    roast_https_release();
+}
+
 static int http(const char *url, const char *body, size_t length, const char *type, bool authorized, const char *api_arg)
 {
     mbedtls_platform_zeroize(response, response_cap);
     esp_http_client_config_t cfg = {.url = url, .timeout_ms = 15000, .crt_bundle_attach = esp_crt_bundle_attach,
                                     .disable_auto_redirect = true, .buffer_size = 2048, .buffer_size_tx = 4096};
-    esp_http_client_handle_t h = esp_http_client_init(&cfg);
+    esp_http_client_handle_t h = https_client_init(&cfg);
     if (!h) return -1;
     esp_http_client_set_method(h, HTTP_METHOD_POST);
     if (type) esp_http_client_set_header(h, "Content-Type", type);
@@ -154,7 +172,7 @@ static int http(const char *url, const char *body, size_t length, const char *ty
     if (authorized) {
         char *auth = malloc(strlen(access_token) + 8);
         if (!auth) {
-            esp_http_client_cleanup(h);
+            https_client_cleanup(h);
             return -1;
         }
         sprintf(auth, "Bearer %s", access_token);
@@ -200,7 +218,7 @@ static int http(const char *url, const char *body, size_t length, const char *ty
         }
     }
     esp_http_client_close(h);
-    esp_http_client_cleanup(h);
+    https_client_cleanup(h);
     return status;
 }
 
@@ -740,13 +758,13 @@ static esp_http_client_handle_t open_content(const char *url, const char *arg)
     esp_http_client_config_t cfg = {.url = url, .timeout_ms = 20000, .crt_bundle_attach = esp_crt_bundle_attach,
                                     .disable_auto_redirect = true, .buffer_size = 2048, .buffer_size_tx = 4096,
                                     .event_handler = on_event};
-    esp_http_client_handle_t h = esp_http_client_init(&cfg);
+    esp_http_client_handle_t h = https_client_init(&cfg);
     if (!h) return NULL;
     esp_http_client_set_method(h, HTTP_METHOD_POST);
     esp_http_client_set_header(h, "Dropbox-API-Arg", arg);
     char *auth = malloc(strlen(access_token) + 8);
     if (!auth) {
-        esp_http_client_cleanup(h);
+        https_client_cleanup(h);
         return NULL;
     }
     sprintf(auth, "Bearer %s", access_token);
@@ -814,7 +832,7 @@ bool rn_dbx_download(const char *path, const char *local, char *err, size_t n)
     }
     if (h) {
         esp_http_client_close(h);
-        esp_http_client_cleanup(h);
+        https_client_cleanup(h);
     }
     if (f && fclose(f) != 0) ok = false;
     free(buf);
@@ -905,7 +923,7 @@ bool rn_dbx_upload(const char *local, const char *path, rn_dbx_progress_cb cb, v
     }
     if (h) {
         esp_http_client_close(h);
-        esp_http_client_cleanup(h);
+        https_client_cleanup(h);
     }
     if (f) fclose(f);
     free(buf);

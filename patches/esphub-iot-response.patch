@@ -1,6 +1,24 @@
 --- a/firmware/components/okou_agent/src/okou_iot.c
 +++ b/firmware/components/okou_agent/src/okou_iot.c
-@@ -43,6 +43,13 @@
+@@ -4,11 +4,17 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include <stdlib.h>
++#include <sys/lock.h>
+ #include "mqtt_client.h"
+ #include "esp_crt_bundle.h"
+ #include "esp_random.h"
+ #include "mbedtls/pk.h"
+ #include "mbedtls/x509_csr.h"
++
++// Roast shares the internal TLS heap with Dropbox on the no-PSRAM ADV.
++static _lock_t https_lock;
++void roast_https_acquire(void) { _lock_acquire(&https_lock); }
++void roast_https_release(void) { _lock_release(&https_lock); }
+
+ static esp_mqtt_client_handle_t mqtt;
+ static cJSON *active_identity, *active_certificate;
+@@ -43,6 +49,13 @@
              r->overflow = true;
              return ESP_FAIL;
          }
@@ -14,9 +32,11 @@
          memcpy(r->data + r->len, e->data, e->data_len);
          r->len += e->data_len;
      }
-@@ -55,15 +62,14 @@
+@@ -54,16 +67,16 @@
+     if (!body || okou_hub_http_base(base, sizeof(base)) != ESP_OK || strncmp(base, "https://", 8))
          return NULL;
      snprintf(url, sizeof(url), "%s/api/device/iot/%s", base, operation);
++    roast_https_acquire();
      response_t r = {.limit = 16384};
 -    r.data = okou_malloc_large(r.limit + 1);
      char *payload = cJSON_PrintUnformatted(body);
@@ -32,7 +52,7 @@
                                          .event_handler = receive,
                                          .user_data = &r};
          esp_http_client_handle_t client = esp_http_client_init(&cfg);
-@@ -73,8 +79,8 @@
+@@ -73,8 +86,8 @@
              esp_http_client_set_post_field(client, payload, strlen(payload));
              if (esp_http_client_perform(client) == ESP_OK) {
                  *status = esp_http_client_get_status_code(client);
@@ -43,3 +63,22 @@
                      answer = cJSON_Parse(r.data);
              }
              esp_http_client_cleanup(client);
+@@ -82,6 +95,7 @@
+     }
+     free(payload);
+     free(r.data);
++    roast_https_release();
+     return answer;
+ }
+ cJSON *okou_iot_post(const char *operation, cJSON *body)
+--- a/firmware/components/okou_agent/src/okou_log.c
++++ b/firmware/components/okou_agent/src/okou_log.c
+@@ -232,7 +232,7 @@
+     size_t pos = (size_t)n;
+     int count = 0;
+     char text[CONFIG_OKOU_LOG_LINE_MAX];
+-    while (s_s != w && s_seq_s <= through && count < 64) {
++    while (s_s != w && s_seq_s <= through && count < 12) {
+         rec_hdr_t h;
+         ring_get(s_s, &h, HDR_SZ);
+         size_t len = h.len;
