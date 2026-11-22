@@ -10,6 +10,9 @@
 #include <hal.h>
 #include <apps/app_roast/roast_debug.h>
 #include "okou_agent.h"
+extern "C" {
+#include "okou_ble.h"
+}
 #include "esp_log.h"
 
 using namespace mooncake;
@@ -39,6 +42,14 @@ extern "C" void app_main(void)
 
     // Native application in the ESP Hub app slot; Roast owns the whole screen.
     GetHAL().display.setBrightness(255);
+    // The SDK releases NimBLE after its boot scan or a Wi-Fi setup session.
+    if (okou_ble_host_owned()) {
+        GetHAL().display.println("ESP Hub Wi-Fi setup");
+        while (okou_ble_host_owned()) {
+            GetHAL().feedTheDog();
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+    }
     int roastId = GetMooncake().installApp(std::make_unique<AppRoast>());
     GetMooncake().openApp(roastId);
 
