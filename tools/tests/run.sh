@@ -10,3 +10,5 @@ g++ -std=gnu++17 -O1 -Wall -I"$ROOT/main" -I"$ROOT/tools/preview/stubs" -I"$CJSO
     "$ROOT/tools/tests/test_control.cpp" "$APP/roast_control.cpp" "$APP/roast_curve.cpp" "$CJSON/cJSON.c" \
     -o "$OUT/test_control"
 "$OUT/test_control"
+g++ -std=gnu++17 -O1 -Wall -I"$ROOT/main" "$ROOT/tools/tests/test_battery.cpp" -o "$OUT/test_battery"
+"$OUT/test_battery"

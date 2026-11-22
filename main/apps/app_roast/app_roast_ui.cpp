@@ -1422,7 +1422,7 @@ void AppRoast::renderNetwork()
     }
     // how to pair: the page, this device's name, and the code the pairing dialog asks for
     text(4, 18, "In Chrome (computer or Android) open", F10(), DIM);
-    text(4, 29, "localhost:8000/dropbox-setup.html", F12(), INK);
+    text(4, 29, "e7h4n.github.io/cardputer-roast", F12(), INK);
     text(4, 46, "Connect Cardputer, pick", F10(), DIM);
     text(4, 57, clipTo(v.device_name[0] ? v.device_name : "CardputerRoast", 138, F11()), F11(), INK);
     rbox(146, 44, W - 5, 74, 5, CARD);

@@ -26,6 +26,7 @@ public:
         return m5gfx::millis();
     }
     void feedTheDog();
+    int batteryVoltage();  // Calibrated GPIO10 millivolts, -1 when unavailable.
 
     /* --------------------------------- Display -------------------------------- */
     M5GFX& display     = M5.Display;
@@ -57,6 +58,7 @@ public:
 private:
     bool _is_sd_card_mounted = false;
 
+    void battery_init();
     void display_init();
     void keyboard_init();
     void nvs_init();

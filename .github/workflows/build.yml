@@ -96,3 +96,29 @@ jobs:
           files: dist/*
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+  dropbox-pages:
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    needs: firmware
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Prepare Dropbox-only setup page
+        run: |
+          mkdir public
+          cp tools/dropbox-setup.html public/index.html
+          cp tools/dropbox-setup.html public/dropbox-setup.html
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - name: Publish setup page
+        id: deploy
+        uses: actions/deploy-pages@v4

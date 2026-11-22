@@ -29,7 +29,9 @@ void Hal::init()
     auto config = M5.config();
     config.internal_mic = false;
     config.internal_spk = false;
+    config.fallback_board = m5::board_t::board_M5CardputerADV;
     M5.begin(config);
+    battery_init();
     M5.Display.setBrightness(0);
 
     display_init();
