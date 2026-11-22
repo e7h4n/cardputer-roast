@@ -1,13 +1,10 @@
 #include "roast_sync.h"
-#include "roast_update.h"
 #include "net/roast_net.h"
 #include "net/roast_dropbox.h"
-#include "net/roast_fetch.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
 #include <esp_log.h>
-#include <mbedtls/sha256.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <algorithm>
@@ -196,82 +193,12 @@ bool saveRoast(const std::string& id)
     }
 }
 
-std::string hex(const uint8_t* d, size_t n)
-{
-    static const char* k = "0123456789abcdef";
-    std::string s;
-    for (size_t i = 0; i < n; i++) {
-        s += k[d[i] >> 4];
-        s += k[d[i] & 15];
-    }
-    return s;
-}
-
-std::string fileSha256(const char* path)
-{
-    FILE* f = fopen(path, "rb");
-    if (!f) return "";
-    std::vector<uint8_t> buf(4096);
-    mbedtls_sha256_context c;
-    mbedtls_sha256_init(&c);
-    mbedtls_sha256_starts(&c, 0);
-    size_t r;
-    while ((r = fread(buf.data(), 1, buf.size(), f)) > 0) mbedtls_sha256_update(&c, buf.data(), r);
-    uint8_t d[32];
-    mbedtls_sha256_finish(&c, d);
-    mbedtls_sha256_free(&c);
-    bool err = ferror(f);
-    fclose(f);
-    return err ? "" : hex(d, 32);
-}
-
-// The latest release, onto the card for the Launcher (roast_update.h). The image is checked against latest.json
-// (size and SHA-256) before it replaces Roast.bin; an image already there with that hash is not downloaded again.
-bool firmware()
-{
-    step("checking GitHub");
-    static char manifest[1024];
-    if (!rn_fetch_text(update::kManifestUrl, manifest, sizeof manifest, s_err, sizeof s_err)) return fail(s_err);
-    update::Manifest m;
-    std::string why;
-    if (!update::ParseManifest(manifest, m, &why)) return fail(why.c_str());
-    update([&](Status& s) { s.latest = m.version; });
-    if (!update::Offer(update::Installed(), m.version)) {
-        update([](Status& s) { s.upToDate = true; });
-        return true;
-    }
-    mkdir(ROAST_SD_ROOT "/roast", 0755);
-    mkdir(update::kDir, 0755);
-    struct stat st;
-    if (stat(update::kImage, &st) == 0 && st.st_size == (off_t)m.size && fileSha256(update::kImage) == m.sha256) {
-        step("already on the card", m.version);
-        return true;
-    }
-    step("downloading", m.version);
-    std::string part = std::string(update::kImage) + ".part";
-    uint8_t sha[32];
-    uint32_t size = 0;
-    if (!rn_fetch_file(update::AssetUrl(m.version, m.bin).c_str(), part.c_str(), m.size, sha, &size, progress, nullptr,
-                       s_err, sizeof s_err))
-        return fail(s_err);
-    if (size != m.size || hex(sha, 32) != m.sha256) {
-        remove(part.c_str());
-        return fail("update: the download does not match latest.json");
-    }
-    remove(update::kImage);
-    if (rename(part.c_str(), update::kImage) != 0) return fail("update: rename on the card failed");
-    return true;
-}
-
 void run(void*)
 {
     bool ok = false;
-    step("joining Wi-Fi");
-    if (!roast_net_wifi_up(kWifiWait, s_err, sizeof s_err)) {
+    step("waiting for ESP Hub Wi-Fi");
+    if (!roast_net_wait_for_network(kWifiWait, s_err, sizeof s_err)) {
         fail(s_err);
-    } else if (s_job == Job::Update) {
-        ok = firmware();
-        roast_net_wifi_down();
     } else {
         step("signing in to Dropbox");
         if (!rn_dbx_open(s_job == Job::Curves, s_err, sizeof s_err)) {
@@ -290,12 +217,9 @@ void run(void*)
                 case Job::SaveRoast:
                     ok = saveRoast(s_arg);
                     break;
-                case Job::Update:  // handled above (no Dropbox)
-                    break;
             }
             rn_dbx_close();
         }
-        roast_net_wifi_down();
     }
     ESP_LOGI(TAG, "job %d %s", (int)s_job, ok ? "done" : "FAILED");
     update([&](Status& s) {

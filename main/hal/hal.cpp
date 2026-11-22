@@ -26,7 +26,10 @@ void Hal::init()
 {
     mclog::tagInfo(_tag, "init");
 
-    M5.begin();
+    auto config = M5.config();
+    config.internal_mic = false;
+    config.internal_spk = false;
+    M5.begin(config);
     M5.Display.setBrightness(0);
 
     display_init();
@@ -51,7 +54,8 @@ void Hal::display_init()
 {
     mclog::tagInfo(_tag, "display init");
 
-    // One full-screen canvas (240x135 RGB565, ~64 KB). Allocate it here, before BLE fragments the heap.
+    // RGB332 canvas uses ~32 KB, leaving room for resident ESP Hub TLS plus BLE.
+    canvas.setColorDepth(8);
     if (!canvas.createSprite(display.width(), display.height())) mclog::tagError(_tag, "canvas alloc failed");
 }
 
@@ -61,11 +65,7 @@ void Hal::nvs_init()
     mclog::tagInfo(_tag, "nvs init");
 
     esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        mclog::tagWarn(_tag, "erasing NVS flash to fix corruption");
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
+    // Never erase shared NVS: it also holds ESP Hub identity and Wi-Fi credentials.
     ESP_ERROR_CHECK(ret);
 }
 

@@ -328,7 +328,7 @@ int main(int argc, char** argv)
     step(500);
     shot("network_pairing");
     step(2700);
-    shot("network_wifi");
+    shot("network_esphub");
     step(1200);
     shot("network_dropbox_busy");
     step(3000);
@@ -339,16 +339,6 @@ int main(int argc, char** argv)
     for (int i = 0; i < 30; i++) press("down", 30);
     press("up", 60);
     shot("rules_sync_saved");
-    // Firmware update: the rules row, the download from GitHub (simulated), then what to do in the Launcher
-    for (int i = 0; i < 30; i++) press("up", 30);  // firmware is the first row
-    shot("rules_firmware");
-    press("enter");
-    step(2500);
-    shot("update_downloading");
-    step(2500);
-    shot("update_ready");
-    press("esc");
-    step(3000);  // restarted: Connect, then Prep once the (preview) roaster answers
 
     press("s");
     shot("fan_on");

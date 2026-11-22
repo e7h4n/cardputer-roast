@@ -7,3 +7,5 @@ dist/
 __pycache__/
 .DS_Store
 build_preview/
+
+.deps/

@@ -9,8 +9,17 @@
 #include <apps/app_roast/app_roast.h>
 #include <hal.h>
 #include <apps/app_roast/roast_debug.h>
+#include "okou_agent.h"
+#include "esp_log.h"
 
 using namespace mooncake;
+
+// Potentially slow Hub commands (e.g. scans) must not run in the roaster control loop.
+static void hub_commands(void*)
+{
+    while (true) okou_poll(50);
+}
+
 
 extern "C" void app_main(void)
 {
@@ -21,7 +30,14 @@ extern "C" void app_main(void)
     // HAL init
     GetHAL().init();
 
-    // Roast-only firmware for the community Launcher: Roast owns the whole screen.
+    okou_config_t hub = OKOU_CONFIG_DEFAULT();
+    hub.handlers_in_poll = true;
+    ESP_ERROR_CHECK(okou_agent_start(&hub));
+    ESP_ERROR_CHECK(xTaskCreate(hub_commands, "roast_hub_cmd", 4096, nullptr, 2, nullptr) == pdPASS
+                    ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_LOGI("roast", "ESP Hub native roast ready: cardputer-adv");
+
+    // Native application in the ESP Hub app slot; Roast owns the whole screen.
     GetHAL().display.setBrightness(255);
     int roastId = GetMooncake().installApp(std::make_unique<AppRoast>());
     GetMooncake().openApp(roastId);

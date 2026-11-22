@@ -299,7 +299,7 @@ void DebugPollMain()
     } else if (line == "net") {
         rn_view_t v = roast_net_view();
         char ssid[33];
-        bool saved = roast_net_saved_wifi(ssid);
+        bool saved = roast_net_esphub_network(ssid);
         printf("NET open=%d advertising=%d paired=%d setup_error=%d name=%s wifi=%d reason=%d ssid=%s ip=%s "
                "saved_wifi=%s dropbox=%s dropbox_error=%s saved_dropbox=%d heap=%u largest=%u\n",
                v.open, v.advertising, v.paired, v.setup_error, v.device_name, (int)v.state, v.reason, v.ssid, v.ip,

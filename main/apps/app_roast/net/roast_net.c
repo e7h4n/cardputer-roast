@@ -1,14 +1,9 @@
 // SPDX-License-Identifier: MIT
-/*
- * Bluetooth Wi-Fi/Dropbox setup (see roast_net.h). Ported from e7h4n/coffee-watch firmware/demo/main/wifi_setup.c:
- * the GATT service, LE Secure Connections with a displayed passkey, the Wi-Fi state machine and the status JSON are
- * the same, so https://e7h4n.github.io/coffee-watch/ works unchanged. Differences: everything starts in
- * roast_net_open() and stops in roast_net_close() (the Cardputer only needs the network while this screen is open),
- * the UI polls roast_net_view() instead of receiving events, and the Wi-Fi and Dropbox NVS namespaces are rn_*.
- */
+/* Dropbox-only Bluetooth setup. Networking is owned by ESP Hub. */
 #include "roast_net.h"
 #include "roast_dropbox.h"
-#include "wifi_packet.h"
+#include "okou_agent.h"
+#include "okou_agent_ext.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdatomic.h>
@@ -34,35 +29,22 @@
 void ble_store_config_init(void);
 
 #define TAG "rn-setup"
-#define WIFI_NS "rn_wifi"
+
 
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 static rn_view_t view;
 static atomic_bool ble_ready, requested_open, opened;
-static bool ble_running, wifi_running, network_task_running;
+static bool ble_running;
 static uint8_t own_type;
 static uint16_t browser = BLE_HS_CONN_HANDLE_NONE, signal_handle;
 static struct ble_npl_event control_event, notify_event;
-static QueueHandle_t network_queue;
-static SemaphoreHandle_t network_done;
-static esp_netif_t *station_interface;
-static esp_event_handler_instance_t wifi_handler, ip_handler;
 static char status_json[384];
 static int status_length;
 static char dropbox_json[192];
 static int dropbox_length;
 
-enum { OP_JOIN = 1, OP_FORGET = 2, OP_START = 10, OP_DOWN, OP_IP, OP_QUIT };
-typedef struct {
-    cw_wifi_packet_t packet;
-    int op, reason;
-    uint32_t ip_address;
-    char ip[16];
-} network_command_t;
-
 // c9a81001-9a9d-4f55-a621-5b4e7699b647 and siblings (byte order reversed for NimBLE)
 static const ble_uuid128_t service_uuid = BLE_UUID128_INIT(0x47, 0xb6, 0x99, 0x76, 0x4e, 0x5b, 0x21, 0xa6, 0x55, 0x4f, 0x9d, 0x9a, 0x01, 0x10, 0xa8, 0xc9);
-static const ble_uuid128_t config_uuid = BLE_UUID128_INIT(0x47, 0xb6, 0x99, 0x76, 0x4e, 0x5b, 0x21, 0xa6, 0x55, 0x4f, 0x9d, 0x9a, 0x02, 0x10, 0xa8, 0xc9);
 static const ble_uuid128_t status_uuid = BLE_UUID128_INIT(0x47, 0xb6, 0x99, 0x76, 0x4e, 0x5b, 0x21, 0xa6, 0x55, 0x4f, 0x9d, 0x9a, 0x03, 0x10, 0xa8, 0xc9);
 static const ble_uuid128_t signal_uuid = BLE_UUID128_INIT(0x47, 0xb6, 0x99, 0x76, 0x4e, 0x5b, 0x21, 0xa6, 0x55, 0x4f, 0x9d, 0x9a, 0x04, 0x10, 0xa8, 0xc9);
 static const ble_uuid128_t dropbox_config_uuid = BLE_UUID128_INIT(0x47, 0xb6, 0x99, 0x76, 0x4e, 0x5b, 0x21, 0xa6, 0x55, 0x4f, 0x9d, 0x9a, 0x05, 0x10, 0xa8, 0xc9);
@@ -92,221 +74,39 @@ void rn_dropbox_changed(const char *state, const char *error)
     publish();
 }
 
-static void network_state(rn_net_state_t state, int reason, const char *ssid, const char *ip)
+/* Read-only network status from ESP Hub; no Wi-Fi credentials or driver lifecycle here. */
+bool roast_net_esphub_network(char ssid[33])
 {
-    portENTER_CRITICAL(&lock);
-    view.state  = state;
-    view.reason = reason;
-    if (ssid) snprintf(view.ssid, sizeof view.ssid, "%s", ssid);
-    snprintf(view.ip, sizeof view.ip, "%s", ip ? ip : "");
-    portEXIT_CRITICAL(&lock);
-    publish();
-}
-
-static uint32_t request_id;
-static void request_state(uint32_t request, rn_net_state_t state, int reason, const char *ssid)
-{
-    portENTER_CRITICAL(&lock);
-    request_id  = request;
-    view.state  = state;
-    view.reason = reason;
-    view.ip[0]  = 0;
-    if (ssid) snprintf(view.ssid, sizeof view.ssid, "%s", ssid);
-    portEXIT_CRITICAL(&lock);
-    publish();
-}
-
-/* ------------------------------------------------------------------ credentials */
-static bool load_credentials(cw_wifi_packet_t *p)
-{
-    nvs_handle_t h;
-    bool ok = false;
-    if (nvs_open(WIFI_NS, NVS_READONLY, &h) == ESP_OK) {
-        size_t a = sizeof p->ssid, b = sizeof p->password;
-        ok = nvs_get_str(h, "ssid", p->ssid, &a) == ESP_OK && nvs_get_str(h, "pass", p->password, &b) == ESP_OK && p->ssid[0];
-        nvs_close(h);
-    }
-    p->op = OP_JOIN;
-    return ok;
-}
-
-bool roast_net_saved_wifi(char ssid[33])
-{
-    nvs_handle_t h;
-    bool ok = false;
     ssid[0] = 0;
-    if (nvs_open(WIFI_NS, NVS_READONLY, &h) == ESP_OK) {
-        size_t a = 33;
-        ok       = nvs_get_str(h, "ssid", ssid, &a) == ESP_OK && ssid[0];
-        nvs_close(h);
-    }
-    return ok;
+    if (okou_wifi_current(ssid, 33)) return true;
+    cJSON *networks = cJSON_CreateArray();
+    if (!networks) return false;
+    okou_wifi_saved_json(networks);
+    cJSON *first = cJSON_GetArrayItem(networks, 0);
+    const cJSON *name = first ? cJSON_GetObjectItem(first, "ssid") : NULL;
+    if (cJSON_IsString(name)) snprintf(ssid, 33, "%s", name->valuestring);
+    bool saved = ssid[0] != 0;
+    cJSON_Delete(networks);
+    return saved;
 }
 
-bool roast_net_saved_dropbox(void)
-{
-    return rn_dropbox_saved();
-}
+bool roast_net_saved_dropbox(void) { return rn_dropbox_saved(); }
 
-static esp_err_t save_credentials(const cw_wifi_packet_t *p)
+static void refresh_network_view(void)
 {
-    nvs_handle_t h;
-    esp_err_t rc = nvs_open(WIFI_NS, NVS_READWRITE, &h);
-    if (rc != ESP_OK) return rc;
-    rc = nvs_set_str(h, "ssid", p->ssid);
-    if (rc == ESP_OK) rc = nvs_set_str(h, "pass", p->password);
-    if (rc == ESP_OK) rc = nvs_commit(h);
-    nvs_close(h);
-    return rc;
-}
-
-static esp_err_t erase_credentials(void)
-{
-    nvs_handle_t h;
-    esp_err_t rc = nvs_open(WIFI_NS, NVS_READWRITE, &h);
-    if (rc != ESP_OK) return rc;
-    rc = nvs_erase_all(h);
-    if (rc == ESP_OK) rc = nvs_commit(h);
-    nvs_close(h);
-    return rc;
-}
-
-/* -------------------------------------------------------------------- Wi-Fi */
-static bool connect_once(cw_wifi_packet_t *p)
-{
-    wifi_config_t config = {0};
-    memcpy(config.sta.ssid, p->ssid, strlen(p->ssid));
-    memcpy(config.sta.password, p->password, strlen(p->password));
-    config.sta.threshold.authmode = p->password[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
-    config.sta.sae_pwe_h2e        = WPA3_SAE_PWE_BOTH;
-    config.sta.pmf_cfg.capable    = true;
-    config.sta.pmf_cfg.required   = false;
-    esp_err_t rc = esp_wifi_set_config(WIFI_IF_STA, &config);
-    mbedtls_platform_zeroize(&config, sizeof config);
-    if (rc == ESP_OK) rc = esp_wifi_connect();
-    network_state(rc == ESP_OK ? RN_NET_CONNECTING : RN_NET_FAILED, rc, p->ssid, NULL);
-    if (rc != ESP_OK) mbedtls_platform_zeroize(p->password, sizeof p->password);
-    return rc == ESP_OK;
-}
-
-// One task serializes every Wi-Fi operation. Only a real IP event confirms a connection and commits credentials; a
-// failure leaves the previously saved network untouched. No retry loop, no fallback network.
-static void network_task(void *arg)
-{
-    cw_wifi_packet_t active = {0}, pending = {0};
-    bool attempt = false, changing = false, forgetting = false, credential_pending = false, disconnect_pending = false;
-    network_command_t c;
-    for (;;) {
-        if (xQueueReceive(network_queue, &c, portMAX_DELAY) != pdTRUE) continue;
-        if (c.op == OP_QUIT) break;
-        if (c.op == OP_START) {
-            if (load_credentials(&active)) {
-                portENTER_CRITICAL(&lock);
-                view.saved = true;
-                portEXIT_CRITICAL(&lock);
-                attempt            = connect_once(&active);
-                credential_pending = false;  // already saved
-            }
-        } else if (c.op == OP_JOIN) {
-            pending  = c.packet;
-            changing = true;
-            forgetting = false;
-            request_state(c.packet.request_id, RN_NET_CONNECTING, 0, pending.ssid);
-            if (attempt && !disconnect_pending) {
-                esp_err_t rc = esp_wifi_disconnect();
-                if (rc == ESP_OK) disconnect_pending = true;
-                if (rc == ESP_ERR_WIFI_NOT_CONNECT)
-                    attempt = false;
-                else if (rc != ESP_OK) {
-                    changing = false;
-                    network_state(RN_NET_FAILED, rc, pending.ssid, NULL);
-                }
-            }
-            if (changing && !attempt && !disconnect_pending) {
-                active = pending;
-                mbedtls_platform_zeroize(&pending, sizeof pending);
-                changing           = false;
-                attempt            = connect_once(&active);
-                credential_pending = attempt;
-            }
-        } else if (c.op == OP_FORGET) {
-            esp_err_t rc = erase_credentials();
-            if (rc != ESP_OK) {
-                request_state(c.packet.request_id, RN_NET_FAILED, rc, NULL);
-            } else {
-                forgetting = true;
-                changing   = false;
-                mbedtls_platform_zeroize(&active, sizeof active);
-                mbedtls_platform_zeroize(&pending, sizeof pending);
-                if (attempt && !disconnect_pending) disconnect_pending = esp_wifi_disconnect() == ESP_OK;
-                attempt            = false;
-                credential_pending = false;
-                portENTER_CRITICAL(&lock);
-                view.saved = false;
-                portEXIT_CRITICAL(&lock);
-                request_state(c.packet.request_id, RN_NET_UNCONFIGURED, 0, "");
-            }
-        } else if (c.op == OP_DOWN) {
-            bool was_connecting = snapshot().state == RN_NET_CONNECTING;
-            attempt = credential_pending = disconnect_pending = false;
-            if (changing) {
-                active = pending;
-                mbedtls_platform_zeroize(&pending, sizeof pending);
-                changing           = false;
-                attempt            = connect_once(&active);
-                credential_pending = attempt;
-            } else if (forgetting) {
-                forgetting = false;
-            } else {
-                mbedtls_platform_zeroize(active.password, sizeof active.password);
-                network_state(was_connecting ? RN_NET_FAILED : RN_NET_DISCONNECTED, c.reason, NULL, NULL);
-            }
-        } else if (c.op == OP_IP && !changing && !forgetting && attempt) {
-            // Ignore an old network's queued IP event while changing credentials.
-            wifi_ap_record_t ap;
-            esp_netif_ip_info_t current;
-            if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK || strcmp((const char *)ap.ssid, active.ssid) ||
-                esp_netif_get_ip_info(station_interface, &current) != ESP_OK || !current.ip.addr ||
-                current.ip.addr != c.ip_address) {
-                mbedtls_platform_zeroize(&c, sizeof c);
-                continue;
-            }
-            esp_err_t rc = ESP_OK;
-            if (credential_pending) {
-                rc = save_credentials(&active);
-                portENTER_CRITICAL(&lock);
-                view.saved = rc == ESP_OK;
-                portEXIT_CRITICAL(&lock);
-                credential_pending = false;
-            }
-            network_state(RN_NET_CONNECTED, rc, active.ssid, c.ip);
-            mbedtls_platform_zeroize(active.password, sizeof active.password);
-        }
-        mbedtls_platform_zeroize(&c, sizeof c);
-    }
-    mbedtls_platform_zeroize(&active, sizeof active);
-    mbedtls_platform_zeroize(&pending, sizeof pending);
-    xSemaphoreGive(network_done);
-    vTaskDelete(NULL);
-}
-
-static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
-{
-    network_command_t c = {0};
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        c.op = OP_START;
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        c.op     = OP_DOWN;
-        c.reason = ((wifi_event_sta_disconnected_t *)data)->reason;
-    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *e = data;
-        c.op                 = OP_IP;
-        c.ip_address         = e->ip_info.ip.addr;
-        snprintf(c.ip, sizeof c.ip, IPSTR, IP2STR(&e->ip_info.ip));
-    } else {
-        return;
-    }
-    if (network_queue) xQueueSend(network_queue, &c, 0);
+    char ssid[33], ip[16] = "";
+    bool saved = roast_net_esphub_network(ssid);
+    bool up = okou_net_has_ip();
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t info;
+    if (up && sta && esp_netif_get_ip_info(sta, &info) == ESP_OK)
+        snprintf(ip, sizeof ip, IPSTR, IP2STR(&info.ip));
+    portENTER_CRITICAL(&lock);
+    view.saved = saved;
+    view.state = up ? RN_NET_CONNECTED : (saved ? RN_NET_CONNECTING : RN_NET_UNCONFIGURED);
+    snprintf(view.ssid, sizeof view.ssid, "%s", ssid);
+    snprintf(view.ip, sizeof view.ip, "%s", ip);
+    portEXIT_CRITICAL(&lock);
 }
 
 /* --------------------------------------------------------------------- GATT */
@@ -335,25 +135,6 @@ static bool authenticated(uint16_t conn)
            desc.sec_state.authenticated && desc.sec_state.encrypted;
 }
 
-static int access_config(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctx, void *arg)
-{
-    if (!authenticated(conn)) return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
-    uint8_t bytes[104];
-    uint16_t size       = 0;
-    network_command_t c = {0};
-    if (ble_hs_mbuf_to_flat(ctx->om, bytes, sizeof bytes, &size)) {
-        mbedtls_platform_zeroize(bytes, sizeof bytes);
-        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-    }
-    bool valid = cw_wifi_packet_decode(bytes, size, &c.packet);
-    mbedtls_platform_zeroize(bytes, sizeof bytes);
-    if (!valid) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-    c.op        = c.packet.op;
-    bool queued = xQueueSend(network_queue, &c, 0) == pdTRUE;
-    mbedtls_platform_zeroize(&c, sizeof c);
-    return queued ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
-}
-
 static int access_status(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctx, void *arg)
 {
     if (!atomic_load(&requested_open) || conn != browser) return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
@@ -361,12 +142,13 @@ static int access_status(uint16_t conn, uint16_t attr, struct ble_gatt_access_ct
     if (ctx->offset && !status_length) return BLE_ATT_ERR_INVALID_OFFSET;
     // One coherent JSON snapshot across all Read Blob fragments.
     if (ctx->offset == 0) {
+        refresh_network_view();
         rn_view_t v = snapshot();
         char ssid[193];
         json_escape(ssid, v.ssid);
         status_length = snprintf(status_json, sizeof status_json,
                                  "{\"v\":1,\"state\":\"%s\",\"ssid\":\"%s\",\"ip\":\"%s\",\"reason\":%d,\"request\":%lu,\"saved\":%s}",
-                                 states[v.state], ssid, v.ip, v.reason, (unsigned long)request_id, v.saved ? "true" : "false");
+                                 states[v.state], ssid, v.ip, v.reason, 0UL, v.saved ? "true" : "false");
     }
     return os_mbuf_append(ctx->om, status_json, status_length) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
 }
@@ -407,8 +189,6 @@ static const struct ble_gatt_svc_def services[] = {
     {.type            = BLE_GATT_SVC_TYPE_PRIMARY,
      .uuid            = &service_uuid.u,
      .characteristics = (struct ble_gatt_chr_def[]){
-         {.uuid = &config_uuid.u, .access_cb = access_config,
-          .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC | BLE_GATT_CHR_F_WRITE_AUTHEN},
          {.uuid = &status_uuid.u, .access_cb = access_status,
           .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_READ_AUTHEN},
          {.uuid = &signal_uuid.u, .access_cb = access_signal, .val_handle = &signal_handle, .flags = BLE_GATT_CHR_F_NOTIFY},
@@ -564,7 +344,6 @@ static void host_task(void *param)
 // The BLE controller asserts (and the chip resets) when its allocations fail, so it starts first, and only with room
 // to spare; Wi-Fi after it fails cleanly instead. Measured need is unknown yet: these floors are conservative.
 #define BLE_MIN_FREE (40 * 1024)
-#define WIFI_MIN_FREE (36 * 1024)
 
 static bool ble_start(void)
 {
@@ -619,63 +398,6 @@ static void ble_stop(void)
 }
 
 /* ------------------------------------------------------------------ lifecycle */
-static bool wifi_start(void)
-{
-    static bool netif_ready = false;
-    if (!netif_ready) {  // process-wide, once
-        if (esp_netif_init() != ESP_OK) return false;
-        esp_err_t rc = esp_event_loop_create_default();
-        if (rc != ESP_OK && rc != ESP_ERR_INVALID_STATE) return false;
-        netif_ready = true;
-    }
-    station_interface = esp_netif_create_default_wifi_sta();  // destroyed again in wifi_stop()
-    if (!station_interface) return false;
-    size_t free_now = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    ESP_LOGI(TAG, "heap before Wi-Fi: %u free, %u largest", (unsigned)free_now,
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-    if (free_now < WIFI_MIN_FREE) return false;
-    network_queue = xQueueCreate(8, sizeof(network_command_t));
-    network_done  = xSemaphoreCreateBinary();
-    if (!network_queue || !network_done) return false;
-    if (xTaskCreate(network_task, "rn_wifi", 4096, NULL, 4, NULL) != pdPASS) return false;
-    network_task_running      = true;
-    wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
-    if (esp_wifi_init(&config) != ESP_OK) return false;
-    wifi_running = true;
-    esp_wifi_set_storage(WIFI_STORAGE_RAM);  // credentials live in our own NVS namespace
-    esp_wifi_set_mode(WIFI_MODE_STA);
-    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL, &wifi_handler);
-    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL, &ip_handler);
-    return esp_wifi_start() == ESP_OK;  // STA_START -> join the saved network once
-}
-
-static void wifi_stop(void)
-{
-    if (wifi_handler) esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_handler);
-    if (ip_handler) esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, ip_handler);
-    wifi_handler = ip_handler = NULL;
-    if (wifi_running) {
-        esp_wifi_disconnect();
-        esp_wifi_stop();
-        esp_wifi_deinit();
-        wifi_running = false;
-    }
-    if (station_interface) {
-        esp_netif_destroy_default_wifi(station_interface);
-        station_interface = NULL;
-    }
-    if (network_task_running) {
-        network_command_t quit = {.op = OP_QUIT};
-        xQueueSend(network_queue, &quit, portMAX_DELAY);
-        xSemaphoreTake(network_done, portMAX_DELAY);
-        network_task_running = false;
-    }
-    if (network_queue) vQueueDelete(network_queue);
-    if (network_done) vSemaphoreDelete(network_done);
-    network_queue = NULL;
-    network_done  = NULL;
-}
-
 bool roast_net_open(void)
 {
     if (atomic_load(&opened)) return true;
@@ -683,10 +405,8 @@ bool roast_net_open(void)
     memset(&view, 0, sizeof view);
     snprintf(view.dropbox, sizeof view.dropbox, "unconfigured");
     portEXIT_CRITICAL(&lock);
-    request_id = 0;
     atomic_store(&requested_open, true);
-    bool ok = ble_start();  // first: the BLE controller cannot fail gracefully
-    if (ok) ok = wifi_start();
+    bool ok = ble_start();  // Only Dropbox BLE; ESP Hub networking stays up.
     if (ok) ok = rn_dropbox_start();
     ESP_LOGI(TAG, "setup %s; heap %u free, %u largest", ok ? "running" : "FAILED",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
@@ -713,7 +433,6 @@ void roast_net_close(void)
     atomic_store(&requested_open, false);
     ble_stop();
     rn_dropbox_stop();
-    wifi_stop();
     atomic_store(&opened, false);
     portENTER_CRITICAL(&lock);
     view.open = view.advertising = view.paired = false;
@@ -727,45 +446,17 @@ bool roast_net_busy(void)
 
 rn_view_t roast_net_view(void)
 {
+    refresh_network_view();
     return snapshot();
 }
 
-/* --------------------------------------------------------------- sync Wi-Fi */
-bool roast_net_wifi_up(int timeout_ms, char *err, size_t errlen)
+/* Wait for the SDK-managed connection. Never stop it after Dropbox sync. */
+bool roast_net_wait_for_network(int timeout_ms, char *err, size_t errlen)
 {
-    if (atomic_load(&opened)) {
-        snprintf(err, errlen, "setup is open");
-        return false;
+    for (int waited = 0; waited <= timeout_ms; waited += 100) {
+        if (okou_net_has_ip()) return true;
+        if (waited < timeout_ms) vTaskDelay(pdMS_TO_TICKS(100));
     }
-    char ssid[33];
-    if (!roast_net_saved_wifi(ssid)) {
-        snprintf(err, errlen, "no Wi-Fi saved: set it up under Rules > network");
-        return false;
-    }
-    portENTER_CRITICAL(&lock);
-    memset(&view, 0, sizeof view);
-    portEXIT_CRITICAL(&lock);
-    if (!wifi_start()) {
-        wifi_stop();
-        snprintf(err, errlen, "Wi-Fi could not start");
-        return false;
-    }
-    for (int waited = 0; waited < timeout_ms; waited += 100) {
-        rn_view_t v = snapshot();
-        if (v.state == RN_NET_CONNECTED) return true;
-        if (v.state == RN_NET_FAILED || v.state == RN_NET_DISCONNECTED) {
-            snprintf(err, errlen, "Wi-Fi %s failed (reason %d)", ssid, v.reason);
-            wifi_stop();
-            return false;
-        }
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-    snprintf(err, errlen, "Wi-Fi %s: no IP address after %d s", ssid, timeout_ms / 1000);
-    wifi_stop();
+    snprintf(err, errlen, "ESP Hub Wi-Fi offline; configure it through ESP Hub");
     return false;
-}
-
-void roast_net_wifi_down(void)
-{
-    wifi_stop();
 }

@@ -18,7 +18,7 @@ concurrency:
 jobs:
   firmware:
     runs-on: ubuntu-latest
-    container: espressif/idf:v5.4.2
+    container: espressif/idf:v5.5
     steps:
       - uses: actions/checkout@v7
         with:
@@ -29,15 +29,14 @@ jobs:
           git config --global --add safe.directory '*'
           python3 fetch_repos.py
 
-      # Version: a v* tag as it is; every push to main is a release v0.3.<commits on main>, which the firmware's
-      # update check compares with its own (roast_update.h); anything else (PRs) is the short hash, not a release.
+      # Publish traceable native application artifacts; installation is managed by ESP Hub.
       - name: Version
         id: ver
         shell: bash
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then ver="${GITHUB_REF_NAME}"
-          elif [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then ver="v0.3.$(git rev-list --count HEAD)"
-          else ver="$(git rev-parse --short HEAD)"; fi
+          elif [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then ver="v0.4.$(git rev-list --count HEAD)"
+          else ver="esphub-$(git rev-parse --short HEAD)"; fi
           echo "ver=${ver}" >> "$GITHUB_OUTPUT"
           echo "version ${ver}"
 
@@ -49,20 +48,14 @@ jobs:
           . "$IDF_PATH/export.sh"
           idf.py build
 
-      - name: Package Launcher app image
+      - name: Package ESP Hub native application
         id: pkg
         shell: bash
         run: |
           ver="${{ steps.ver.outputs.ver }}"
-          bin="cardputer-roast-${ver}.bin"
           mkdir -p dist
-          cp build/cardputer-roast.bin "dist/${bin}"
-          (cd dist && sha256sum *.bin > SHA256SUMS)
-          cat dist/SHA256SUMS
-          # what the firmware's update check reads (releases/latest/download/latest.json)
-          printf '{"version":"%s","bin":"%s","size":%d,"sha256":"%s"}\n' "$ver" "$bin" \
-            "$(stat -c %s "dist/${bin}")" "$(sha256sum "dist/${bin}" | cut -d' ' -f1)" > dist/latest.json
-          cat dist/latest.json
+          cp build/cardputer-roast.bin "dist/cardputer-roast-${ver}.bin"
+          python3 tools/verify_esphub_image.py "dist/cardputer-roast-${ver}.bin" "$ver"
           echo "ver=${ver}" >> "$GITHUB_OUTPUT"
 
       - name: Unit tests (host)
@@ -92,13 +85,14 @@ jobs:
           if-no-files-found: error
 
       - name: Release
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.ver.outputs.ver }}
           name: ${{ steps.ver.outputs.ver }}
           target_commitish: ${{ github.sha }}
-          make_latest: true
+          prerelease: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
+          make_latest: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
           files: dist/*
           fail_on_unmatched_files: true
           generate_release_notes: true

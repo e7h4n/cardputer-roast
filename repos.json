@@ -18,5 +18,10 @@
         "url": "https://github.com/Forairaaaaa/mooncake_log.git",
         "path": "components/mooncake_log",
         "branch": "v1.3.0"
+    },
+    {
+        "url": "https://github.com/okou-ai/esphub.git",
+        "path": ".deps/esphub",
+        "branch": "6dfd827f7e7c7ff655f094e9fbbf06e0823e07e0"
     }
 ]

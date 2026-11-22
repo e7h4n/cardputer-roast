@@ -25,7 +25,7 @@
 #include "freertos/semphr.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
-#include "esp_netif_sntp.h"
+
 #include "esp_log.h"
 #include "nvs.h"
 #include "cJSON.h"
@@ -65,7 +65,6 @@ static TaskHandle_t task;
 static atomic_bool busy, have_credentials;
 static char *response, *access_token;
 static size_t response_cap;
-static bool sntp_ready;
 
 static void set_state(const char *state, const char *error)
 {
@@ -131,26 +130,13 @@ static bool text_field(cJSON *json, const char *key, char *out, size_t size)
     return true;
 }
 
-// Best effort: sets the clock for dated log ids. TLS does not need it (CONFIG_MBEDTLS_HAVE_TIME_DATE is off, so
-// certificate dates are not checked), so a failure is logged and Dropbox goes on. After a power-off the clock starts
-// at 1970; pool.ntp.org alone timed out on the first device test, hence three servers and a shorter wait.
+// ESP Hub initializes SNTP. Wait for its clock; never create another SNTP instance.
 static bool clock_ready(void)
 {
-    if (time(NULL) > 1735689600) return true;  // after 2025-01-01: already set
-    if (!sntp_ready) {
-        esp_sntp_config_t config =
-            ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(3, ESP_SNTP_SERVER_LIST("ntp.aliyun.com", "time.apple.com", "pool.ntp.org"));
-        config.start = false;
-        if (esp_netif_sntp_init(&config) != ESP_OK) {
-            ESP_LOGW(TAG, "SNTP init failed; the clock stays unset");
-            return false;
-        }
-        sntp_ready = true;
-    }
-    esp_netif_sntp_start();
-    bool ok = esp_netif_sntp_sync_wait(pdMS_TO_TICKS(8000)) == ESP_OK && time(NULL) > 1735689600;
-    if (!ok) ESP_LOGW(TAG, "SNTP: no time within 8 s; going on without it (log ids fall back to R####)");
-    return ok;
+    for (int n = 0; n < 80 && time(NULL) <= 1735689600; n++) vTaskDelay(pdMS_TO_TICKS(100));
+    bool ready = time(NULL) > 1735689600;
+    if (!ready) ESP_LOGW(TAG, "ESP Hub clock not synchronized yet");
+    return ready;
 }
 
 static int http(const char *url, const char *body, size_t length, const char *type, bool authorized, const char *api_arg)
