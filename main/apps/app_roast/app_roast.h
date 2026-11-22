@@ -75,7 +75,6 @@ private:
         const char* unit = "";
         bool* toggle   = nullptr;  // on/off row
         bool network   = false;    // opens the Wi-Fi & Dropbox setup screen
-        bool firmware  = false;    // shows this build's version; Enter checks GitHub for a newer release
         bool simToggle = false;    // simulator on/off
     };
     std::vector<RuleRow> ruleRows();
@@ -192,7 +191,6 @@ private:
     void pollSync();
     bool keySync(int code);
     void renderSync();
-    void renderUpdate(const roast::sync::Status& st);
     void restartApp(bool skipBootSync);
     bool consumeSkipSync();
     bool consumeBypass();  // esp_restart(); boot sync runs again unless skipBootSync

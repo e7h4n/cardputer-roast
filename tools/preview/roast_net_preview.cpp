@@ -20,7 +20,6 @@ bool roast_net_open(void)
 
 void roast_net_close(void)
 {
-    if (s_open && GetHAL().millis() - s_t0 > 3500) s_wifi = true;
     if (s_open && GetHAL().millis() - s_t0 > 7000) s_dropbox = true;
     s_open = false;
 }
@@ -41,20 +40,15 @@ rn_view_t roast_net_view(void)
     v.connecting  = s_open && t >= 1000 && t < 2000;
     v.paired      = s_open && t >= 2000;
     snprintf(v.device_name, sizeof v.device_name, "CardputerRoast-3F2A");
-    if (t >= 3500) {
-        v.state = RN_NET_CONNECTED;
-        snprintf(v.ssid, sizeof v.ssid, "Home-2.4G");
-        snprintf(v.ip, sizeof v.ip, "192.168.1.42");
-    } else if (t >= 2500) {
-        v.state = RN_NET_CONNECTING;
-        snprintf(v.ssid, sizeof v.ssid, "Home-2.4G");
-    }
+    v.state = RN_NET_CONNECTED;
+    snprintf(v.ssid, sizeof v.ssid, "ESP-Hub-Network");
+    snprintf(v.ip, sizeof v.ip, "192.168.1.42");
     const char* d = t >= 7000 ? "connected" : t >= 6000 ? "verifying" : t >= 4500 ? "authorizing" : "unconfigured";
     snprintf(v.dropbox, sizeof v.dropbox, "%s", d);
     return v;
 }
 
-bool roast_net_saved_wifi(char ssid[33])
+bool roast_net_esphub_network(char ssid[33])
 {
     snprintf(ssid, 33, "%s", s_wifi ? "Home-2.4G" : "");
     return s_wifi;

@@ -1,0 +1,33 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Cardputer Roast · Dropbox setup</title>
+<style>body{font:16px system-ui;max-width:620px;margin:50px auto;padding:0 20px;color:#19302a;background:#f5f6f1}label{display:block;margin:18px 0}input{display:block;box-sizing:border-box;width:100%;padding:10px;font:inherit}button{font:inherit;padding:10px 14px;margin:4px;border:1px solid #4b7666;border-radius:6px;background:#fff;cursor:pointer}pre{white-space:pre-wrap;background:#e4ebe4;padding:16px;border-radius:8px}small{color:#51645b}</style>
+<h1>Connect Dropbox</h1><p>On Cardputer, open <b>O → Dropbox</b>. Connect below and enter the six-digit code shown on its screen when your system asks. Wi-Fi is managed separately by ESP Hub.</p>
+<button id="connect">Connect Cardputer</button><span id="device"></span>
+<form id="authorize"><label>Dropbox app key<input id="key" maxlength="32" autocomplete="off" required></label><label>App secret<input id="secret" type="password" maxlength="32" autocomplete="off" required></label><button id="getcode" type="button">Get Dropbox authorization code</button><label>Authorization code<input id="code" type="password" maxlength="128" autocomplete="off" required></label><button>Save Dropbox authorization</button></form>
+<button id="check">Check saved authorization</button><button id="forget">Remove from Cardputer</button>
+<p><small>Use your own Dropbox app with App folder access and files.content.read / files.content.write permissions. Credentials are sent over authenticated Bluetooth only; this page does not store them.</small></p><pre id="status" role="status">Not connected</pre>
+<script>
+const uuid=n=>`c9a8100${n}-9a9d-4f55-a621-5b4e7699b647`;
+let config,status,signal;
+const el=id=>document.getElementById(id);
+const report=e=>{el('status').textContent=e.message||String(e)};
+async function refresh(){if(status)el('status').textContent=new TextDecoder().decode(await status.readValue())}
+el('connect').onclick=async()=>{try{
+ if(!navigator.bluetooth)throw Error('Use Chrome on a Bluetooth-capable computer, via localhost or HTTPS.');
+ const device=await navigator.bluetooth.requestDevice({filters:[{services:[uuid(1)]}]});
+ device.addEventListener('gattserverdisconnected',()=>{config=status=signal=null;el('device').textContent='';el('status').textContent='Disconnected'});
+ const server=await device.gatt.connect(),service=await server.getPrimaryService(uuid(1));
+ config=await service.getCharacteristic(uuid(5));status=await service.getCharacteristic(uuid(6));signal=await service.getCharacteristic(uuid(4));
+ el('device').textContent=device.name;await refresh();await signal.startNotifications();signal.addEventListener('characteristicvaluechanged',()=>refresh().catch(report));
+}catch(e){report(e)}};
+el('getcode').onclick=()=>{const key=el('key').value.trim();if(!/^[a-zA-Z0-9]{1,32}$/.test(key)){report('Enter a valid app key first.');return}window.open('https://www.dropbox.com/oauth2/authorize?client_id='+encodeURIComponent(key)+'&response_type=code&token_access_type=offline','_blank','noopener,noreferrer')};
+async function send(op){
+ if(!config)throw Error('Connect Cardputer first.');
+ const values=op===1?[el('key').value.trim(),el('secret').value.trim(),el('code').value.trim()]:['','',''];
+ if(op===1&&(!/^[a-zA-Z0-9]{1,32}$/.test(values[0])||!/^[a-zA-Z0-9]{1,32}$/.test(values[1])||!/^[a-zA-Z0-9_-]{1,128}$/.test(values[2])))throw Error('Check app key, secret and authorization code.');
+ const bytes=values.map(v=>new TextEncoder().encode(v));const packet=new Uint8Array(9+bytes.reduce((n,b)=>n+b.length,0));packet[0]=2;packet[1]=op;packet[2]=bytes[0].length;packet[3]=bytes[1].length;packet[8]=bytes[2].length;
+ new DataView(packet.buffer).setUint32(4,crypto.getRandomValues(new Uint32Array(1))[0]||1,true);let offset=9;for(const b of bytes){packet.set(b,offset);offset+=b.length}
+ try{await config.writeValueWithResponse(packet)}finally{packet.fill(0);for(const b of bytes)b.fill(0);el('secret').value='';el('code').value=''}
+ await refresh();
+}
+el('authorize').onsubmit=e=>{e.preventDefault();send(1).catch(report)};el('check').onclick=()=>send(3).catch(report);el('forget').onclick=()=>{if(confirm('Remove the saved Dropbox authorization from this Cardputer?'))send(2).catch(report)};
+</script></html>

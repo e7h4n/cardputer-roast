@@ -6,7 +6,7 @@ Cardputer Roast turns an **M5Stack Cardputer ADV** into a pocket controller for 
 fluid-bed coffee roaster (the machine normally driven by the *myERoast* phone app). It talks to the roaster over
 Bluetooth LE, follows a roast curve with its own PID, and walks you through a roast on the 240×135
 screen: charge, drying, first crack, development, drop, cooling, and a summary that is saved to the SD card and
-opens in Artisan. It runs as an app under the community [Launcher](https://github.com/bmorcelli/Launcher).
+opens in Artisan. It runs as a native application managed by ESP Hub.
 
 <p>
 <img src="docs/screenshots/prep.png" width="49%" alt="Prep page">
@@ -30,9 +30,7 @@ opens in Artisan. It runs as an app under the community [Launcher](https://githu
 - **Curve editor.** Start temperature, first crack and drop (time and temperature), edited on the device with the
   curve and its development beside them, saved to the SD card.
 - **Logs.** Every roast is written as `.csv` (1 Hz), `.json` summary and `.alog` for Artisan.
-- **Wi-Fi & Dropbox pairing.** Paired from the [Coffee Watch setup page](https://e7h4n.github.io/coffee-watch/)
-  in Chrome over authenticated Bluetooth, like the watch: Wi-Fi network, then your own Dropbox app (App folder access).
-  Both are required.
+- **ESP Hub networking and Dropbox pairing.** ESP Hub configures Wi-Fi. The Dropbox-only Bluetooth helper authorizes your own Dropbox app (App folder access).
 - **Dropbox sync.** Curves live in Dropbox: synced at every boot, and every curve saved or deleted on the device is
   written to Dropbox at once. Each roast's logs are saved to Dropbox from its summary once the fan is off.
 - **Simulator.** A built-in thermal model for practising and testing without a machine; a yellow SIM tag shows when
@@ -52,41 +50,15 @@ Rendered from the firmware's own drawing code by the desktop preview (`tools/pre
 | ![Cooling](docs/screenshots/cooling.png) Cooling: progress to the cold temperature | ![Summary](docs/screenshots/summary.png) Summary, saved to SD |
 | ![Rules](docs/screenshots/rules.png) Rules and alerts | ![Keys](docs/screenshots/keys.png) Key map, grouped by colour |
 
-## Install (with Launcher)
-1. **Install Launcher** on the Cardputer ADV, with [M5Burner](https://docs.m5stack.com/en/download) or the
-   [Launcher web flasher](https://bmorcelli.github.io/Launcher/).
-2. **Download `cardputer-roast-<version>.bin`** from the [Releases](../../releases) page (every CI run also keeps
-   it as an artifact). It is the bare app image that Launcher installs, not a full-flash image.
-3. **Install it from Launcher**, either way:
-   - **SD card:** copy the `.bin` to the SD card, open Launcher's SD browser, select the file and install it.
-   - **USB serial:** with Launcher in its menu, run
-     ```sh
-     pip install pyserial
-     python3 tools/launcher_flash.py Roast cardputer-roast-<version>.bin
-     ```
-4. **Optional:** turn on Launcher's boot-to-app setting (CFG) to start Roast at power-on. Esc Esc in Roast then
-   shows Launcher's boot screen for about 5 s and reopens Roast.
+## Install and update with ESP Hub
 
-Insert a FAT32 SD card for curves and logs; without one, the last roast stays in memory until you leave the
-summary.
+This project builds a native ESP-IDF application for an ESP Hub-provisioned Cardputer ADV. Register and provision the board through ESP Hub once; existing Hub devices keep their identity and saved networks.
 
-### Updates
-Every merge to main publishes a release, `v0.3.<commits on main>`. Roast cannot overwrite itself (it runs from the
-partition Launcher installed it in), so it downloads and Launcher installs:
+CI publishes the application `.bin`, `SHA256SUMS`, and `esphub.json`. Call `launcher.enter`, wait for an online launcher, then `ota.install(kind="micropython", url=<release binary URL>)`. The kind is the existing application-binary compatibility channel; the firmware is native C++ and contains no Python interpreter. Check the transfer log and the next `cardputer-roast` boot.
 
-1. **Rules › SYNC › firmware** shows this build's version. Enter checks GitHub (Wi-Fi must be set up; the roaster
-   link closes for it). If the latest release is newer (or this build is not a release), Roast downloads it to the
-   SD card as `/roast/update/Roast.bin` and checks its size and SHA-256 against the release's `latest.json`. An image
-   already on the card with that hash is not downloaded again.
-2. **Enter** goes to Launcher. Press any key on its boot screen to stay in the menu.
-3. **In Launcher, press the key bound to `/roast/update/Roast.bin`.** Bind it once: SD browser › `roast/update/Roast.bin`
-   › *Bind to key* (for example U). Launcher installs it and starts the new Roast. If the flash is full it asks
-   which app partition to reuse: pick the old Roast (for example `roast0`). Launcher does not touch NVS, so rules, Wi-Fi and
-   Dropbox stay.
+Keep both ESP Hub launchers, the partition table, and NVS. The app slot starts at `0x2a0000` and holds 4 MiB. Do not run the old community Launcher installer or generic `idf.py flash`. The application no longer checks GitHub for updates, downloads `Roast.bin`, or maintains `latest.json`; updates are initiated through ESP Hub after a roast has ended and the fan is off.
 
-Not while roasting: the check is only on the Rules page, which roasting does not show. The image is 1.93 MB and the
-slot Launcher made for Roast on the first install is 1.97 MB (0x1E0000): about 31 KB to spare. A larger image no
-longer fits there; then delete the old Roast in Launcher before installing.
+Insert a FAT32 SD card for curves and logs.
 
 ## Using it
 Turn the *myERoast* app off first: the roaster accepts only one BLE connection at a time.
@@ -97,6 +69,9 @@ machine is not running.
 
 **H** shows the key map on every page, grouped by colour. The top-right corner shows the battery, the link (green
 dot, or the SIM tag) and a red **SD** tag without a card.
+
+
+The battery indicator displays the percentage returned by M5Unified, as in the official Cardputer ADV demo. A reading of 0% is displayed as 0%. On USB, the Cardputer ADV power switch must be ON for charging.
 
 ### Prep
 The page walks through four steps: curve → batch → fan → charge.
@@ -153,32 +128,13 @@ for it (the Cardputer has no PSRAM): each frame is drawn in 320×16 strips, one 
 and only when something changed. While Wi-Fi and TLS run (sync, saving a roast) the screen keeps its last frame.
 Without the cap attached nothing changes.
 
-### Wi-Fi & Dropbox
-**O** (also from the Connect page) › *network* opens the setup screen. It closes the roaster link first (setup needs
-Bluetooth for itself), so it is only available with the fan off. **Esc** closes setup and restarts Roast (a few
-seconds), which reconnects to the roaster with a clean heap: Bluetooth, Wi-Fi and TLS leave it too fragmented for a
-roast log.
+### ESP Hub networking and Dropbox Bluetooth authorization
 
-1. In Chrome on a computer or Android phone, open https://e7h4n.github.io/coffee-watch/ and press **Connect watch**.
-2. Pick `CardputerRoast-XXXX`. When the system pairing dialog asks, type the six-digit code on the Cardputer.
-3. Enter a 2.4 GHz Wi-Fi network. It counts (and is saved) only once the Cardputer has an IP address.
-4. Link Dropbox: in the [App Console](https://www.dropbox.com/developers/apps) create an app with Scoped access and
-   App folder access, enable `files.content.write`, `files.content.read` and `files.metadata.read`, enter its App key
-   and App secret, allow access on Dropbox and paste the code it shows. The Cardputer exchanges the code for a
-   refresh token itself and saves it; the page then shows *Authorization saved*. It does not test an upload here
-   (with Bluetooth up there is not enough memory for a second HTTPS session): close setup, and the boot sync, which
-   runs without Bluetooth, is the first real use of the account. If it is wrong, the sync fails and says why.
-   *Check Dropbox upload* on the page only refreshes the token.
-   You can reuse the Coffee Watch Dropbox app: both devices then share one app folder.
+ESP Hub owns Wi-Fi credentials, connection/reconnection, and SNTP. The application no longer reads/writes `rn_wifi` or exposes a BLE Wi-Fi provisioning characteristic. Configure Wi-Fi through ESP Hub.
 
-The protocol, packets and status are the Coffee Watch ones ([spec](https://github.com/e7h4n/coffee-watch/blob/main/spec/dropbox.md)),
-ported from its firmware. Credentials go only over the authenticated, encrypted Bluetooth link, are stored in NVS
-(`rn_wifi`, `rn_dropbox`; plain flash, no flash encryption) and are never logged or readable over Bluetooth. Wi-Fi,
-Bluetooth setup and the TLS buffers run only while this screen is open. Removing Dropbox on the page erases it from
-the Cardputer; revoke access under Connected apps in your Dropbox settings.
+Open **O → Dropbox** with the fan off. The roaster link closes because the two roles share NimBLE. The screen shows the passkey and read-only Hub network status. Closing setup stops Dropbox Bluetooth, not the Hub Wi-Fi connection.
 
-The rules page shows the saved network and whether Dropbox is linked. Once Dropbox setup has set the clock (SNTP),
-new log ids are dated (`YYYYMMDD-HHMMSS`, UTC) instead of `R####`, until the next power-off.
+The authenticated/encrypted Dropbox GATT protocol is retained: service `c9a81001-9a9d-4f55-a621-5b4e7699b647`, config characteristic `...1005...` (v2 authorize/forget/check packets), status `...1006...`, and notifications `...1004...`. The old Wi-Fi-write characteristic `...1002...` is removed; use the bundled `tools/dropbox-setup.html` helper rather than requiring that characteristic. Open [the Dropbox setup page](https://e7h4n.github.io/cardputer-roast/) in Chrome on a Bluetooth-capable computer. CI publishes it with GitHub Pages. App key, secret, and refresh token remain in `rn_dropbox`, never returned to the client or logged.
 
 ### Dropbox sync
 Wi-Fi and Dropbox are required: until both are set up, Roast opens the setup screen at boot. Everything below lives in
@@ -479,22 +435,19 @@ Not implemented:
 - writing run parameters (registers 20–29).
 
 ## Building
-ESP-IDF **v5.4.2**:
+ESP-IDF **v5.5**:
 ```sh
 python3 fetch_repos.py        # clones M5GFX, M5Unified, mooncake, ... into components/
-idf.py build                  # -> build/cardputer-roast.bin (the Launcher app image)
+idf.py build                  # -> build/cardputer-roast.bin (the ESP Hub native app image)
 ```
-CI does the same in the `espressif/idf:v5.4.2` container. Every push to main publishes a release
-`v0.3.<commits on main>` (pushing a `v*` tag publishes that tag) with the `.bin`, `SHA256SUMS` and `latest.json`
-(`{"version","bin","size","sha256"}`, which the update check reads). The version is compiled in (`ROAST_VERSION` →
-`PROJECT_VER`); local builds use `git describe`.
+CI uses `espressif/idf:v5.5`. Main releases are `v0.4.<commit count>`; tagged builds use their tag. Manual branch runs publish an `esphub-<short sha>` prerelease. Each release contains the application `.bin`, `SHA256SUMS`, and an ESP Hub deployment manifest (`esphub.json`). Version comes from `ROAST_VERSION` → `PROJECT_VER`.
 
 ### Desktop preview
 The UI can be checked without the device. `tools/preview/` compiles the real Roast code (pages, keys, curves,
 logs and the simulator) against a stand-in HAL and a fake clock, plays a scripted roast on the simulator and writes
 every page as a 240×135 PNG:
 ```sh
-export IDF_PATH=~/esp/esp-idf-v5.4.2      # for cJSON
+export IDF_PATH=~/esp/esp-idf-v5.5      # for cJSON
 tools/preview/build.sh && build_preview/preview build_preview/shots
 python3 tools/preview/sheet.py build_preview/shots sheet.png   # optional contact sheet (Pillow)
 ```
@@ -536,4 +489,4 @@ The console accepts:
 Everything else in this repository, including the dark-roast preset table in
 `main/apps/app_roast/preset_dark.h`, is released under the MIT license.
 
-App packaging targets [bmorcelli/Launcher](https://github.com/bmorcelli/Launcher).
+Application packaging targets the ESP Hub Cardputer ADV application slot.

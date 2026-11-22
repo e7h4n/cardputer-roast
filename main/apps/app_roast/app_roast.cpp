@@ -3,9 +3,11 @@
  * Rendering lives in app_roast_ui.cpp.
  */
 #include "app_roast.h"
+#ifndef LGFX_LINUX_FB
+#include <esp_log.h>
+#endif
 #include "roast_debug.h"
 #include "net/roast_net.h"
-#include "roast_update.h"
 #include <esp_system.h>
 #if __has_include(<esp_attr.h>)
 #include <esp_attr.h>
@@ -16,7 +18,7 @@
 #include <hal/utils/settings/settings.h>
 #include <mooncake_log.h>
 #include <esp_system.h>
-#include <esp_sleep.h>
+#include "okou_agent.h"
 #include <cmath>
 #include <climits>
 #include <cstring>
@@ -121,7 +123,7 @@ void AppRoast::onOpen()
     if (bypass) {  // test only: USB console `boot roast`
         startLink();
         toast("Test boot: no Dropbox sync", WARN, 4000);
-    } else if (!roast_net_saved_wifi(ssid) || !roast_net_saved_dropbox()) {
+    } else if (!roast_net_esphub_network(ssid) || !roast_net_saved_dropbox()) {
         _netRequired = true;
         openNetwork();
     } else if (skip) {
@@ -151,13 +153,11 @@ void AppRoast::onClose()
     }
     g_activeLink = nullptr;
     _keys.clear();
-    // Back to the community Launcher. Its bootloader starts the Launcher only after a power-on or a deep-sleep
-    // wake-up (a plain esp_restart() boots this app again), so take a 0.2 s deep-sleep nap.
+    // The SDK selects the preserved ESP Hub launcher, without altering NVS or the app image.
     blankExternal();
     GetHAL().display.fillScreen(0);
     GetHAL().delay(100);
-    esp_sleep_enable_timer_wakeup(200 * 1000);
-    esp_deep_sleep_start();
+    okou_enter_setup();
 }
 
 void AppRoast::startLink(bool sim)
@@ -197,8 +197,15 @@ void AppRoast::onRunning()
 
     uint32_t now = GetHAL().millis();
     if (_batMs == 0 || now - _batMs > 5000) {
-        int b   = M5.Power.getBatteryLevel();
-        _batPct = (b >= 0 && b <= 100) ? b : -1;
+        const int level = M5.Power.getBatteryLevel();
+        _batPct = (level >= 0 && level <= 100) ? level : -1;
+#ifndef LGFX_LINUX_FB
+        static int lastLevel = -2;
+        if (_batPct != lastLevel) {
+            ESP_LOGI("roast-battery", "M5Unified percent=%d", _batPct);
+            lastLevel = _batPct;
+        }
+#endif
         _batMs  = now;
     }
     if (_dirty || now - _lastRender > 250) {
@@ -735,7 +742,7 @@ bool AppRoast::keyConnect(int code)
         setSimulator(true);
         return true;
     }
-    if (code == KEY_O) {  // rules, including Wi-Fi & Dropbox setup, also while the roaster is off
+    if (code == KEY_O) {  // rules, including Dropbox setup, also while the roaster is off
         openSettings();
         return true;
     }
@@ -1356,10 +1363,6 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
         r.unit  = unit;
         v.push_back(r);
     };
-    RuleRow fwRow;
-    fwRow.label    = "firmware";
-    fwRow.firmware = true;
-    v.push_back(fwRow);
     group("SAFETY", DROP);
     rowF("auto-drop at", &_rules.safetyBT, nullptr, 150, 260, 1, "°");
     rowI("after curve end", &_rules.afterEnd, nullptr, 0, 900, 10, " s");
@@ -1387,7 +1390,7 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     rowF("floor cap", &_rules.floorCap, nullptr, 1, 8, 0.5f, "°");
     group("SYNC", CURVE);
     RuleRow netRow;
-    netRow.label   = "network";
+    netRow.label   = "Dropbox";
     netRow.network = true;
     v.push_back(netRow);
     group("MODE", SIM);
@@ -1424,15 +1427,6 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
                 }
                 if (r.network) {
                     openNetwork();
-                    return true;
-                }
-                if (r.firmware) {  // check GitHub; a newer release goes onto the card for the Launcher
-                    if (_phase != Phase::Idle || _fanRunning) {  // the roaster link closes for it
-                        toast("Fan off first", WARN);
-                        return true;
-                    }
-                    _rules.save();
-                    startJob(sync::Job::Update, "");
                     return true;
                 }
                 if (r.toggle) {
@@ -1699,32 +1693,13 @@ void AppRoast::pollSync()
     if (_screen != Screen::Sync) return;
     sync::Status st = sync::Get();
     // done: clean heap, no second sync. A firmware check stays on screen: what was found, what to do in the Launcher.
-    if (st.finished && st.ok && st.job != sync::Job::Update) restartApp(true);
+    if (st.finished && st.ok) restartApp(true);
 }
 
 bool AppRoast::keySync(int code)
 {
     sync::Status st = sync::Get();
     if (!st.finished) return true;  // nothing to do while it runs: no cancel, no retry
-    if (st.job == sync::Job::Update) {
-        if (st.ok && !st.upToDate && code == KEY_ENTER) {  // to the Launcher: it installs roast/update/Roast.bin
-            close();
-            return true;
-        }
-        if (!st.ok && code == KEY_ENTER) {
-            if (!sync::Start(sync::Job::Update, "")) toast("Update check could not start", DROP, 3000);
-            return true;
-        }
-        if (!st.ok && code == KEY_O) {
-            openNetwork();
-            return true;
-        }
-        if (code == KEY_ESC || code == KEY_ENTER) {
-            restartApp(true);  // back to Roast with a clean heap
-            return true;
-        }
-        return false;
-    }
     bool boot = st.job == sync::Job::Curves;
     if (code == KEY_ENTER) {  // boot sync must succeed: Enter tries again; other jobs: carry on without it
         restartApp(!boot);
@@ -1757,19 +1732,19 @@ void AppRoast::openSettings()
 void AppRoast::refreshNetSummary()
 {
     char ssid[33];
-    bool wifi    = roast_net_saved_wifi(ssid);
+    bool wifi    = roast_net_esphub_network(ssid);
     bool dropbox = roast_net_saved_dropbox();
     if (!wifi && !dropbox)
-        _netSummary = "set up Wi-Fi & Dropbox";
+        _netSummary = "ESP Hub Wi-Fi / Dropbox setup";
     else
-        _netSummary = std::string(wifi ? ssid : "no Wi-Fi") + (dropbox ? " · Dropbox" : " · no Dropbox");
+        _netSummary = std::string(wifi ? ssid : "ESP Hub offline") + (dropbox ? " · Dropbox" : " · no Dropbox");
 }
 
 // Setup needs NimBLE for itself (and the memory BLE + Wi-Fi + TLS take), so the roaster link closes meanwhile.
 void AppRoast::openNetwork()
 {
     if (_phase != Phase::Idle || _fanRunning) {
-        toast("Stop the fan before network setup", WARN);
+        toast("Stop the fan before Dropbox setup", WARN);
         return;
     }
     releaseExternal();

@@ -1,14 +1,6 @@
-/*
- * Wi-Fi and Dropbox setup over Bluetooth, compatible with the Coffee Watch setup page
- * (https://e7h4n.github.io/coffee-watch/). Ported from e7h4n/coffee-watch (MIT): same GATT service, packets and
- * status JSON, so the page pairs a Cardputer exactly like a watch.
- *
- * Everything runs only while the setup screen is open: roast_net_open() starts Wi-Fi (joining the saved network)
- * and a NimBLE peripheral that advertises the setup service and shows a six-digit passkey; roast_net_close() stops
- * both and frees their memory. The roaster link must be closed first: both use NimBLE, and the device has no PSRAM.
- *
- * Credentials (Wi-Fi password, Dropbox App key/secret and refresh token) live in NVS namespaces "rn_wifi" and
- * "rn_dropbox"; they are never logged or returned over GATT.
+/* Dropbox authorization over authenticated Bluetooth. ESP Hub owns Wi-Fi and OTA.
+ * Only the Dropbox setup service starts/stops here. NVS rn_dropbox is retained;
+ * no rn_wifi credentials are read or written. Network state is a read-only SDK view.
  */
 #pragma once
 #include <stdbool.h>
@@ -44,21 +36,19 @@ typedef struct {
     char dropbox_error[40];
 } rn_view_t;
 
-/// Starts Wi-Fi and the Bluetooth setup service. False when NimBLE or Wi-Fi could not start.
+/// Starts the Dropbox Bluetooth setup service. ESP Hub remains connected.
 bool roast_net_open(void);
-/// Stops the setup service and Wi-Fi and frees their memory. Waits for a Dropbox request in flight.
+/// Stops Dropbox Bluetooth setup only. Waits for a Dropbox request in flight.
 void roast_net_close(void);
 /// A Dropbox request (authorize or upload check) is running.
 bool roast_net_busy(void);
 rn_view_t roast_net_view(void);
 
-/// Sync: joins the saved network (no Bluetooth). Fails fast: no saved network, a failed join or `timeout_ms` without
-/// an IP address. err gets a short reason.
-bool roast_net_wifi_up(int timeout_ms, char *err, size_t errlen);
-void roast_net_wifi_down(void);
+/// Wait for an IP address from the ESP Hub SDK; this never changes Wi-Fi configuration.
+bool roast_net_wait_for_network(int timeout_ms, char *err, size_t errlen);
 
 /// Saved state, read from NVS without starting anything (for the rules page).
-bool roast_net_saved_wifi(char ssid[33]);
+bool roast_net_esphub_network(char ssid[33]);
 bool roast_net_saved_dropbox(void);
 
 #ifdef __cplusplus

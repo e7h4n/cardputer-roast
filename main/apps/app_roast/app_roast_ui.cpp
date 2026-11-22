@@ -9,7 +9,6 @@
 #include "app_roast.h"
 #include "fonts/roast_fonts.h"
 #include "net/roast_net.h"
-#include "roast_update.h"
 #include <cmath>
 #include <climits>
 #include <cstring>
@@ -1325,7 +1324,6 @@ void AppRoast::renderSettings()
     auto value = [&](const RuleRow& r, bool live) {
         if (r.toggle) return std::string(*r.toggle ? "on" : "off");
         if (r.network) return clipTo(_netSummary, W - 30 - tw(r.label, F12()), F12());
-        if (r.firmware) return clipTo(update::Installed(), W - 30 - tw(r.label, F12()), F12());
         if (r.simToggle) return std::string(_link && _link->isSimulated() ? "on" : "off");
         bool isInt = whole(r);
         float v0   = live ? _setVal[0] : (r.f[0] ? *r.f[0] : (float)*r.i[0]);
@@ -1377,57 +1375,10 @@ void AppRoast::renderSettings()
 }
 
 /* ================================================================== sync */
-// Firmware check: what is running here, what the latest release is, and what to do next.
-void AppRoast::renderUpdate(const sync::Status& st)
-{
-    std::string here = std::string("this build ") + update::Installed();
-    if (!st.finished) {
-        bool down = st.step == "downloading";
-        text(4, 0, down ? "Downloading " + st.file : "Checking for an update", F16(), CURVE);
-        text(4, 30, here, F12(), DIM);
-        if (down && st.total) {
-            int w = (W - 8) * (int)std::min<uint64_t>(st.done, st.total) / (int)st.total;
-            cv().drawRect(4, 52, W - 8, 10, LINE);
-            cv().fillRect(5, 53, std::max(0, w - 2), 8, CURVE);
-            char b[48];
-            snprintf(b, sizeof b, "%.1f / %.1f MB", st.done / 1048576.0, st.total / 1048576.0);
-            text(4, 68, b, F12(), INK);
-        } else {
-            text(4, 52, st.step, F12(), INK);
-        }
-        cv().drawFastHLine(0, BAR_Y, W, LINE);
-        return;
-    }
-    if (!st.ok) {
-        text(4, 0, "Update failed", F16(), DROP);
-        text(4, 26, clipTo(st.error.empty() ? "unknown error" : st.error, W - 8, F12()), F12(), INK);
-        text(4, 44, here, F12(), DIM);
-        keybar({{"Enter", INK, "try again"}, {"O", INK, "network"}, {"Esc", FAINT, "back"}});
-        return;
-    }
-    if (st.upToDate) {
-        text(4, 0, "Up to date", F16(), GO);
-        text(4, 26, here, F12(), INK);
-        text(4, 44, "latest release " + st.latest, F12(), DIM);
-        keybar({{"Esc", FAINT, "back"}});
-        return;
-    }
-    text(4, 0, st.latest + " is on the card", F16(), GO);
-    text(4, 22, here, F12(), DIM);
-    text(4, 40, "Launcher: press the key bound to", F12(), INK);
-    text(4, 56, update::kLauncherPath, F12(), CURVE);
-    text(4, 72, "(once: SD > Roast.bin > Bind to key)", F11(), DIM);
-    keybar({{"Enter", INK, "to Launcher"}, {"Esc", FAINT, "later"}});
-}
-
 void AppRoast::renderSync()
 {
     // Boot sync, curve push/delete: just "Syncing" (the corner says so too); details only when it failed.
     sync::Status st = sync::Get();
-    if (st.job == sync::Job::Update) {
-        renderUpdate(st);
-        return;
-    }
     bool failed     = st.finished && !st.ok;
     if (!failed) {
         text(W / 2, 58, "Syncing", F16(), CURVE, Datum::middle_center);
@@ -1456,11 +1407,11 @@ void AppRoast::renderSync()
 
 /* ======================================================== Wi-Fi & Dropbox */
 // Pair from the Coffee Watch setup page: it finds this device by its Bluetooth service, asks for the code shown here,
-// then sends Wi-Fi details and the Dropbox app key, secret and authorization code.
+// then sends only the Dropbox app key, secret and authorization code.
 void AppRoast::renderNetwork()
 {
     rn_view_t v = roast_net_view();
-    text(4, 0, "Wi-Fi & Dropbox", F16(), INK);
+    text(4, 0, "Dropbox setup", F16(), INK);
     if (!_netOpen || v.setup_error) {
         text(4, 24, "Bluetooth setup could not start.", F12(), DROP);
         char b[48];
@@ -1471,8 +1422,8 @@ void AppRoast::renderNetwork()
     }
     // how to pair: the page, this device's name, and the code the pairing dialog asks for
     text(4, 18, "In Chrome (computer or Android) open", F10(), DIM);
-    text(4, 29, "e7h4n.github.io/coffee-watch", F12(), INK);
-    text(4, 46, "Connect watch, pick", F10(), DIM);
+    text(4, 29, "e7h4n.github.io/cardputer-roast", F12(), INK);
+    text(4, 46, "Connect Cardputer, pick", F10(), DIM);
     text(4, 57, clipTo(v.device_name[0] ? v.device_name : "CardputerRoast", 138, F11()), F11(), INK);
     rbox(146, 44, W - 5, 74, 5, CARD);
     if (v.paired) {
@@ -1500,7 +1451,7 @@ void AppRoast::renderNetwork()
         w = std::string(wifiText[v.state]) + (v.ssid[0] ? std::string(" ") + v.ssid : "") +
             (v.state == RN_NET_FAILED ? " (" + std::to_string(v.reason) + ")" : "");
     dot(8, 87, 3, wc);
-    text(15, 81, "Wi-Fi", F12(), INK);
+    text(15, 81, "ESP Hub", F12(), INK);
     text(78, 82, clipTo(w, W - 82, F11()), F11(), v.state == RN_NET_CONNECTED ? INK : DIM);
     // Dropbox
     std::string ds = v.dropbox, d;

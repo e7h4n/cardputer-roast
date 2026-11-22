@@ -2,7 +2,7 @@
 
 [English](README.md) | **中文**
 
-Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE** 流化床咖啡烘豆机的随身控制器（这台机器原本用手机 App *myERoast* 控制）。它通过蓝牙 BLE 和烘豆机通信，由 Cardputer 上的 PID 跟随烘焙曲线，并在 240×135 的屏幕上带你走完一锅：投豆、脱水、一爆、发展、排豆、冷却，最后生成总结。记录存到 SD 卡，可以直接导入 Artisan。它作为社区 [Launcher](https://github.com/bmorcelli/Launcher) 下的一个 app 运行。
+Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE** 流化床咖啡烘豆机的随身控制器（这台机器原本用手机 App *myERoast* 控制）。它通过蓝牙 BLE 和烘豆机通信，由 Cardputer 上的 PID 跟随烘焙曲线，并在 240×135 的屏幕上带你走完一锅：投豆、脱水、一爆、发展、排豆、冷却，最后生成总结。记录存到 SD 卡，可以直接导入 Artisan。它作为 ESP Hub 管理的原生应用运行。
 
 <p>
 <img src="docs/screenshots/prep.png" width="49%" alt="准备页">
@@ -18,7 +18,7 @@ Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE*
 - **带保护的风力控制。** 风力每次调 1% 或 0.1%；要降到 50% 和 40% 以下，必须特意长按。
 - **曲线编辑器。** 只有初始温度、一爆开始和排豆（时间和温度）三行，直接在设备上编辑，旁边实时显示曲线和它规划的发展，保存到 SD 卡。
 - **烘焙记录。** 每锅都会保存 `.csv`（每秒一行）、`.json` 总结，以及可导入 Artisan 的 `.alog`。
-- **Wi-Fi 和 Dropbox 配对。** 和手表一样，在 Chrome 里打开 [Coffee Watch 配置页](https://e7h4n.github.io/coffee-watch/)，通过加密蓝牙配好 Wi-Fi 和你自己的 Dropbox app（App folder 权限）。两者都是必需的。
+- **ESP Hub 网络和 Dropbox 蓝牙授权。** Wi-Fi 交给 ESP Hub；仅通过蓝牙配置自己的 Dropbox app（App folder 权限）。
 - **Dropbox 同步。** 曲线以 Dropbox 为准：每次开机同步一次，在设备上保存或删除曲线会马上写回 Dropbox。每锅的记录在总结页、风机关掉之后存到 Dropbox。
 - **模拟器。** 内置简单的热学模型，没有机器也能练习和测试；开启时右上角显示黄色 SIM 标签。
 - **按功能着色的界面。** 颜色 = 它控制什么：风机蓝、火力橙、曲线/PID 紫、打点黄/棕、排豆和报警红、"可以进行"绿。底栏永远显示当前能按的键。
@@ -35,28 +35,15 @@ Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE*
 | ![冷却](docs/screenshots/cooling.png) 冷却：降到冷机温度的进度 | ![总结](docs/screenshots/summary.png) 总结，已保存到 SD 卡 |
 | ![规则](docs/screenshots/rules.png) 规则与提醒 | ![按键](docs/screenshots/keys.png) 按键页，按颜色分组 |
 
-## 安装（通过 Launcher）
-1. **安装 Launcher：** 用 [M5Burner](https://docs.m5stack.com/en/download) 或 [Launcher 网页刷机工具](https://bmorcelli.github.io/Launcher/) 给 Cardputer ADV 刷入 Launcher。
-2. **下载 `cardputer-roast-<版本>.bin`：** 在 [Releases](../../releases) 页面下载（每次 CI 运行也会保留一份附件）。这是 Launcher 安装用的 app 镜像，不是整片刷写镜像。
-3. **在 Launcher 里安装**，两种方式任选：
-   - **SD 卡：** 把 `.bin` 拷到 SD 卡，在 Launcher 里打开 SD 文件浏览，选中文件安装。
-   - **USB 串口：** 让 Launcher 停在菜单界面，然后运行
-     ```sh
-     pip install pyserial
-     python3 tools/launcher_flash.py Roast cardputer-roast-<版本>.bin
-     ```
-4. **可选：** 在 Launcher 设置（CFG）里打开开机直接进入 app，这样一开机就进 Roast。之后在 Roast 里按两次 Esc，会先显示约 5 秒 Launcher 启动画面，然后自动回到 Roast。
+## 安装与更新（ESP Hub）
 
-请插入 FAT32 格式的 SD 卡来存放曲线和记录。没有 SD 卡时，最近一锅的记录只保存在内存里，离开总结页就没有了。
+本项目现在构建原生 ESP-IDF 应用，通过 ESP Hub 安装。先完成 Cardputer ADV 的 ESP Hub 注册和 USB 配网；已有 ESP Hub 的设备无需重新配网或清空闪存。
 
-### 升级
-每次合并到 main 都会自动发布一个 Release，版本号 `v0.3.<main 上的提交数>`。Roast 不能覆盖自己（它运行在 Launcher 给它装的那个分区上），所以由 Roast 下载、Launcher 安装：
+CI 发布应用 `.bin`、`SHA256SUMS` 和 `esphub.json`。调用 `launcher.enter`，等待设备以 launcher 角色上线，再用 `ota.install(kind="micropython", url=<Release 的 bin 下载地址>)` 安装。此处 `micropython` 只是现有应用 OTA 通道名称，固件本身是原生 C++，没有 Python 解释器。检查安装日志和下次启动的 `cardputer-roast` 身份。
 
-1. **规则 › SYNC › firmware** 显示当前固件版本。按 Enter 检查 GitHub（需要已经配好 Wi-Fi；检查时会断开和烘豆机的连接）。如果最新 Release 更新（或者当前不是正式 Release 版本），就下载到 SD 卡的 `/roast/update/Roast.bin`，并按 Release 里的 `latest.json` 核对大小和 SHA-256。卡上已经有同一个文件就不重复下载。
-2. **按 Enter** 回到 Launcher，在它的启动画面按任意键停在菜单。
-3. **在 Launcher 里按绑定到 `/roast/update/Roast.bin` 的那个键。**第一次要先绑定：SD 浏览 › `roast/update/Roast.bin` › *Bind to key*（比如 U）。Launcher 安装后会直接启动新的 Roast。flash 满了时它会问用哪个 app 分区：选旧的 Roast（比如 `roast0`）。Launcher 安装不动 NVS，规则、Wi-Fi 和 Dropbox 设置都保留。
+保留 ESP Hub 的两个 launcher、NVS、配网和设备身份；应用位于 `0x2a0000`，大小上限 4 MiB。不要使用旧社区 Launcher 安装工具或通用 `idf.py flash` 覆盖分区表。固件不再自行检查 GitHub 更新、下载 `Roast.bin` 或维护 `latest.json`。更新由 ESP Hub 发起，执行更新前应让烘焙结束并关闭风机。
 
-烘焙中不能升级：检查只在规则页里，烘焙时进不去。现在的镜像 1.93 MB，第一次安装时 Launcher 给 Roast 分的分区是 1.97 MB（0x1E0000），只剩约 31 KB 余量。镜像再大就放不进去，那时要先在 Launcher 里删掉旧 Roast 再装。
+插入 FAT32 SD 卡来存储曲线和记录。
 
 ## 使用说明
 先关掉手机上的 *myERoast*：烘豆机同一时间只接受一个蓝牙连接。
@@ -64,6 +51,9 @@ Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE*
 Roast 会自动搜索名为 `E-Meter…BLE` 的设备并连接。没有机器想先试用，可以在连接页按 **D**，或在规则页（**O**）里打开 *simulator*（模拟器）。只有机器没在运行时才能切换模拟器。
 
 任何页面按 **H** 都能看到按颜色分组的按键说明。右上角显示电量、连接状态（绿点，模拟器时是 SIM 标签），没插 SD 卡时显示红色 **SD** 标签。
+
+
+电量与 Cardputer ADV 官方示例一致，直接显示 M5Unified 返回的百分比，包括 0%。连接 USB 时，Cardputer ADV 的电源开关需置于 ON 才能充电。
 
 ### 准备页
 页面按四步引导：曲线 → 批次 → 开风 → 投豆。
@@ -108,17 +98,13 @@ Roast 会自动搜索名为 `E-Meter…BLE` 的设备并连接。没有机器想
 
 接线（与 Cap TFT V2 一致）：SCK 40、MOSI 14（和 SD 卡共用 SPI2）、CS 5、DC 6、RST 3，背光直接接 3.3 V。外屏每次写入都会先锁住总线，SD 卡照常工作。Cardputer 没有 PSRAM，放不下整帧缓冲：每帧分成 320×16 的条带，主循环每转一次画一条，最多每秒一帧，内容没变就不画。Wi-Fi 和 TLS 运行期间（同步、保存记录）外屏保留最后一帧。没装外屏时一切照旧。
 
-### Wi-Fi 和 Dropbox
-按 **O**（连接页也可以）› *network* 进入配置页。进入前会先断开烘豆机（配置要独占蓝牙），所以只能在风机关着时进入。按 **Esc** 退出配置，Roast 会重启（几秒钟）再重新连接烘豆机：蓝牙、Wi-Fi 和 HTTPS 用过之后内存碎片太多，不够开始烘焙，重启能拿回完整的内存。
+### ESP Hub 网络与 Dropbox 蓝牙授权
 
-1. 在电脑或安卓手机的 Chrome 里打开 https://e7h4n.github.io/coffee-watch/ ，点 **Connect watch**。
-2. 选 `CardputerRoast-XXXX`。系统配对弹窗要求输入时，输入 Cardputer 屏幕上的 6 位配对码。
-3. 填 2.4 GHz 的 Wi-Fi。Cardputer 拿到 IP 才算连上，这时才会保存。
-4. 关联 Dropbox：在 [App Console](https://www.dropbox.com/developers/apps) 建一个 Scoped access、App folder 权限的 app，勾上 `files.content.write`、`files.content.read` 和 `files.metadata.read`，在网页上填它的 App key 和 App secret，到 Dropbox 点允许，把页面显示的授权码贴回来。Cardputer 自己用授权码换长期 token 并保存，页面显示 *Authorization saved* 就完成了。这里不试传文件（蓝牙开着时内存不够再建一次 HTTPS 连接）：退出配置后的开机同步不开蓝牙，是第一次真正用这个账号，账号有问题就同步失败并显示原因。页面上的 *Check Dropbox upload* 只刷新一次 token。也可以直接用 Coffee Watch 的 Dropbox app，两台设备共用同一个 app 文件夹。
+Wi-Fi 凭据、连接、重连和 SNTP 都由 ESP Hub SDK 管理。固件不再读取或写入 `rn_wifi`，也不提供 BLE Wi-Fi 配网特征。通过 ESP Hub 配置 Wi-Fi。
 
-协议、数据包和状态都和 Coffee Watch 一样（[说明](https://github.com/e7h4n/coffee-watch/blob/main/spec/dropbox.md)），代码移植自它的固件。账号信息只通过加密、已认证的蓝牙连接发送，保存在 NVS（`rn_wifi`、`rn_dropbox`；普通 flash，没有开 flash 加密），不会写进日志，也不能通过蓝牙读出来。Wi-Fi、蓝牙配置服务和 TLS 缓冲只在这个页面打开时运行。网页上的 Remove Dropbox 只会清掉 Cardputer 上的授权；要彻底撤销，到 Dropbox 设置的 Connected apps 里断开。
+按 **O → Dropbox** 打开蓝牙授权页，仅在风机关闭时可进入。烘豆机连接先释放，因为它与 Dropbox 配置共享 NimBLE。页面显示配对码和只读的 ESP Hub 网络状态；退出时只停止 Dropbox 蓝牙服务，不关闭 Hub 的 Wi-Fi。
 
-规则页会显示已保存的 Wi-Fi 和 Dropbox 是否已关联。Dropbox 配置时会通过 SNTP 对时，之后新记录的编号改成日期（`YYYYMMDD-HHMMSS`，UTC），不再是 `R####`，直到下次断电。
+保留原有加密、已认证的 Dropbox GATT 协议：服务 `c9a81001-9a9d-4f55-a621-5b4e7699b647`，配置特征 `...1005...`（v2 authorize/forget/check 包），状态特征 `...1006...` 和通知特征 `...1004...`。原 Wi-Fi 写入特征 `...1002...` 已移除；使用仓库自带的 `tools/dropbox-setup.html`，不再依赖该特征。用电脑 Chrome 打开 [Dropbox 配置页](https://e7h4n.github.io/cardputer-roast/)，CI 会将它发布到 GitHub Pages。Dropbox App key、secret 和 refresh token 仍只保存在 `rn_dropbox`，不会返回给客户端或写日志。
 
 ### Dropbox 同步
 Wi-Fi 和 Dropbox 都是必需的：两者没配好之前，开机就直接进配置页。下面的文件都放在 Dropbox app 的文件夹里（Dropbox › 应用 › *app 名*）。每次上传、下载都会核对 Dropbox 的 `content_hash`。所有操作都不重试：失败就停下，在屏幕上显示原因。
@@ -335,17 +321,17 @@ SD 卡需要 FAT32 格式。没有 SD 卡时，记录只保存在内存里，关
 - 运行参数写入（寄存器 20–29）。
 
 ## 编译
-使用 ESP-IDF **v5.4.2**：
+使用 ESP-IDF **v5.5**：
 ```sh
 python3 fetch_repos.py        # 把 M5GFX、M5Unified、mooncake 等依赖克隆到 components/
-idf.py build                  # 生成 build/cardputer-roast.bin（Launcher 安装用的 app 镜像）
+idf.py build                  # 生成 build/cardputer-roast.bin（ESP Hub 原生应用镜像）
 ```
-CI 在 `espressif/idf:v5.4.2` 容器里执行同样的步骤。每次推送到 main 都会发布 Release `v0.3.<main 上的提交数>`（推送 `v*` 标签则用那个标签），附上 `.bin`、`SHA256SUMS` 和 `latest.json`（`{"version","bin","size","sha256"}`，升级检查读的就是它）。版本号会编进固件（`ROAST_VERSION` → `PROJECT_VER`）；本地编译用 `git describe`。
+CI 使用 `espressif/idf:v5.5`，main 发布 `v0.4.<提交数>`，手动分支构建发布 `esphub-<短 SHA>` 预发布版本。附件为应用 `.bin`、`SHA256SUMS` 和 ESP Hub 部署清单 `esphub.json`。
 
 ### 桌面预览
 不用设备也能检查界面。`tools/preview/` 把 Roast 的真实代码（页面、按键、曲线、记录）编译成桌面程序，用替身 HAL、假时钟和内置模拟器（`roast_link_sim.cpp`）跑一锅预设的烘焙，把每个页面导出为 240×135 的 PNG：
 ```sh
-export IDF_PATH=~/esp/esp-idf-v5.4.2      # 用到其中的 cJSON
+export IDF_PATH=~/esp/esp-idf-v5.5      # 用到其中的 cJSON
 tools/preview/build.sh && build_preview/preview build_preview/shots
 python3 tools/preview/sheet.py build_preview/shots sheet.png   # 可选：拼成总览图（需要 Pillow）
 ```
@@ -377,4 +363,4 @@ python3 tools/rdbg.py raw 'ls /sdcard/roast/logs' 2
 
 本仓库的其余内容，包括 `main/apps/app_roast/preset_dark.h` 中的深烘预设数据，均以 MIT 许可证发布。
 
-app 打包面向 [bmorcelli/Launcher](https://github.com/bmorcelli/Launcher)。
+应用打包面向 ESP Hub Cardputer ADV 的应用分区。
