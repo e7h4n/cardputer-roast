@@ -222,6 +222,7 @@ private:
     bool confirmPending(int key) const;
 
     void selectCurve(int idx);
+    void loadStartupCurves();
     void reloadCurves();
     void startFan();
     void charge();

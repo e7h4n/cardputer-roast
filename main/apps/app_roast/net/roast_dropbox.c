@@ -37,6 +37,8 @@
 #define TAG "rn-dropbox"
 #define NVS_NS "rn_dropbox"
 #define TOKEN_URL "https://api.dropboxapi.com/oauth2/token"
+#define LIST_URL "https://api.dropboxapi.com/2/files/list_folder"
+#define LIST_MORE_URL "https://api.dropboxapi.com/2/files/list_folder/continue"
 #define WRITE_SCOPE "files.content.write"
 #define RESPONSE_SETUP 4096  // setup: token and upload replies are ~1.5 KB
 #define RESPONSE_SYNC 16384  // sync: folder listings
@@ -173,8 +175,19 @@ static int http(const char *url, const char *body, size_t length, const char *ty
         }
         if (sent && esp_http_client_fetch_headers(h) >= 0) {
             int used = 0, got = 0;
-            while (used < (int)response_cap - 1 && (got = esp_http_client_read(h, response + used, (int)response_cap - 1 - used)) > 0)
-                used += got;
+            const bool listing = !strcmp(url, LIST_URL) || !strcmp(url, LIST_MORE_URL);
+            do {
+                if (used == (int)response_cap - 1) {
+                    if (!listing || response_cap >= RESPONSE_SYNC) break;
+                    size_t next = response_cap * 2;
+                    char *larger = realloc(response, next);
+                    if (!larger) break;
+                    response = larger;
+                    response_cap = next;
+                }
+                got = esp_http_client_read(h, response + used, (int)response_cap - 1 - used);
+                if (got > 0) used += got;
+            } while (got > 0 && !esp_http_client_is_complete_data_received(h));
             response[used] = 0;
             if (got >= 0 && esp_http_client_is_complete_data_received(h)) status = esp_http_client_get_status_code(h);
         }
@@ -440,8 +453,6 @@ int rn_dropbox_status(char *out, int capacity)
 /* =============================================================== sync client */
 #define DOWNLOAD_URL "https://content.dropboxapi.com/2/files/download"
 #define UPLOAD_URL "https://content.dropboxapi.com/2/files/upload"
-#define LIST_URL "https://api.dropboxapi.com/2/files/list_folder"
-#define LIST_MORE_URL "https://api.dropboxapi.com/2/files/list_folder/continue"
 #define DELETE_URL "https://api.dropboxapi.com/2/files/delete_v2"
 #define CHUNK 4096  // one TLS record (CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN); 8 KB left too little heap at save time
 
@@ -573,13 +584,13 @@ static bool json_ascii(const char *s, char *out, size_t cap)
 #undef PUT
 }
 
-bool rn_dbx_open(bool listing, char *err, size_t n)
+bool rn_dbx_open(char *err, size_t n)
 {
     if (task) {
         seterr(err, n, "setup is open");
         return false;
     }
-    response_cap = listing ? RESPONSE_SYNC : RESPONSE_SETUP;
+    response_cap = RESPONSE_SETUP;
     response     = calloc(1, response_cap);
     access_token = calloc(1, TOKEN_MAX);
     if (!response || !access_token) {
@@ -635,7 +646,7 @@ bool rn_dbx_list(const char *folder, rn_dbx_entry_cb cb, void *ctx, char *err, s
     char body[512];
     cJSON *b = cJSON_CreateObject();
     cJSON_AddStringToObject(b, "path", folder);
-    cJSON_AddNumberToObject(b, "limit", 25);
+    cJSON_AddNumberToObject(b, "limit", 4);
     bool okb = cJSON_PrintPreallocated(b, body, sizeof body, false);
     cJSON_Delete(b);
     if (!okb) {

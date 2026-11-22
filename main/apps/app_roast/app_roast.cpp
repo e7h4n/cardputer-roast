@@ -91,16 +91,6 @@ void AppRoast::onOpen()
 
     _rules.load();
     _sdOk = GetHAL().sdCardMount();
-    reloadCurves();
-    {
-        Settings s("roast", false);
-        std::string last = s.GetString("curve", "");
-        int idx          = 0;
-        for (size_t i = 0; i < _curves.size(); i++)
-            if (_curves[i].name == last) idx = (int)i;
-        selectCurve(_curves.empty() ? -1 : idx);
-        _bean = s.GetString("bean", "");
-    }
     _phase    = Phase::Idle;
     _screen   = Screen::Connect;
     _view     = 0;
@@ -120,10 +110,16 @@ void AppRoast::onOpen()
     // into the boot after setup).
     bool bypass = consumeBypass();
     bool skip   = consumeSkipSync();
+    bool configured = bypass || (roast_net_esphub_network(ssid) && roast_net_saved_dropbox());
+    if (bypass || skip || !configured) loadStartupCurves();
+    {
+        Settings s("roast", false);
+        _bean = s.GetString("bean", "");
+    }
     if (bypass) {  // test only: USB console `boot roast`
         startLink();
         toast("Test boot: no Dropbox sync", WARN, 4000);
-    } else if (!roast_net_esphub_network(ssid) || !roast_net_saved_dropbox()) {
+    } else if (!configured) {
         _netRequired = true;
         openNetwork();
     } else if (skip) {
@@ -257,6 +253,17 @@ int AppRoast::curveT() const
 }
 
 /* -------------------------------- curves --------------------------------- */
+void AppRoast::loadStartupCurves()
+{
+    reloadCurves();
+    Settings s("roast", false);
+    std::string last = s.GetString("curve", "");
+    int idx = 0;
+    for (size_t i = 0; i < _curves.size(); i++)
+        if (_curves[i].name == last) idx = (int)i;
+    selectCurve(_curves.empty() ? -1 : idx);
+}
+
 void AppRoast::reloadCurves()
 {
     _curves = ListCurves(_sdOk);
@@ -1584,6 +1591,7 @@ void AppRoast::restartApp(bool skipBootSync)
     s_bootFlag  = 0;
     _toastUntil = 0;
     if (skipBootSync) {
+        loadStartupCurves();
         startLink();
         _screen = Screen::Connect;
     } else {

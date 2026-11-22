@@ -28,6 +28,7 @@ const char* TAG         = "RoastSync";
 const char* kCurveDir   = ROAST_SD_ROOT "/roast/curves";
 const char* kLogDir     = ROAST_SD_ROOT "/roast/logs";
 constexpr int kWifiWait = 20000;
+constexpr int kHubWait = 45000;
 
 SemaphoreHandle_t s_mtx;
 Status s_st;
@@ -206,12 +207,12 @@ void run(void*)
             // Boot sync shares internal RAM with MQTT enrollment and its first TLS handshake.
             // Keep Dropbox available when the Hub is unreachable.
             const TickType_t start = xTaskGetTickCount();
-            while (!okou_connected() && xTaskGetTickCount() - start < pdMS_TO_TICKS(kWifiWait)) {
+            while (!okou_connected() && xTaskGetTickCount() - start < pdMS_TO_TICKS(kHubWait)) {
                 vTaskDelay(pdMS_TO_TICKS(100));
             }
         }
         step("signing in to Dropbox");
-        if (!rn_dbx_open(s_job == Job::Curves, s_err, sizeof s_err)) {
+        if (!rn_dbx_open(s_err, sizeof s_err)) {
             fail(s_err);
         } else {
             switch (s_job) {
