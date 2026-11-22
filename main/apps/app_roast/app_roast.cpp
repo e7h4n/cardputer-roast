@@ -3,7 +3,6 @@
  * Rendering lives in app_roast_ui.cpp.
  */
 #include "app_roast.h"
-#include "roast_battery.h"
 #ifndef LGFX_LINUX_FB
 #include <esp_log.h>
 #endif
@@ -198,13 +197,13 @@ void AppRoast::onRunning()
 
     uint32_t now = GetHAL().millis();
     if (_batMs == 0 || now - _batMs > 5000) {
-        int millivolts = GetHAL().batteryVoltage();
-        _batPct = roast::BatteryPercent(millivolts);
+        const int level = M5.Power.getBatteryLevel();
+        _batPct = (level >= 0 && level <= 100) ? level : -1;
 #ifndef LGFX_LINUX_FB
-        static int lastVoltage = -9999;
-        if (lastVoltage == -9999 || std::abs(millivolts - lastVoltage) >= 100) {
-            ESP_LOGI("roast-battery", "voltage_mV=%d percent=%d valid=%d", millivolts, _batPct, _batPct >= 0);
-            lastVoltage = millivolts;
+        static int lastLevel = -2;
+        if (_batPct != lastLevel) {
+            ESP_LOGI("roast-battery", "M5Unified percent=%d", _batPct);
+            lastLevel = _batPct;
         }
 #endif
         _batMs  = now;

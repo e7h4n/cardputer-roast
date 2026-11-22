@@ -71,7 +71,7 @@ machine is not running.
 dot, or the SIM tag) and a red **SD** tag without a card.
 
 
-Battery is estimated from voltage. An invalid/absent reading displays `--` rather than 0%. On USB, the Cardputer ADV power switch must be ON for charging; voltage-based percentage is approximate.
+The battery indicator displays the percentage returned by M5Unified, as in the official Cardputer ADV demo. A reading of 0% is displayed as 0%. On USB, the Cardputer ADV power switch must be ON for charging.
 
 ### Prep
 The page walks through four steps: curve → batch → fan → charge.

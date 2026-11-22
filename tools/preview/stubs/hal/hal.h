@@ -33,7 +33,6 @@ public:
     uint32_t millis();
     void delay(uint32_t) {}
     void pushCanvas() {}
-    int batteryVoltage() { return 3996; }
     bool sdCardMount() { return sd; }
     void setRoastBleActive(bool) {}
     bool bleKeyboardInited() { return false; }
@@ -43,7 +42,6 @@ Hal& GetHAL();
 struct FakePower {
     int level = 87;
     int getBatteryLevel() { return level; }
-    int getBatteryVoltage() { return 3300 + level * 8; }
 };
 struct FakeM5 {
     FakePower Power;
