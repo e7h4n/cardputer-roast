@@ -1,12 +1,13 @@
 --- a/firmware/components/okou_agent/src/okou_iot.c
 +++ b/firmware/components/okou_agent/src/okou_iot.c
-@@ -4,11 +4,17 @@
+@@ -4,11 +4,18 @@
  #include <stdio.h>
  #include <string.h>
  #include <stdlib.h>
 +#include <sys/lock.h>
  #include "mqtt_client.h"
  #include "esp_crt_bundle.h"
++#include "esp_log.h"
  #include "esp_random.h"
  #include "mbedtls/pk.h"
  #include "mbedtls/x509_csr.h"
@@ -18,7 +19,7 @@
 
  static esp_mqtt_client_handle_t mqtt;
  static cJSON *active_identity, *active_certificate;
-@@ -43,6 +49,13 @@
+@@ -43,6 +50,13 @@
              r->overflow = true;
              return ESP_FAIL;
          }
@@ -32,7 +33,7 @@
          memcpy(r->data + r->len, e->data, e->data_len);
          r->len += e->data_len;
      }
-@@ -54,16 +67,16 @@
+@@ -54,16 +68,16 @@
      if (!body || okou_hub_http_base(base, sizeof(base)) != ESP_OK || strncmp(base, "https://", 8))
          return NULL;
      snprintf(url, sizeof(url), "%s/api/device/iot/%s", base, operation);
@@ -52,18 +53,26 @@
                                          .event_handler = receive,
                                          .user_data = &r};
          esp_http_client_handle_t client = esp_http_client_init(&cfg);
-@@ -73,8 +86,8 @@
+@@ -71,17 +85,23 @@
+             okou_http_apply_auth(client);
+             esp_http_client_set_header(client, "Content-Type", "application/json");
              esp_http_client_set_post_field(client, payload, strlen(payload));
-             if (esp_http_client_perform(client) == ESP_OK) {
+-            if (esp_http_client_perform(client) == ESP_OK) {
++            esp_err_t err = esp_http_client_perform(client);
++            if (err == ESP_OK) {
                  *status = esp_http_client_get_status_code(client);
 -                r.data[r.len] = 0;
 -                if (*status == 200 && !r.overflow)
 +                if (r.data) r.data[r.len] = 0;
 +                if (*status == 200 && r.data && !r.overflow)
                      answer = cJSON_Parse(r.data);
++            }
++            if (!answer) {
++                ESP_LOGW("roast-hub", "%s: %s, HTTP %d, received %u bytes", operation,
++                         esp_err_to_name(err), *status, (unsigned)r.len);
              }
              esp_http_client_cleanup(client);
-@@ -82,6 +95,7 @@
+         }
      }
      free(payload);
      free(r.data);
