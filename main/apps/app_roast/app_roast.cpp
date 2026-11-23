@@ -1413,7 +1413,11 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     v.push_back(obsRow);
     rowI("SV lookahead", &_rules.svLookahead, nullptr, 0, 20, 1, " s");
     rowF("floor cap", &_rules.floorCap, nullptr, 1, 8, 0.5f, "°");
-    group("SYNC", CURVE);
+    group("SETUP", CURVE);
+    RuleRow boot;
+    boot.label = "Enter Bootloader";
+    boot.bootloader = true;
+    v.push_back(boot);
     RuleRow netRow;
     netRow.label   = "Dropbox";
     netRow.network = true;
@@ -1438,6 +1442,7 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
     bool range = r.f[1] || r.i[1];
     auto cur   = [&](int k) { return r.f[k] ? *r.f[k] : (float)*r.i[k]; };
     if (!_setEditing) {
+        if (code != KEY_ENTER && _pendingKey == kBootloaderConfirm) _pendingKey = 0;
         switch (code) {
             case KEY_UP:
                 if (_setSel > 0) _setSel--;
@@ -1446,6 +1451,15 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
                 if (_setSel < n - 1) _setSel++;
                 return true;
             case KEY_ENTER:
+                if (r.bootloader) {
+                    if (_phase != Phase::Idle || _fanRunning) {
+                        toast("Stop the fan first", WARN, 3000);
+                    } else if (confirm(kBootloaderConfirm, "", true)) {
+                        _rules.save();
+                        close();  // release the roaster link, then enter the EspHub Bootloader
+                    }
+                    return true;
+                }
                 if (r.simToggle) {
                     setSimulator(!(_link && _link->isSimulated()));
                     return true;

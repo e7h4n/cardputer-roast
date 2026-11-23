@@ -74,9 +74,11 @@ private:
         float lo = 0, hi = 0, step = 1;
         const char* unit = "";
         bool* toggle   = nullptr;  // on/off row
+        bool bootloader = false; // local Wi-Fi provisioning in the EspHub Bootloader
         bool network   = false;    // opens the Wi-Fi & Dropbox setup screen
         bool simToggle = false;    // simulator on/off
     };
+    static constexpr int kBootloaderConfirm = 4000;
     std::vector<RuleRow> ruleRows();
 
     // ---- core

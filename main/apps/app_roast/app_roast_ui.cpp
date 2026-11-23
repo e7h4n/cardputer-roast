@@ -1262,6 +1262,7 @@ void AppRoast::renderSettings()
     auto whole = [&](const RuleRow& r) { return r.i[0] != nullptr || r.step >= 1; };
     auto value = [&](const RuleRow& r, bool live) {
         if (r.toggle) return std::string(*r.toggle ? "on" : "off");
+        if (r.bootloader) return std::string("Wi-Fi setup");
         if (r.network) return clipTo(_netSummary, W - 30 - tw(r.label, F12()), F12());
         if (r.simToggle) return std::string(_link && _link->isSimulated() ? "on" : "off");
         bool isInt = whole(r);
@@ -1307,10 +1308,12 @@ void AppRoast::renderSettings()
         }
         y += 13;
     }
-    if (_setEditing)
+    if (confirmPending(kBootloaderConfirm))
+        confirmRow("Enter", "press Enter again to reboot");
+    else if (_setEditing)
         keybar({{"← →", INK, "±"}, {"0-9", INK, "type"}, {"Enter", GO, "ok"}, {"Esc", FAINT, "cancel"}});
     else
-        keybar({{"↑ ↓", INK, "select"}, {"Enter", INK, "change"}, {"Esc", FAINT, "back"}});
+        keybar({{"↑ ↓", INK, "select"}, {"Enter", INK, rows[selRow].bootloader ? "reboot" : "change"}, {"Esc", FAINT, "back"}});
 }
 
 /* ================================================================== sync */

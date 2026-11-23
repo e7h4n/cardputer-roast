@@ -129,6 +129,9 @@ Without the cap attached nothing changes.
 
 ### ESP Hub networking and Dropbox Bluetooth authorization
 
+For EspHub BLE Wi-Fi provisioning, start the beacon on your computer. With the fan off, open **O → Enter Bootloader** and press **Enter** twice to reboot into the provisioning window.
+
+
 ESP Hub owns Wi-Fi credentials, connection/reconnection, and SNTP. The application no longer reads/writes `rn_wifi` or exposes a BLE Wi-Fi provisioning characteristic. Configure Wi-Fi through ESP Hub.
 
 Open **O → Dropbox** with the fan off. The roaster link closes because the two roles share NimBLE. The screen shows the passkey and read-only Hub network status. Closing setup stops Dropbox Bluetooth, not the Hub Wi-Fi connection.

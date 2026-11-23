@@ -424,5 +424,27 @@ int main(int argc, char** argv)
     shot("prep_simulator");
     press("esc");
     shot("exit_confirm");
+
+    auto selectBootloader = [&] {
+        press("o");
+        for (int i = 0; i < 30; i++) press("down", 30);
+        press("up");
+        press("up");
+    };
+    press("s");
+    selectBootloader();
+    press("enter");
+    shot("bootloader_fan_blocked");
+    if (app.closed) return 1;
+    press("esc");
+    press("x");
+    press("x");
+    selectBootloader();
+    shot("bootloader_setting");
+    press("enter");
+    shot("bootloader_confirm");
+    if (app.closed) return 1;
+    press("enter");
+    if (!app.closed) return 1;
     return 0;
 }
