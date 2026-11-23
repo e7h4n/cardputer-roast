@@ -20,7 +20,6 @@ constexpr uint32_t FAN        = 0x266CF0;  // S, ↑↓, fan value and line
 constexpr uint32_t HEAT       = 0xF0761C;  // heater value and area
 constexpr uint32_t HEAT_AREA  = 0xF8CEA8;
 constexpr uint32_t CURVE      = 0x7E54D6;  // C, E, Tab, target, PID
-constexpr uint32_t CURVE_TINT = 0xD2C8EC;
 constexpr uint32_t DRY        = 0xDEAA22;  // Y: end of drying (starts Maillard)
 constexpr uint32_t FC         = 0x965C34;  // F: first crack (starts development)
 constexpr uint32_t FCE        = 0x643C22;  // G: end of first crack

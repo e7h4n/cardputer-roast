@@ -29,11 +29,17 @@ public:
 
     /* --------------------------------- Display -------------------------------- */
     M5GFX& display     = M5.Display;
-    LGFX_Sprite canvas = LGFX_Sprite(&M5.Display);  // the whole 240x135 screen
+    LGFX_Sprite canvas = LGFX_Sprite(&M5.Display);  // one band of the internal display
 
-    inline void pushCanvas()
+    lgfx::LovyanGFX& drawingSurface()
     {
-        canvas.pushSprite(0, 0);
+        if (canvas.getBuffer()) return canvas;
+        return display;
+    }
+    LGFX_Sprite& renderBuffer() { return canvas; }
+    inline void pushCanvas(int top)
+    {
+        if (canvas.getBuffer()) canvas.pushSprite(0, top);
     }
     // The Cap TFT V2's 320x240 screen (ext_display.h); drawing to it without the cap attached is harmless.
     ExtDisplay ext;

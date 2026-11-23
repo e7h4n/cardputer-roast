@@ -172,7 +172,8 @@ static bool makeScreens()
     cv.setColorDepth(16);
     auto& ex = GetHAL().ext;
     ex.setColorDepth(16);
-    return cv.createSprite(240, 135) && ex.createSprite(320, 240);
+    GetHAL().band.setColorDepth(16);
+    return cv.createSprite(240, 135) && GetHAL().band.createSprite(240, 27) && ex.createSprite(320, 240);
 }
 
 // advance the simulated roast one second at a time until cond() or the timeout
@@ -263,7 +264,16 @@ int main(int argc, char** argv)
 
     AppRoast app;
     g_app = &app;
-    app.onOpen();  // boot: curve sync from Dropbox first, then (after the restart) the roaster link
+    GetHAL().sd = false;
+    app.onOpen();
+    press("d");
+    press("s");
+    press("enter");
+    step(2000);
+    if (roast::g_activeLink) return 1;
+    shot("sd_required");
+    GetHAL().sd = true;
+    press("enter");  // retry mount and continue through the real startup path
     step(600);
     shot("boot_sync");
     step(1500);
@@ -282,9 +292,7 @@ int main(int argc, char** argv)
 
     press("c");
     shot("curves");
-    extShot("curves");
     press("down");
-    extShot("curves_highlight");
     press("up");
     press("enter");
     step(2500);
@@ -295,9 +303,6 @@ int main(int argc, char** argv)
     type("4");
     shot("editor_minutes");
     press("esc");
-    press("tab");
-    shot("editor_preview");
-    press("tab");
     press("esc");
 
     press("o");
@@ -339,6 +344,7 @@ int main(int argc, char** argv)
     for (int i = 0; i < 30; i++) press("down", 30);
     press("up", 60);
     shot("rules_sync_saved");
+    press("esc");  // leave Settings before operating the simulated roaster
 
     press("s");
     shot("fan_on");
