@@ -246,6 +246,7 @@ private:
 
     // ---- rendering (app_roast_ui.cpp)
     void render();
+    void drawFrame();
     void renderConnect();
     void renderPrep();
     void renderRoast();

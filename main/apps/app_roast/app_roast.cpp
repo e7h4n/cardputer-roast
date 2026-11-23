@@ -1627,7 +1627,6 @@ void AppRoast::pollSave()
         // The summary cannot open the curve library, and Roast restarts after the save.
         std::vector<Curve>().swap(_curves);
         releaseExternal();
-        GetHAL().releaseCanvas();
         _saveStarted = sync::Start(sync::Job::SaveRoast, _session.logId());
         if (!_saveStarted) toast("Dropbox save could not start", DROP, 3000);
         _dirty = true;
@@ -1687,7 +1686,6 @@ bool AppRoast::startJob(sync::Job job, const std::string& arg)
         _link.reset();
     }
     _linkState = _prevLinkState = LinkState::Off;
-    GetHAL().releaseCanvas();  // draw directly to the TFT while Dropbox TLS needs a contiguous block
     _session.release();  // the roast's samples are saved; free them for TLS
     _screen = Screen::Sync;
     _dirty  = true;

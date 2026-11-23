@@ -172,7 +172,8 @@ static bool makeScreens()
     cv.setColorDepth(16);
     auto& ex = GetHAL().ext;
     ex.setColorDepth(16);
-    return cv.createSprite(240, 135) && ex.createSprite(320, 240);
+    GetHAL().band.setColorDepth(16);
+    return cv.createSprite(240, 135) && GetHAL().band.createSprite(240, 27) && ex.createSprite(320, 240);
 }
 
 // advance the simulated roast one second at a time until cond() or the timeout

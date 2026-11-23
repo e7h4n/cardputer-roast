@@ -98,7 +98,7 @@ static bool DebugPoll(std::string& line)
 
 static void DebugShot()
 {
-    auto& screen = GetHAL().drawingSurface();
+    auto& screen = GetHAL().display;
     const int w = screen.width(), h = screen.height();
     std::vector<lgfx::swap565_t> pixels(w);
     printf("SHOT %d %d\n", w, h);
