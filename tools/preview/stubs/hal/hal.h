@@ -25,6 +25,7 @@ struct FakeButton {
 class Hal {
 public:
     LGFX_Sprite canvas;
+    LGFX_Sprite band;
     LGFX_Sprite ext;  // the external 320x240 screen (firmware: hal/ext_display.h)
     FakeDisplay display;
     FakeButton homeButton;
@@ -32,7 +33,9 @@ public:
     bool sd = true;
     uint32_t millis();
     void delay(uint32_t) {}
-    void pushCanvas() {}
+    lgfx::LovyanGFX& drawingSurface() { return band; }
+    LGFX_Sprite& renderBuffer() { return band; }
+    void pushCanvas(int top) { band.pushSprite(&canvas, 0, top); }
     bool sdCardMount() { return sd; }
     void setRoastBleActive(bool) {}
     bool bleKeyboardInited() { return false; }

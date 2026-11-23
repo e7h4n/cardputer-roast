@@ -67,9 +67,21 @@ const char* TagName(PointTag tag);
 const char* TagKey(PointTag tag);
 PointTag TagFromKey(const std::string& k);
 
-std::vector<Curve> BuiltinCurves();
-/// Built-ins first, then files from /sdcard/roast/curves (sorted by name).
-std::vector<Curve> ListCurves(bool sdMounted);
+struct CurveEntry {
+    std::string name;
+    std::string path; // empty for a built-in
+    bool readOnly = false;
+    bool matches(const Curve& curve) const
+    {
+        return path.empty() ? curve.builtin && name == curve.name : path == curve.path;
+    }
+};
+
+/// Metadata only: built-ins first, then SD file paths sorted by name.
+std::vector<CurveEntry> ListCurves();
+void RestoreCurve(const std::string& name, const std::string& path, Curve& out);
+/// Load the full 1 Hz control table.
+bool OpenLibraryCurve(const CurveEntry& entry, Curve& out);
 bool LoadCurveFile(const std::string& path, Curve& out);
 bool SaveCurveJson(Curve& c, std::string* err);  // writes c.path (creates it from the name if empty)
 bool EnsureDir(const char* path);

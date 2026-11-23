@@ -55,7 +55,7 @@ struct RoastMetrics {
 
 class Session {
 public:
-    void reset(const Curve* curve, float greenG, const std::string& bean);
+    bool begin(const std::string& id, const Curve* curve, float greenG, const std::string& bean);
     bool active() const
     {
         return _active;
@@ -68,19 +68,19 @@ public:
     {
         return _samples;
     }
+    const std::vector<Sample>& recent() const { return _recent; }
     int lastT() const
     {
-        return _samples.empty() ? 0 : _samples.back().t;
+        return recent().empty() ? 0 : recent().back().t;
     }
     float lastBT() const
     {
-        return _samples.empty() ? NAN : _samples.back().bt10 / 10.0f;
+        return recent().empty() ? NAN : recent().back().bt10 / 10.0f;
     }
-    /// Least-squares slope over the last 30 s, degC/min. NAN when not enough data.
-    float rorAt(int idx) const;
+    /// myERoast RoR from the latest 30 measurements, in degrees C per minute.
     float rorNow() const
     {
-        return _samples.empty() ? NAN : rorAt((int)_samples.size() - 1);
+        return recent().empty() || recent().back().ror10 == INT16_MIN ? NAN : recent().back().ror10 / 10.0f;
     }
 
     void setMark(Mark m, int t, float bt);
@@ -122,8 +122,6 @@ public:
 
     RoastMetrics metrics() const;
 
-    /// Opens the CSV log on the SD card. Returns false (and keeps running in memory) if no card.
-    bool openLog(const std::string& id);
     void flush();
     /// Writes <id>.json summary and <id>.alog (Artisan/myERoast importable); closes the CSV.
     bool finalize(std::string* err);
@@ -133,7 +131,7 @@ public:
     }
     bool logging() const
     {
-        return _csv != nullptr;
+        return _csv && !_ioFailed;
     }
     void close();
     /// Frees the samples and actions (after the log is written): sync needs the heap.
@@ -141,7 +139,7 @@ public:
     {
         std::vector<Sample>().swap(_samples);
         std::vector<Action>().swap(_actions);
-        std::vector<float>().swap(_curveTable);
+        std::vector<Sample>().swap(_recent);
     }
     void end()
     {
@@ -167,7 +165,14 @@ private:
     bool _ctlSet     = false;
     void writeControl();
     float _ctl[6]    = {};
-    std::vector<float> _curveTable;
+    // With an SD log, _samples is a bounded plot and _recent is the full-rate control window.
+    std::vector<Sample> _recent;
+    size_t _sampleCount = 0, _plotStride = 1;
+    bool _ioFailed = false;
+    bool openLog(const std::string& id);
+    float _peakHeat = NAN, _fcRor = NAN, _fc30Ror = NAN, _dropRor = NAN;
+    double _errorSum = 0;
+    int _errorCount = 0, _saturated = 0;
 };
 
 std::string NextLogId();
