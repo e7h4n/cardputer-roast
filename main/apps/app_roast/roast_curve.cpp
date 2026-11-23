@@ -111,8 +111,11 @@ float Curve::at(int t) const
 {
     if (table.empty()) return NAN;
     if (t <= 0) return table.front() + offset;
-    if (t >= (int)table.size()) return table.back() + offset;
-    return table[t] + offset;
+    if (t >= endTime()) return table.back() + offset;
+    if (samplePeriod == 1) return table[t] + offset;
+    int i = t / samplePeriod;
+    int span = std::min(samplePeriod, totalT - i * samplePeriod);
+    return table[i] + (table[i + 1] - table[i]) * (t % samplePeriod) / span + offset;
 }
 
 int Curve::tagTime(PointTag tag) const
@@ -180,6 +183,7 @@ struct Stretch {
 void Curve::build()
 {
     if (readOnly) return;
+    samplePeriod = 1;
     sortPoints();
     table.clear();
     if (pts.empty()) return;
@@ -457,9 +461,40 @@ bool LoadCurveFile(const std::string& path, Curve& out)
     return parse_alog_curve(txt, out);
 }
 
+// Only the selected curve needs every second in RAM. The library charts interpolate
+// between samples and retain the exact endpoint, including on a partial last interval.
+static void keepPreview(Curve& curve)
+{
+    if (!curve.valid()) return;
+    const int end = curve.endTime();
+    constexpr int period = 8;
+    std::vector<float> samples;
+    samples.reserve((end + period - 1) / period + 1);
+    for (int t = 0; t < end; t += period) samples.push_back(curve.table[t]);
+    samples.push_back(curve.table.back());
+    curve.table.swap(samples);
+    curve.totalT = end;
+    curve.samplePeriod = period;
+}
+
+bool OpenLibraryCurve(const Curve& preview, Curve& out)
+{
+    Curve selected;
+    if (preview.readOnly) {
+        if (!LoadCurveFile(preview.path, selected)) return false;
+    } else {
+        selected = preview;
+        selected.build();
+    }
+    if (!selected.valid()) return false;
+    out = std::move(selected);
+    return true;
+}
+
 std::vector<Curve> ListCurves(bool sdMounted)
 {
     std::vector<Curve> v = BuiltinCurves();
+    for (auto& curve : v) keepPreview(curve);
     if (!sdMounted) return v;
     DIR* d = opendir(kCurveDir);
     if (!d) return v;
@@ -477,7 +512,10 @@ std::vector<Curve> ListCurves(bool sdMounted)
     std::sort(files.begin(), files.end());
     for (auto& f : files) {
         Curve c;
-        if (LoadCurveFile(std::string(kCurveDir) + "/" + f, c)) v.push_back(std::move(c));
+        if (LoadCurveFile(std::string(kCurveDir) + "/" + f, c)) {
+            keepPreview(c);
+            v.push_back(std::move(c));
+        }
     }
     return v;
 }

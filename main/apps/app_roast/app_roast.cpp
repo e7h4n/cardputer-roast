@@ -263,19 +263,23 @@ void AppRoast::reloadCurves()
     _curves = ListCurves(_sdOk);
 }
 
-void AppRoast::selectCurve(int idx)
+bool AppRoast::selectCurve(int idx)
 {
     if (idx < 0 || idx >= (int)_curves.size()) {
         _hasCurve = false;
         _curve    = Curve();
-        return;
+        return false;
     }
-    _curve        = _curves[idx];
+    if (!OpenLibraryCurve(_curves[idx], _curve)) {
+        toast("Cannot load the selected curve", WARN);
+        return false;
+    }
     _curve.offset = _rules.curveOffset;
     _hasCurve     = _curve.valid();
     if (_curve.batchG > 0) _rules.greenG = (float)_curve.batchG;
     Settings s("roast", true);
     s.SetString("curve", _curve.name);
+    return true;
 }
 
 /* ------------------------------- commands -------------------------------- */
@@ -1043,7 +1047,7 @@ bool AppRoast::keyCurves(int code)
                 toast("No curves: N for a new one", FAINT);
                 return true;
             }
-            selectCurve(_listSel);
+            if (!selectCurve(_listSel)) return true;
             toast("Curve: " + _curve.name, CURVE);
             _view   = 0;
             _screen = Screen::Prep;
@@ -1054,7 +1058,7 @@ bool AppRoast::keyCurves(int code)
             } else if (_curves[_listSel].readOnly) {
                 toast(".alog curves are read-only", WARN);
             } else {
-                selectCurve(_listSel);
+                if (!selectCurve(_listSel)) return true;
                 edLoad();
                 _view   = 0;
                 _screen = Screen::Editor;
@@ -1620,8 +1624,7 @@ void AppRoast::pollSave()
             _link.reset();
         }
         _linkState = _prevLinkState = LinkState::Off;
-        // The curve library keeps every curve's 1 Hz table (~3 KB each); the summary cannot open it and Roast
-        // restarts after the save, so give that memory to Wi-Fi + TLS.
+        // The summary cannot open the curve library, and Roast restarts after the save.
         std::vector<Curve>().swap(_curves);
         releaseExternal();
         GetHAL().releaseCanvas();

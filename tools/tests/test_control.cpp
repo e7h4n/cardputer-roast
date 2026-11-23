@@ -352,6 +352,22 @@ int main()
         CHECK(std::fabs(with) < 0.3f);
     }
 
+    {
+        auto previews = ListCurves(false);
+        auto full = BuiltinCurves();
+        CHECK(previews.size() == full.size());
+        for (size_t i = 0; i < previews.size(); ++i) {
+            auto& preview = previews[i];
+            CHECK(preview.table.size() < full[i].table.size() / 4);
+            CHECK(preview.endTime() == full[i].endTime());
+            NEAR(preview.at(preview.endTime()), full[i].at(full[i].endTime()));
+            Curve selected;
+            CHECK(OpenLibraryCurve(preview, selected));
+            CHECK(selected.table == full[i].table);
+            CHECK(selected.samplePeriod == 1);
+        }
+    }
+
     // --- curves from first crack and drop: through both points, no corners, development at one speed
     {
         Curve c;

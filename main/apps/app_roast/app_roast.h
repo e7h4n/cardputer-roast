@@ -221,7 +221,7 @@ private:
     bool confirm(int key, const std::string& msg, bool quiet = false);
     bool confirmPending(int key) const;
 
-    void selectCurve(int idx);
+    bool selectCurve(int idx);
     void reloadCurves();
     void startFan();
     void charge();

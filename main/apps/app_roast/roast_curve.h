@@ -45,6 +45,7 @@ struct Curve {
     bool readOnly = false;  // .alog tables cannot be edited as keypoints
     std::vector<CurvePoint> pts;
     std::vector<float> table;  // 1 Hz target, index = seconds after charge
+    int samplePeriod = 1;  // seconds between samples; only library previews use a wider period
     float offset = 0;          // temperature compensation (myERoast tempCompensation): shifts the whole curve, ±30 degC
 
     bool valid() const
@@ -53,7 +54,7 @@ struct Curve {
     }
     int endTime() const
     {
-        return table.empty() ? 0 : (int)table.size() - 1;
+        return samplePeriod == 1 ? (int)(table.empty() ? 0 : table.size() - 1) : totalT;
     }
     float at(int t) const;
     int tagTime(PointTag tag) const;  // -1 if absent
@@ -70,6 +71,8 @@ PointTag TagFromKey(const std::string& k);
 std::vector<Curve> BuiltinCurves();
 /// Built-ins first, then files from /sdcard/roast/curves (sorted by name).
 std::vector<Curve> ListCurves(bool sdMounted);
+/// Restore the selected preview to the full 1 Hz control table.
+bool OpenLibraryCurve(const Curve& preview, Curve& out);
 bool LoadCurveFile(const std::string& path, Curve& out);
 bool SaveCurveJson(Curve& c, std::string* err);  // writes c.path (creates it from the name if empty)
 bool EnsureDir(const char* path);
