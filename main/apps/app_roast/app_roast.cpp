@@ -231,17 +231,6 @@ void AppRoast::onRunning()
     }
     if (_dirty || now - _lastRender > 250) {
         render();
-#ifndef LGFX_LINUX_FB
-        // The initial Dropbox sync may restart Roast even when the Hub is unreachable.
-        // Confirm a responsive UI locally; an early startup crash still rolls back.
-        static const uint32_t firstFrame = now;
-        static bool checked = false;
-        if (!checked && now - firstFrame >= 5000 && GetHAL().canvas.getBuffer()) {
-            checked = true;
-            esp_err_t result = okou_app_mark_valid();
-            ESP_LOGI(TAG, "local boot health: %s", esp_err_to_name(result));
-        }
-#endif
         _lastRender = now;
         _dirty      = false;
     }
