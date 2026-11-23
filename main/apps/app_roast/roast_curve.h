@@ -45,7 +45,6 @@ struct Curve {
     bool readOnly = false;  // .alog tables cannot be edited as keypoints
     std::vector<CurvePoint> pts;
     std::vector<float> table;  // 1 Hz target, index = seconds after charge
-    int samplePeriod = 1;  // seconds between samples; only library previews use a wider period
     float offset = 0;          // temperature compensation (myERoast tempCompensation): shifts the whole curve, ±30 degC
 
     bool valid() const
@@ -54,7 +53,7 @@ struct Curve {
     }
     int endTime() const
     {
-        return samplePeriod == 1 ? (int)(table.empty() ? 0 : table.size() - 1) : totalT;
+        return table.empty() ? 0 : (int)table.size() - 1;
     }
     float at(int t) const;
     int tagTime(PointTag tag) const;  // -1 if absent
@@ -68,14 +67,21 @@ const char* TagName(PointTag tag);
 const char* TagKey(PointTag tag);
 PointTag TagFromKey(const std::string& k);
 
-std::vector<Curve> BuiltinCurves(bool buildTables = true);
+struct CurveEntry {
+    std::string name;
+    std::string path; // empty for a built-in
+    bool readOnly = false;
+    bool matches(const Curve& curve) const
+    {
+        return path.empty() ? curve.builtin && name == curve.name : path == curve.path;
+    }
+};
+
 /// Metadata only: built-ins first, then SD file paths sorted by name.
-std::vector<Curve> ListCurves(bool sdMounted);
-/// Materialize one thumbnail from its library entry.
-bool LoadPreview(Curve& entry);
-void RestoreCurve(bool sdMounted, const std::string& name, const std::string& path, Curve& out);
+std::vector<CurveEntry> ListCurves();
+void RestoreCurve(const std::string& name, const std::string& path, Curve& out);
 /// Load the full 1 Hz control table.
-bool OpenLibraryCurve(const Curve& preview, Curve& out);
+bool OpenLibraryCurve(const CurveEntry& entry, Curve& out);
 bool LoadCurveFile(const std::string& path, Curve& out);
 bool SaveCurveJson(Curve& c, std::string* err);  // writes c.path (creates it from the name if empty)
 bool EnsureDir(const char* path);

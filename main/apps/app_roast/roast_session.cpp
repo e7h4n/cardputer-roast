@@ -14,7 +14,7 @@ namespace roast {
 #define ROAST_SD_ROOT "/sdcard"
 #endif
 static const char* kLogDir = ROAST_SD_ROOT "/roast/logs";
-static const size_t kMaxSamples = 1200;  // 20 minutes at 1 Hz
+
 
 const char* MarkName(Mark m)
 {
@@ -62,11 +62,11 @@ bool EnsureLogDir()
     return EnsureDir(kLogDir);
 }
 
-void Session::reset(const Curve* curve, float greenG, const std::string& bean)
+bool Session::begin(const std::string& id, const Curve* curve, float greenG, const std::string& bean)
 {
     close();
     release();
-    _diskHistory = _ioFailed = false;
+    _active = _ioFailed = false;
     _sampleCount = 0;
     _plotStride = 1;
     _peakHeat = _fcRor = _fc30Ror = _dropRor = NAN;
@@ -84,7 +84,7 @@ void Session::reset(const Curve* curve, float greenG, const std::string& bean)
     _id.clear();
     curveName = curve ? curve->name : "";
     curveEnd  = curve ? curve->endTime() : 0;
-    _active = true;
+    return openLog(id);
 }
 
 void Session::setControl(float heat, float ff, float p, float i, float d, float obs)
@@ -109,26 +109,22 @@ void Session::writeControl()
 
 void Session::addSample(const Sample& in)
 {
+    if (!_csv) return;
     Sample s = in;
-    auto& window = _diskHistory ? _recent : _samples;
-    if (!_diskHistory && window.size() >= kMaxSamples) return;
-    if (_diskHistory && window.size() == 32) window.erase(window.begin());
-    if (!_diskHistory && window.empty()) window.reserve(kMaxSamples);
+    if (_recent.size() == 32) _recent.erase(_recent.begin());
     s.ror10 = INT16_MIN;
-    if (window.size() >= 29 && s.t > 35)
-        s.ror10 = 2 * std::abs(s.bt10 - window[window.size() - 29].bt10);
-    window.push_back(s);
+    if (_recent.size() >= 29 && s.t > 35)
+        s.ror10 = 2 * std::abs(s.bt10 - _recent[_recent.size() - 29].bt10);
+    _recent.push_back(s);
 
-    if (_diskHistory) {
-        // Keep evenly spaced points plus the latest sample as the chart grows.
-        if (_sampleCount && (_sampleCount - 1) % _plotStride) _samples.pop_back();
-        if (_samples.size() == 160) {
-            for (size_t i = 0; i < 80; ++i) _samples[i] = _samples[2 * i];
-            _samples.resize(80);
-            _plotStride *= 2;
-        }
-        _samples.push_back(s);
+    // Keep evenly spaced points plus the latest sample as the chart grows.
+    if (_sampleCount && (_sampleCount - 1) % _plotStride) _samples.pop_back();
+    if (_samples.size() == 160) {
+        for (size_t i = 0; i < 80; ++i) _samples[i] = _samples[2 * i];
+        _samples.resize(80);
+        _plotStride *= 2;
     }
+    _samples.push_back(s);
     ++_sampleCount;
     const int fc = markT(Mark::FCs), drop = markT(Mark::Drop);
     if (fc >= 0 && s.t <= fc) _fcRor = rorNow();
@@ -142,15 +138,14 @@ void Session::addSample(const Sample& in)
         }
         if (drop >= 0) _dropRor = rorNow();
     }
-    if (_csv) {
-        const Sample& x = s;
-        char ror[12] = "";
-        if (x.ror10 != INT16_MIN) snprintf(ror, sizeof(ror), "%.1f", x.ror10 / 10.0);
-        fprintf(_csv, "%d,%.1f,%.1f,%.1f,%.1f,%s,%d,%d", x.t, x.bt10 / 10.0, x.tgt10 / 10.0, x.heat10 / 10.0,
-                x.fan10 / 10.0, ror, x.pid, x.mtime);
-        writeControl();
-        if (++_sinceFlush >= 10) flush();
-    }
+    if (_ioFailed) return;
+    char ror[12] = "";
+    if (s.ror10 != INT16_MIN) snprintf(ror, sizeof(ror), "%.1f", s.ror10 / 10.0);
+    fprintf(_csv, "%d,%.1f,%.1f,%.1f,%.1f,%s,%d,%d", s.t, s.bt10 / 10.0, s.tgt10 / 10.0, s.heat10 / 10.0,
+            s.fan10 / 10.0, ror, s.pid, s.mtime);
+    writeControl();
+    if (ferror(_csv)) _ioFailed = true;
+    if (++_sinceFlush >= 10) flush();
 }
 
 void Session::setMark(Mark m, int t, float bt)
@@ -205,7 +200,6 @@ RoastMetrics Session::metrics() const
 bool Session::openLog(const std::string& id)
 {
     close();
-    _id = id;
     if (!EnsureDir(kLogDir)) return false;
     std::string p = std::string(kLogDir) + "/" + id + ".csv";
     _csv          = fopen(p.c_str(), "w");
@@ -220,7 +214,8 @@ bool Session::openLog(const std::string& id)
         _ioFailed = false;
         return false;
     }
-    _diskHistory = true;
+    _active = true;
+    _id = id;
     _recent.reserve(32);
     _samples.reserve(160);
     return true;
@@ -267,9 +262,8 @@ static bool publishExport(const std::string& tmp, const std::string& path)
 
 bool Session::finalize(std::string* err)
 {
-    if (_id.empty()) _id = NextLogId();
-    if (!EnsureDir(kLogDir)) {
-        if (err) *err = "No SD card: log kept in memory only";
+    if (_id.empty()) {
+        if (err) *err = "SD card log unavailable";
         return false;
     }
     if (_csv) {
@@ -353,7 +347,7 @@ bool Session::finalize(std::string* err)
             fprintf(f, "\"roastertype\": \"E-Roast\", \"samplinginterval\": 1.0, \"weight\": [%.1f, %.1f, \"g\"], ",
                     _greenG, _roastedG);
             const char* keys[3] = {"timex", "temp1", "temp2"};
-            FILE* csv = _diskHistory ? fopen((base + ".csv").c_str(), "r") : nullptr;
+            FILE* csv = fopen((base + ".csv").c_str(), "r");
             int ti[8] = {};
             const int slots[] = {1, 2, 3, 6};
             for (int j = 0; j < 4; ++j)
@@ -375,9 +369,7 @@ bool Session::finalize(std::string* err)
                     }
                     ++count;
                 };
-                if (!_diskHistory) {
-                    for (const auto& x : _samples) write(x.t, x.tgt10 / 10.f, x.bt10 / 10.f);
-                } else if (csv && fseek(csv, 0, SEEK_SET) == 0) {
+                if (csv && fseek(csv, 0, SEEK_SET) == 0) {
                     char line[256];
                     while (fgets(line, sizeof line, csv)) {
                         bool data = line[0] >= '0' && line[0] <= '9';

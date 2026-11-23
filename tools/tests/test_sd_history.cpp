@@ -16,21 +16,19 @@ static std::string contents(const std::string& path)
 
 static void checkCurves()
 {
-    auto curve = BuiltinCurves().front();
+    Curve curve;
+    assert(OpenLibraryCurve(ListCurves().front(), curve));
     curve.name = "Saved curve";
     std::string error;
     assert(SaveCurveJson(curve, &error));
-    const auto catalog = ListCurves(true);
-    for (const auto& entry : catalog) assert(entry.table.empty());
-    auto preview = catalog.back();
-    assert(preview.name.empty() && preview.path == curve.path);
-    assert(LoadPreview(preview));
-    assert(preview.table.size() < curve.table.size() && preview.endTime() == curve.endTime());
+    const auto catalog = ListCurves();
+    const auto& entry = catalog.back();
+    assert(entry.name == "Saved_curve.json" && entry.path == curve.path);
     Curve selected;
-    assert(OpenLibraryCurve(preview, selected));
+    assert(OpenLibraryCurve(entry, selected));
     assert(selected.table == curve.table);
     for (const auto& path : {curve.path, std::string(), std::string("sd/roast/curves/missing.json")}) {
-        RestoreCurve(true, curve.name, path, selected);
+        RestoreCurve(curve.name, path, selected);
         assert(selected.name == curve.name && selected.path == curve.path && selected.table == curve.table);
     }
 }
@@ -50,8 +48,7 @@ int main()
 {
     checkCurves();
     Session session;
-    session.reset(nullptr, 200, "test");
-    assert(session.openLog("long"));
+    assert(session.begin("long", nullptr, 200, "test"));
     const int fc = 437, drop = 1323, count = 1473;
     for (int t = 0; t < count; ++t) {
         const auto s = sample(t);
@@ -99,10 +96,9 @@ int main()
 
     assert(rename("sd", "card-removed") == 0);
     std::ofstream("sd") << "mount unavailable";
-    session.reset(nullptr, 0, "");
-    assert(!session.openLog("fallback"));
-    for (int t = 0; t < count; ++t) session.addSample(sample(t));
-    assert(session.samples().size() == 1200 && session.lastT() == 1199);
+    assert(!session.begin("missing", nullptr, 0, ""));
+    session.addSample(sample(0));
+    assert(!session.active() && session.samples().empty() && session.recent().empty());
     assert(!session.finalize(&error));
-    puts("SD history: 1473 full-rate rows, preview selection, export retry and RAM fallback passed");
+    puts("SD catalog, full-rate export and required journal passed");
 }

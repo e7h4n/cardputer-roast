@@ -4,7 +4,7 @@
  *  - one hero number per screen; secondary numbers are small cards with a colour bar
  *  - the bottom row always shows the keys that work right now; it turns into a full-width colour bar only when
  *    something needs a hand (green = drop window, red = act now, yellow = attention)
- *  - top-right status corner: battery, link dot / SIM tag, missing SD
+ *  - top-right status corner: battery, link dot / SIM tag
  */
 #include "app_roast.h"
 #include "fonts/roast_fonts.h"
@@ -332,6 +332,11 @@ void AppRoast::drawFrame()
 {
     surface().fillScreen(BG);
     switch (_screen) {
+        case Screen::Storage:
+            text(6, 30, "SD card required", F19(), INK);
+            text(6, 60, "Insert a writable FAT32 card.", F12(), DIM);
+            keybar({{"Enter", GO, "retry"}, {"Esc", FAINT, "exit"}});
+            return;
         case Screen::Connect:
             renderConnect();
             break;
@@ -398,11 +403,6 @@ int AppRoast::renderStatus(bool draw)
         }
         x -= 19 + tw(pct, F11());
     }
-    if (!_sdOk) {
-        int w = tw("SD", F10()) + 8;
-        x -= w + 4;
-        if (draw) pill(x, 1, "SD", DROP);
-    }
     if (_link && _link->isSimulated()) {
         int w = tw("SIM", F10()) + 8;
         x -= w + 4;
@@ -468,13 +468,6 @@ void AppRoast::renderConnect()
 /* ================================================================== prep */
 void AppRoast::renderPrep()
 {
-    if (_view == 1 && _hasCurve) {
-        renderChart(0, 14, W - 1, BAR_Y - 1, true);
-        dot(7, 7, 3, CURVE);
-        text(14, 0, clipTo(_curve.name, W - 70, F14()), F14(), INK);
-        keybar({{"Tab", CURVE, "back"}, {"E", CURVE, "edit"}});
-        return;
-    }
     // curve line
     if (_hasCurve) {
         dot(7, 7, 3, CURVE);
@@ -716,10 +709,10 @@ void AppRoast::renderKeysBar()
 }
 
 /* ================================================================= chart */
-void AppRoast::renderChart(int x0, int y0, int x1, int y1, bool withText, const Curve* preview)
+void AppRoast::renderChart(int x0, int y0, int x1, int y1, bool withText)
 {
-    const Curve* target = preview ? preview : (_hasCurve ? &_curve : nullptr);
-    const bool live = !preview && (_session.active() || _phase == Phase::Done);
+    const Curve* target = _hasCurve ? &_curve : nullptr;
+    const bool live = _session.active() || _phase == Phase::Done;
     int lastT       = live ? _session.lastT() : 0;
     int tMax        = std::max({target ? target->endTime() + 30 : 0, lastT + 30, 360});
     tMax            = ((tMax + 59) / 60) * 60;
@@ -789,28 +782,13 @@ void AppRoast::renderChart(int x0, int y0, int x1, int y1, bool withText, const 
                 lx += 10 + text(lx + 10, ly, l.second, F10(), DIM) + 6;
             }
         }
-    } else if (target) {
-        // curve preview: label the key nodes in their mark colours
-        for (auto& p : target->pts) {
-            uint32_t c = p.tag == PointTag::Dry ? DRY : p.tag == PointTag::FCs ? FC : p.tag == PointTag::Drop ? DROP : 0;
-            if (!c) continue;
-            int px = PX(p.t), py = PY(target->at(p.t));
-            dot(px, py, 3, c);
-            if (p.tag == PointTag::Dry)
-                text(px + 5, py + 3, "dry " + mmss(p.t) + " · " + fmt0(target->at(p.t)) + "°", F10(), c);
-            else if (p.tag == PointTag::FCs)
-                text(px - 4, py - 3, "FC " + mmss(p.t) + " · " + fmt0(target->at(p.t)) + "°", F10(), c, Datum::bottom_right);
-            else
-                text(px, py + 6, "drop " + mmss(p.t), F10(), c, Datum::top_right);
-        }
-        dot(PX(0), PY(target->at(0)), 2, INK);
     }
 }
 
 /* ======================================================== external screen */
 constexpr int EW = 320, EH = 240, kStripH = 16, kHeadH = 34;
 
-uint32_t AppRoast::externalKey(const Curve* preview)
+uint32_t AppRoast::externalKey()
 {
     uint32_t h = 2166136261u;
     auto mix   = [&](uint32_t v) { h = (h ^ v) * 16777619u; };
@@ -819,7 +797,7 @@ uint32_t AppRoast::externalKey(const Curve* preview)
     };
     mix((uint32_t)_screen);
     mix((uint32_t)_phase);
-    const Curve* curve = _screen == Screen::Curves ? preview : (_hasCurve ? &_curve : nullptr);
+    const Curve* curve = _hasCurve ? &_curve : nullptr;
     if (curve) {
         mixS(curve->name);
         mix(curve->endTime());
@@ -830,7 +808,6 @@ uint32_t AppRoast::externalKey(const Curve* preview)
             mix((uint32_t)p.tag);
         }
     }
-    if (_screen == Screen::Curves) mix(_listSel);
     if (_screen == Screen::Prep || _screen == Screen::Connect) {
         mix((uint32_t)_linkState);
         mix(_link && _link->isSimulated());
@@ -919,7 +896,7 @@ void AppRoast::renderExternalPlan(int o)
 
 // The external screen's frame, in frame coordinates minus `top`: a header of four equal cells, the chart below it.
 // Roasting: time, bean temperature, RoR, and the first crack expected (before F) or the development left (after F).
-void AppRoast::renderExternal(int top, const Curve* preview)
+void AppRoast::renderExternal(int top)
 {
     const int o = -top;
     bool live   = _phase == Phase::Roasting || _phase == Phase::Cooling;
@@ -949,27 +926,12 @@ void AppRoast::renderExternal(int top, const Curve* preview)
         ExtCell(1, o, m.dev >= 0 ? "dev " + fmt1(m.devPct) + "%" : "dev", m.dev >= 0 ? mmss(m.dev) : "--", FC);
         ExtCell(2, o, "drop °C", m.markT[3] >= 0 ? fmt1(m.markBT[3]) : "--", DROP);
         ExtCell(3, o, "loss", std::isnan(m.lossPct) ? "--" : fmt1(m.lossPct) + "%", INK);
-    } else if (_screen == Screen::Curves) {
-        if (!preview) {
-            text(6, o + 2, "No curves", F14(), INK);
-            return;
-        }
-        text(6, o + 2, clipTo(preview->name, EW - 12, F14()), F14(), INK);
-        const int fc = preview->tagTime(PointTag::FCs);
-        const int drop = preview->tagTime(PointTag::Drop);
-        std::string detail;
-        if (fc >= 0) detail = "FC " + mmss(fc) + " · " + fmt0(preview->at(fc)) + "°";
-        if (drop >= 0) {
-            if (!detail.empty()) detail += "   ";
-            detail += "Drop " + mmss(drop) + " · " + fmt0(preview->at(drop)) + "°";
-        }
-        text(6, o + 19, detail, F11(), DIM);
     } else {
         renderExternalPlan(o);
         return;
     }
     band.drawFastHLine(0, o + kHeadH, EW, LINE);
-    renderChart(0, o + kHeadH + 2, EW - 1, o + EH - 1, live, preview);
+    renderChart(0, o + kHeadH + 2, EW - 1, o + EH - 1, live);
     if (_phase == Phase::Done)  // which roast: the chart's top right
         text(EW - 4, o + kHeadH + 5, clipTo(_session.logId() + (_hasCurve ? " · " + _curve.name : ""), EW / 2, F10()),
              F10(), DIM, Datum::top_right);
@@ -979,7 +941,7 @@ void AppRoast::renderExternal(int top, const Curve* preview)
 void AppRoast::pumpExternal()
 {
     const bool live = _phase == Phase::Roasting || _phase == Phase::Cooling;
-    const bool visible = live || _screen == Screen::Summary || _screen == Screen::Curves ||
+    const bool visible = live || _screen == Screen::Summary ||
                          _screen == Screen::Connect || _screen == Screen::Prep;
     if (!visible) {
         blankExternal();
@@ -989,11 +951,8 @@ void AppRoast::pumpExternal()
         if (_extStrip.getBuffer()) releaseExternal();
         return;
     }
-    const Curve* preview = nullptr;
-    if (_screen == Screen::Curves && _listSel >= 0 && _listSel < (int)_curves.size())
-        preview = &_curves[_listSel];
     uint32_t now = GetHAL().millis();
-    uint32_t key = live && _extRow >= 0 ? _extKey : externalKey(preview);
+    uint32_t key = live && _extRow >= 0 ? _extKey : externalKey();
     if (key != _extKey && !live) _extRow = -1;  // discard a partial frame when navigating
     if (_extRow < 0) {
         if (key == _extKey || (live && now - _extDrawMs < 1000)) return;
@@ -1007,7 +966,7 @@ void AppRoast::pumpExternal()
     }
     g_target = &_extStrip;
     _extStrip.fillScreen(BG);
-    renderExternal(_extRow * kStripH, preview);
+    renderExternal(_extRow * kStripH);
     g_target = nullptr;
     _extStrip.pushSprite(&GetHAL().ext, 0, _extRow * kStripH);
     _extVisible = true;
@@ -1160,43 +1119,25 @@ void AppRoast::renderCurves()
     int n = (int)_curves.size();
     int x = 4 + text(4, 0, "Curves", F16(), INK);
     text(x + 4, 5, std::to_string(_curves.size()), F11(), DIM);
-    int y = 18;
-    for (int i = _listTop; i < n && i < _listTop + 3; i++) {
-        bool sel = i == _listSel;
-        if (sel) {
-            rbox(2, y - 1, W - 8, y + 28, 5, CARD);
-            band.drawRoundRect(2, y - 1, W - 9, 30, 5, INK);
+    constexpr int top = 18, height = 20;
+    for (int i = _listTop; i < n && i < _listTop + kCurveRows; ++i) {
+        int y = top + (i - _listTop) * height;
+        if (i == _listSel) {
+            rbox(2, y, W - 8, y + height - 2, 4, CARD);
+            band.drawRoundRect(2, y, W - 9, height - 1, 4, INK);
         }
-        rbox(7, y + 3, 45, y + 25, 3, sel ? ui::WHITE : CARD);
-        auto& c          = _curves[i];
-        std::string name = c.name;
-        bool current     = _hasCurve && c.name == _curve.name;
-        int end          = std::max(60, c.endTime());
-        int px = -1, py = -1;
-        for (int s = 0; s <= end; s += std::max(1, end / 36)) {
-            int nx = 8 + 36 * s / end, ny = y + 24 - (int)(20 * (c.at(s) - 40) / 190);
-            if (px >= 0) band.drawLine(px, py, nx, ny, CURVE);
-            px = nx;
-            py = ny;
-        }
-        std::string meta = "drop " + mmss(c.endTime()) + " · " + fmt0(c.at(c.endTime())) + "°";
-        int fcT          = c.tagTime(PointTag::FCs);
-        if (fcT >= 0) meta += " · FC " + mmss(fcT);
-        if (c.batchG > 0) meta += " · " + std::to_string(c.batchG) + " g";
-        if (c.builtin) meta += " · sample";
-        if (c.readOnly) meta += " · alog";
-        text(52, y + 2, clipTo(name, W - 80, F12()), F12(), INK);
-        text(52, y + 16, clipTo(meta, W - 62, F10()), F10(), DIM);
+        const auto& entry = _curves[i];
+        const bool current = _hasCurve && entry.matches(_curve);
+        text(7, y + 2, clipTo(entry.name, W - 32, F14()), F14(), INK);
         if (current) {
             dot(W - 17, y + 8, 5, GO);
             check(W - 17, y + 8, ui::WHITE, 2);
         }
-        y += 32;
     }
-    if (n > 3) {  // scrollbar
-        band.fillRect(W - 4, 18, 2, 96, LINE);
-        int top = 18 + 96 * _listTop / n, h = std::max(6, 96 * 3 / n);
-        band.fillRect(W - 4, top, 2, h, INK);
+    if (n > kCurveRows) {
+        const int track = height * kCurveRows;
+        band.fillRect(W - 4, top, 2, track, LINE);
+        band.fillRect(W - 4, top + track * _listTop / n, 2, std::max(6, track * kCurveRows / n), INK);
     }
     if (confirmPending(3000))
         confirmRow("Del", "press Del again to delete (also on Dropbox)");
@@ -1207,13 +1148,6 @@ void AppRoast::renderCurves()
 /* ================================================================ editor */
 void AppRoast::renderEditor()
 {
-    if (_view == 1) {
-        renderChart(0, 14, W - 1, BAR_Y - 1, true);
-        dot(7, 7, 3, CURVE);
-        text(14, 0, clipTo(_curve.name, W - 70, F14()), F14(), INK);
-        keybar({{"Tab", CURVE, "back to edit"}, {"S", GO, "save"}});
-        return;
-    }
     static const char* names[3]   = {"Start", "Crack", "Drop"};
     static const uint32_t cols[3] = {INK, FC, DROP};
     dot(7, 7, 3, CURVE);
@@ -1227,7 +1161,7 @@ void AppRoast::renderEditor()
         const EdRow& r = _ed[i];
         bool sel       = i == _edRow;
         if (sel) {
-            rbox(1, y - 1, 140, y + 10, 3, CARD);
+            rbox(1, y - 1, W - 5, y + 10, 3, CARD);
             band.fillRect(1, y - 1, 2, 12, CURVE);
         }
         if (r.on)
@@ -1240,7 +1174,7 @@ void AppRoast::renderEditor()
             std::string sec = r.t >= 0 ? ((r.t % 60 < 10 ? "0" : "") + std::to_string(r.t % 60)) : "00";
             std::string a   = _edStage == 1 ? _edBuf : _edMin;
             std::string b2  = _edStage == 2 ? _edBuf : sec;
-            int bx0 = 65, cw = std::max(10, tw(a + "0", F11()));
+            int bx0 = 105, cw = std::max(10, tw(a + "0", F11()));
             if (_edStage == 1) {
                 rbox(bx0, y - 1, bx0 + cw, y + 10, 2, ui::WHITE);
                 band.drawRoundRect(bx0, y - 1, cw + 1, 12, 2, CURVE);
@@ -1257,15 +1191,15 @@ void AppRoast::renderEditor()
                 text(sx, y, b2, F11(), DIM);
             }
         } else {
-            text(67, y, i == 0 ? "0:00" : (r.t >= 0 ? mmss(r.t) : "--"), F11(), r.on ? INK : FAINT);
+            text(107, y, i == 0 ? "0:00" : (r.t >= 0 ? mmss(r.t) : "--"), F11(), r.on ? INK : FAINT);
         }
         // temperature
         std::string cs;
         uint32_t cc = r.on ? INK : FAINT;
         if (sel && _edStage == 3) {
             int cw = std::max(24, tw(_edBuf + "0", F11()) + 4);
-            rbox(138 - cw, y - 1, 139, y + 10, 2, ui::WHITE);
-            band.drawRoundRect(138 - cw, y - 1, cw + 2, 12, 2, CURVE);
+            rbox(W - 9 - cw, y - 1, W - 8, y + 10, 2, ui::WHITE);
+            band.drawRoundRect(W - 9 - cw, y - 1, cw + 2, 12, 2, CURVE);
             cs = _edBuf.empty() ? "_" : _edBuf;
             cc = CURVE;
         } else if (r.on && !std::isnan(r.c)) {
@@ -1275,7 +1209,7 @@ void AppRoast::renderEditor()
             cs     = tt >= 0 ? fmt1(_curve.at(tt)) : "--";
             cc     = r.on ? DIM : FAINT;  // follows the preset curve
         }
-        text(137, y, cs, F11(), cc, Datum::top_right);
+        text(W - 10, y, cs, F11(), cc, Datum::top_right);
         y += 12;
     }
     // the development the curve sets (first crack -> drop): how long, how fast, how hot at most
@@ -1295,34 +1229,6 @@ void AppRoast::renderEditor()
         else
             text(4, y + 24, "then drops at time or temp", F10(), DIM);
     }
-    // mini chart with the selected node
-    const int cx0 = 145, cy0 = 17, cx1 = W - 4, cy1 = 112;
-    rbox(cx0, cy0, cx1, cy1, 4, CARD);
-    int end = std::max(60, std::max(_curve.endTime(), _ed[2].t)) + 30;
-    auto PX = [&](float t) { return cx0 + 4 + (int)((cx1 - cx0 - 8) * t / end); };
-    auto PY = [&](float c) { return cy1 - 4 - (int)((cy1 - cy0 - 8) * (std::max(20.0f, std::min(235.0f, c)) - 20) / 215); };
-    for (int s = 60; s < end; s += 60) band.drawFastVLine(PX(s), cy0 + 3, cy1 - cy0 - 6, GRID);
-    int selT = _edRow == 0 ? 0 : _ed[_edRow].t;
-    if (_ed[_edRow].on && selT >= 0) band.drawFastVLine(PX(selT), cy0 + 3, cy1 - cy0 - 6, CURVE_TINT);
-    int px = PX(0), py = PY(_curve.at(0));
-    for (int s = 5; s <= _curve.endTime(); s += 5) {
-        int nx = PX(s), ny = PY(_curve.at(s));
-        band.drawLine(px, py, nx, ny, CURVE);
-        px = nx;
-        py = ny;
-    }
-    for (int i = 0; i < kEdRows; i++) {
-        if (!_ed[i].on) continue;
-        int t = i == 0 ? 0 : _ed[i].t;
-        if (t < 0) continue;
-        int nx = PX(t), ny = PY(_curve.at(t));
-        if (i == _edRow) {
-            ring(nx, ny, 5, CURVE);
-            dot(nx, ny, 3, cols[i]);
-        } else {
-            dot(nx, ny, 2, cols[i]);
-        }
-    }
     if (_edStage == 1)
         keybar({{"0-9", CURVE, "minutes"}, {"Enter", INK, "seconds"}, {"Tab", INK, "temp"}, {"Esc", FAINT, "cancel"}});
     else if (_edStage == 2)
@@ -1330,7 +1236,7 @@ void AppRoast::renderEditor()
     else if (_edStage == 3)
         keybar({{"0-9", CURVE, "°C"}, {"Enter", GO, "ok"}, {"Esc", FAINT, "cancel"}});
     else
-        keybar({{"Enter", CURVE, "edit"}, {"Spc", INK, "on/off"}, {"S", GO, "save"}, {"Tab", CURVE, "chart"}});
+        keybar({{"Enter", CURVE, "edit"}, {"Spc", INK, "on/off"}, {"S", GO, "save"}});
 }
 
 /* ================================================================= rules */
@@ -1523,7 +1429,7 @@ void AppRoast::renderHelp()
         {FAN, "fan", "S on · ↑↓ ±1 · Aa ±0.1 · X X stop"},
         {DRY, "marks", "Y dry · F 1st crack · G FC end"},
         {DROP, "drop", "D D or Space Space · X X stop"},
-        {CURVE, "curve", "C library · E edit · Tab chart"},
+        {CURVE, "curve", "C library · E edit"},
         {INK, "roast", "Enter charge · W batch · O rules"},
         {FAINT, "app", "H keys · Esc back"},
     };

@@ -55,7 +55,7 @@ struct RoastMetrics {
 
 class Session {
 public:
-    void reset(const Curve* curve, float greenG, const std::string& bean);
+    bool begin(const std::string& id, const Curve* curve, float greenG, const std::string& bean);
     bool active() const
     {
         return _active;
@@ -68,7 +68,7 @@ public:
     {
         return _samples;
     }
-    const std::vector<Sample>& recent() const { return _diskHistory ? _recent : _samples; }
+    const std::vector<Sample>& recent() const { return _recent; }
     int lastT() const
     {
         return recent().empty() ? 0 : recent().back().t;
@@ -122,8 +122,6 @@ public:
 
     RoastMetrics metrics() const;
 
-    /// Opens the CSV log on the SD card. Returns false (and keeps running in memory) if no card.
-    bool openLog(const std::string& id);
     void flush();
     /// Writes <id>.json summary and <id>.alog (Artisan/myERoast importable); closes the CSV.
     bool finalize(std::string* err);
@@ -133,7 +131,7 @@ public:
     }
     bool logging() const
     {
-        return _csv != nullptr;
+        return _csv && !_ioFailed;
     }
     void close();
     /// Frees the samples and actions (after the log is written): sync needs the heap.
@@ -170,7 +168,8 @@ private:
     // With an SD log, _samples is a bounded plot and _recent is the full-rate control window.
     std::vector<Sample> _recent;
     size_t _sampleCount = 0, _plotStride = 1;
-    bool _diskHistory = false, _ioFailed = false;
+    bool _ioFailed = false;
+    bool openLog(const std::string& id);
     float _peakHeat = NAN, _fcRor = NAN, _fc30Ror = NAN, _dropRor = NAN;
     double _errorSum = 0;
     int _errorCount = 0, _saturated = 0;

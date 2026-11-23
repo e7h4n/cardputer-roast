@@ -2,6 +2,7 @@
 #include "preset_dark.h"
 #include <cJSON.h>
 #include <algorithm>
+#include <iterator>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -112,10 +113,7 @@ float Curve::at(int t) const
     if (table.empty()) return NAN;
     if (t <= 0) return table.front() + offset;
     if (t >= endTime()) return table.back() + offset;
-    if (samplePeriod == 1) return table[t] + offset;
-    int i = t / samplePeriod;
-    int span = std::min(samplePeriod, totalT - i * samplePeriod);
-    return table[i] + (table[i + 1] - table[i]) * (t % samplePeriod) / span + offset;
+    return table[t] + offset;
 }
 
 int Curve::tagTime(PointTag tag) const
@@ -183,7 +181,6 @@ struct Stretch {
 void Curve::build()
 {
     if (readOnly) return;
-    samplePeriod = 1;
     sortPoints();
     table.clear();
     if (pts.empty()) return;
@@ -258,29 +255,21 @@ DevPlan Curve::devPlan() const
     return p;
 }
 
-static Curve make_builtin(const char* name, const char* note, int batch, std::vector<CurvePoint> pts)
-{
-    Curve c;
-    c.name    = name;
-    c.note    = note;
-    c.batchG  = batch;
-    c.builtin = true;
-    c.pts     = std::move(pts);
-    return c;
-}
+struct Preset {
+    const char* name;
+    const char* note;
+    int batch;
+    CurvePoint points[3];
+};
 
-std::vector<Curve> BuiltinCurves(bool buildTables)
-{
-    std::vector<Curve> v;
-    v.push_back(make_builtin("Gotiti 200g Light V3", "Development 65 s at 7.4 C/min, max 207 C; untested", 200,
-                             {{0, 50, PointTag::Charge}, {470, 199, PointTag::FCs}, {535, 207, PointTag::Drop}}));
-    v.push_back(make_builtin("Gotiti 200g Pullback", "Development 85 s at 7.8 C/min, max 211 C; untested", 200,
-                             {{0, 50, PointTag::Charge}, {470, 200, PointTag::FCs}, {555, 211, PointTag::Drop}}));
-    v.push_back(make_builtin("Dry run (no beans)", "Low temperature check of the PID, 3 min", 0,
-                             {{0, 50, PointTag::Charge}, {120, 100, PointTag::FCs}, {180, 110, PointTag::Drop}}));
-    if (buildTables) for (auto& curve : v) curve.build();
-    return v;
-}
+static constexpr Preset presets[] = {
+    {"Gotiti 200g Light V3", "Development 65 s at 7.4 C/min, max 207 C; untested", 200,
+     {{0, 50, PointTag::Charge}, {470, 199, PointTag::FCs}, {535, 207, PointTag::Drop}}},
+    {"Gotiti 200g Pullback", "Development 85 s at 7.8 C/min, max 211 C; untested", 200,
+     {{0, 50, PointTag::Charge}, {470, 200, PointTag::FCs}, {555, 211, PointTag::Drop}}},
+    {"Dry run (no beans)", "Low temperature check of the PID, 3 min", 0,
+     {{0, 50, PointTag::Charge}, {120, 100, PointTag::FCs}, {180, 110, PointTag::Drop}}},
+};
 
 bool EnsureDir(const char* path)
 {
@@ -291,6 +280,8 @@ bool EnsureDir(const char* path)
             struct stat st;
             if (stat(sub.c_str(), &st) != 0) {
                 if (mkdir(sub.c_str(), 0775) != 0) return false;
+            } else if (!S_ISDIR(st.st_mode)) {
+                return false;
             }
         }
     }
@@ -461,84 +452,64 @@ bool LoadCurveFile(const std::string& path, Curve& out)
     return parse_alog_curve(txt, out);
 }
 
-// Only the selected curve needs every second in RAM. The library charts interpolate
-// between samples and retain the exact endpoint, including on a partial last interval.
-static void keepPreview(Curve& curve)
-{
-    if (!curve.valid()) return;
-    const int end = curve.endTime();
-    constexpr int period = 8;
-    std::vector<float> samples;
-    samples.reserve((end + period - 1) / period + 1);
-    for (int t = 0; t < end; t += period) samples.push_back(curve.table[t]);
-    samples.push_back(curve.table.back());
-    curve.table.swap(samples);
-    curve.totalT = end;
-    curve.samplePeriod = period;
-}
-
-bool OpenLibraryCurve(const Curve& preview, Curve& out)
+bool OpenLibraryCurve(const CurveEntry& entry, Curve& out)
 {
     Curve selected;
-    if (!preview.path.empty()) {
-        if (!LoadCurveFile(preview.path, selected)) return false;
+    if (!entry.path.empty()) {
+        if (!LoadCurveFile(entry.path, selected)) return false;
     } else {
-        selected = preview;
-        selected.build();
+        for (const auto& preset : presets) {
+            if (entry.name != preset.name) continue;
+            selected.name = preset.name;
+            selected.note = preset.note;
+            selected.batchG = preset.batch;
+            selected.builtin = true;
+            selected.pts.assign(std::begin(preset.points), std::end(preset.points));
+            selected.build();
+            break;
+        }
     }
     if (!selected.valid()) return false;
     out = std::move(selected);
     return true;
 }
 
-std::vector<Curve> ListCurves(bool sdMounted)
+std::vector<CurveEntry> ListCurves()
 {
-    std::vector<Curve> v = BuiltinCurves(false);
-    if (!sdMounted) return v;
+    std::vector<CurveEntry> v;
+    for (const auto& preset : presets) v.push_back({preset.name, {}});
     DIR* d = opendir(kCurveDir);
     if (!d) return v;
-    std::vector<std::string> files;
+    const auto builtinCount = v.size();
     struct dirent* e;
     while ((e = readdir(d)) != nullptr) {
         std::string n = e->d_name;
         if (n.empty() || n[0] == '.') continue;
         std::string lower = n;
         for (auto& ch : lower) ch = tolower((unsigned char)ch);
-        if (lower.find(".json") != std::string::npos || lower.find(".alog") != std::string::npos)
-            files.push_back(n);
+        if (lower.find(".json") != std::string::npos || lower.find(".alog") != std::string::npos) {
+            const bool json = lower.size() >= 5 && lower.compare(lower.size() - 5, 5, ".json") == 0;
+            v.push_back({n, std::string(kCurveDir) + "/" + n, !json});
+        }
     }
     closedir(d);
-    std::sort(files.begin(), files.end());
-    for (auto& f : files) {
-        Curve c;
-        c.path = std::string(kCurveDir) + "/" + f;
-        v.push_back(std::move(c));
-    }
+    std::sort(v.begin() + builtinCount, v.end(), [](const CurveEntry& a, const CurveEntry& b) { return a.name < b.name; });
     return v;
 }
 
-bool LoadPreview(Curve& entry)
-{
-    Curve full;
-    if (!OpenLibraryCurve(entry, full)) return false;
-    keepPreview(full);
-    entry = std::move(full);
-    return true;
-}
-
-void RestoreCurve(bool sdMounted, const std::string& name, const std::string& path, Curve& out)
+void RestoreCurve(const std::string& name, const std::string& path, Curve& out)
 {
     // New selections have a stable path. Older installations stored just the display name.
-    if (sdMounted && !path.empty() && path.compare(0, strlen(kCurveDir) + 1, std::string(kCurveDir) + "/") == 0) {
+    if (!path.empty() && path.compare(0, strlen(kCurveDir) + 1, std::string(kCurveDir) + "/") == 0) {
         Curve selected;
         if (LoadCurveFile(path, selected)) {
             out = std::move(selected);
             return;
         }
     }
-    const bool searchFiles = sdMounted && path != ":builtin" && !name.empty();
-    auto entries = ListCurves(searchFiles);
+    const bool searchFiles = path != ":builtin" && !name.empty();
     if (searchFiles) {
+        auto entries = ListCurves();
         for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
             Curve candidate;
             if (OpenLibraryCurve(*it, candidate) && candidate.name == name) {
@@ -547,9 +518,7 @@ void RestoreCurve(bool sdMounted, const std::string& name, const std::string& pa
             }
         }
     }
-    for (const auto& entry : entries)
-        if (entry.builtin && entry.name == name && OpenLibraryCurve(entry, out)) return;
-    OpenLibraryCurve(entries.front(), out);
+    if (!OpenLibraryCurve({name, {}}, out)) OpenLibraryCurve({presets[0].name, {}}, out);
 }
 
 static std::string safe_filename(const std::string& name)
