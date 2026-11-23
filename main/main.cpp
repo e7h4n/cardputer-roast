@@ -41,6 +41,7 @@ extern "C" void app_main(void)
 
     okou_config_t hub = OKOU_CONFIG_DEFAULT();
     hub.handlers_in_poll = true;
+    hub.app_validates = true;
     ESP_ERROR_CHECK(okou_agent_start(&hub));
     ESP_ERROR_CHECK(xTaskCreate(hub_commands, "roast_hub_cmd", 4096, nullptr, 2, nullptr) == pdPASS
                     ? ESP_OK : ESP_ERR_NO_MEM);
