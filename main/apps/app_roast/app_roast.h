@@ -47,12 +47,14 @@ public:
     void onClose() override;
 
 private:
-    enum class Screen : uint8_t { Storage, Connect, Prep, Roast, Cool, Summary, Curves, Editor, Settings, Help, Network, Sync };
+    enum class Screen : uint8_t { Storage, Connect, Prep, Roast, Cool, Summary, Curves, Editor, Settings, Help, Wifi, Network, Sync };
     enum class Phase : uint8_t { Idle, FanOn, Roasting, Cooling, Done };
 
     struct Input {
         bool active = false;
         bool numeric = true;
+        bool secret = false;
+        size_t limit = 24;
         std::string title;
         std::string hint;
         std::string buf;
@@ -75,6 +77,7 @@ private:
         const char* unit = "";
         bool* toggle   = nullptr;  // on/off row
         bool bootloader = false; // local Wi-Fi provisioning in the EspHub Bootloader
+        bool wifiSettings = false;
         bool network   = false;    // opens the Wi-Fi & Dropbox setup screen
         bool simToggle = false;    // simulator on/off
     };
@@ -172,7 +175,7 @@ private:
     // ---- Wi-Fi & Dropbox setup (net/roast_net.h): pairs with the Coffee Watch setup page over Bluetooth
     bool _netOpen    = false;  // setup running: the roaster link is closed meanwhile
     Screen _setBack  = Screen::Prep;  // where Esc on the rules page returns
-    std::string _netSummary;          // rules page value: saved network and Dropbox state
+    std::string _netSummary;          // rules page value: Dropbox authorization state
     void openNetwork();
     void closeNetwork();
 
@@ -200,6 +203,16 @@ private:
     void refreshNetSummary();
     bool keyNetwork(int code);
     void renderNetwork();
+    std::vector<std::string> _wifiNetworks;
+    int _wifiSelected = 0;
+    bool _wifiJoining = false;
+    void openWifi();
+    bool wifiScanning() const;
+    void scanWifi();
+    void pollWifi();
+    void keyWifi(int code);
+    void renderWifi();
+    void promptWifiPassword(std::string ssid, bool hidden);
     void openSettings();
 
     // ---- logic (app_roast.cpp)

@@ -1,3 +1,4 @@
+#include "okou_agent.h"
 // Desktop preview: runs the real Roast app (app_roast*.cpp, curves, session, simulator) against a fake HAL and a
 // fake clock, drives it with scripted key presses through a whole roast, and writes every page as a 240x135 PNG.
 //
@@ -306,8 +307,7 @@ int main(int argc, char** argv)
     press("esc");
 
     press("o");
-    press("down");
-    press("down");
+    for (int i = 0; i < 5; ++i) press("down");
     shot("rules");
     extShot("rules");
     press("enter");
@@ -322,10 +322,30 @@ int main(int argc, char** argv)
     shot("keys");
     press("esc");
 
-    // Wi-Fi & Dropbox setup: the rules row, then a whole (simulated) pairing
+    // Wi-Fi scan, masked password, and manual hidden SSID.
     press("o");
-    for (int i = 0; i < 30; i++) press("down", 30);  // the last row (simulator), then up to network
-    press("up", 60);
+    press("down");
+    press("enter");
+    shot("wifi_scan");
+    press("enter");
+    type("secret");
+    shot("wifi_password");
+    press("enter");
+    if (previewWifiJoins != 1 || previewWifiHidden) return 1;
+    press("m");
+    type("hidden");
+    press("enter");
+    type("secret");
+    press("enter");
+    if (previewWifiJoins != 2 || !previewWifiHidden) return 1;
+    shot("wifi_saved");
+    press("esc");
+    press("esc");
+
+    // Dropbox setup: settings row, then a whole (simulated) pairing
+    press("o");
+    press("down");
+    press("down");
     shot("rules_sync");
     press("enter");
     step(600);
@@ -341,8 +361,8 @@ int main(int argc, char** argv)
     press("esc");
     step(3000);  // back on Connect, then Prep once the (preview) roaster answers
     press("o");
-    for (int i = 0; i < 30; i++) press("down", 30);
-    press("up", 60);
+    press("down");
+    press("down");
     shot("rules_sync_saved");
     press("esc");  // leave Settings before operating the simulated roaster
 
@@ -425,21 +445,15 @@ int main(int argc, char** argv)
     press("esc");
     shot("exit_confirm");
 
-    auto selectBootloader = [&] {
-        press("o");
-        for (int i = 0; i < 30; i++) press("down", 30);
-        press("up");
-        press("up");
-    };
     press("s");
-    selectBootloader();
+    press("o");
     press("enter");
     shot("bootloader_fan_blocked");
     if (app.closed) return 1;
     press("esc");
     press("x");
     press("x");
-    selectBootloader();
+    press("o");
     shot("bootloader_setting");
     press("enter");
     shot("bootloader_confirm");

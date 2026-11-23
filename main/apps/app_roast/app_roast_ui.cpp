@@ -364,6 +364,9 @@ void AppRoast::drawFrame()
         case Screen::Help:
             renderHelp();
             break;
+        case Screen::Wifi:
+            renderWifi();
+            break;
         case Screen::Network:
             renderNetwork();
             break;
@@ -1243,7 +1246,7 @@ void AppRoast::renderEditor()
 void AppRoast::renderSettings()
 {
     auto rows = ruleRows();
-    text(4, 0, "Rules", F16(), INK);
+    text(4, 0, "Settings", F16(), INK);
     std::vector<int> sel;
     for (int i = 0; i < (int)rows.size(); i++)
         if (rows[i].label) sel.push_back(i);
@@ -1262,7 +1265,8 @@ void AppRoast::renderSettings()
     auto whole = [&](const RuleRow& r) { return r.i[0] != nullptr || r.step >= 1; };
     auto value = [&](const RuleRow& r, bool live) {
         if (r.toggle) return std::string(*r.toggle ? "on" : "off");
-        if (r.bootloader) return std::string("Wi-Fi setup");
+        if (r.bootloader) return std::string("BLE provisioning");
+        if (r.wifiSettings) return std::string("Scan or enter SSID");
         if (r.network) return clipTo(_netSummary, W - 30 - tw(r.label, F12()), F12());
         if (r.simToggle) return std::string(_link && _link->isSimulated() ? "on" : "off");
         bool isInt = whole(r);
@@ -1350,6 +1354,30 @@ void AppRoast::renderSync()
 /* ======================================================== Wi-Fi & Dropbox */
 // Pair from the Coffee Watch setup page: it finds this device by its Bluetooth service, asks for the code shown here,
 // then sends only the Dropbox app key, secret and authorization code.
+void AppRoast::renderWifi()
+{
+    text(4, 0, "Wi-Fi settings", F16(), INK);
+    if (_wifiJoining) {
+        text(6, 47, "Connecting…", F14(), INK);
+        return;
+    }
+
+    if (wifiScanning()) {
+        text(6, 47, "Scanning for networks…", F14(), INK);
+    } else if (_wifiNetworks.empty()) {
+        text(6, 47, "No networks found", F14(), DIM);
+    } else {
+        constexpr int rows = 6;
+        int first = std::max(0, _wifiSelected - rows + 1);
+        int y = 20;
+        for (int i = first; i < (int)_wifiNetworks.size() && i < first + rows; ++i, y += 15) {
+            if (i == _wifiSelected) rbox(2, y - 1, W - 3, y + 12, 4, CARD);
+            text(7, y, clipTo(_wifiNetworks[i], W - 16, F12()), F12(), INK);
+        }
+    }
+    keybar({{"Enter", GO, "join"}, {"S", INK, "scan"}, {"M", INK, "manual"}, {"Esc", FAINT, "back"}});
+}
+
 void AppRoast::renderNetwork()
 {
     rn_view_t v = roast_net_view();
@@ -1457,7 +1485,8 @@ void AppRoast::renderInput()
     band.drawRoundRect(8, 70, W - 16, 23, 4, INK);
     band.drawRoundRect(9, 71, W - 18, 21, 3, INK);
     bool blink = (GetHAL().millis() / 400) % 2;
-    int w      = text(14, 81, clipTo(_input.buf, W - 40, F14()), F14(), INK, Datum::middle_left);
+    const std::string shown = _input.secret ? std::string(_input.buf.size(), '*') : _input.buf;
+    int w      = text(14, 81, clipTo(shown, W - 40, F14()), F14(), INK, Datum::middle_left);
     if (blink) band.fillRect(15 + w, 75, 1, 12, INK);
     if (!_input.hint.empty()) text(8, 99, _input.hint, F10(), DIM);
     keybar({{"Enter", GO, "ok"}, {"Esc", FAINT, "cancel"}});
