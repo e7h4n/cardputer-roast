@@ -126,7 +126,7 @@ void AppRoast::onOpen()
     } else if (!roast_net_esphub_network(ssid) || !roast_net_saved_dropbox()) {
         _netRequired = true;
         openNetwork();
-    } else if (skip) {
+    } else if (skip || !_sdOk) {
         startLink();
     } else {
         startJob(sync::Job::Curves, "");
@@ -1669,6 +1669,10 @@ void AppRoast::resaveEdited()
 
 bool AppRoast::startJob(sync::Job job, const std::string& arg)
 {
+    if (job == sync::Job::Curves && !(_sdOk = GetHAL().sdCardMount())) {
+        toast("No SD card: sync skipped", WARN);
+        return false;
+    }
     // BLE + Wi-Fi + TLS do not fit together: close the roaster link first (the app restarts afterwards).
     releaseExternal();
     if (_link) {

@@ -39,7 +39,7 @@
 #define TOKEN_URL "https://api.dropboxapi.com/oauth2/token"
 #define WRITE_SCOPE "files.content.write"
 #define RESPONSE_SETUP 4096  // setup: token and upload replies are ~1.5 KB
-#define RESPONSE_SYNC 16384  // sync: folder listings
+
 #define TOKEN_MAX 2049
 #define HASH_BLOCK (4 * 1024 * 1024)
 
@@ -139,7 +139,7 @@ static bool clock_ready(void)
     return ready;
 }
 
-static int http(const char *url, const char *body, size_t length, const char *type, bool authorized, const char *api_arg)
+static int http(const char *url, const char *body, size_t length, const char *type, bool authorized, FILE *page)
 {
     mbedtls_platform_zeroize(response, response_cap);
     esp_http_client_config_t cfg = {.url = url, .timeout_ms = 15000, .crt_bundle_attach = esp_crt_bundle_attach,
@@ -148,7 +148,6 @@ static int http(const char *url, const char *body, size_t length, const char *ty
     if (!h) return -1;
     esp_http_client_set_method(h, HTTP_METHOD_POST);
     if (type) esp_http_client_set_header(h, "Content-Type", type);
-    if (api_arg) esp_http_client_set_header(h, "Dropbox-API-Arg", api_arg);
     if (authorized) {
         char *auth = malloc(strlen(access_token) + 8);
         if (!auth) {
@@ -171,7 +170,14 @@ static int http(const char *url, const char *body, size_t length, const char *ty
             }
             offset += (size_t)written;
         }
-        if (sent && esp_http_client_fetch_headers(h) >= 0) {
+        bool headers = sent && esp_http_client_fetch_headers(h) >= 0;
+        if (headers && page && esp_http_client_get_status_code(h) == 200) {
+            int got;
+            while ((got = esp_http_client_read(h, response, response_cap)) > 0) {
+                if (fwrite(response, 1, got, page) != (size_t)got) break;
+            }
+            if (got == 0 && esp_http_client_is_complete_data_received(h) && fflush(page) == 0) status = 200;
+        } else if (headers) {
             int used = 0, got = 0;
             while (used < (int)response_cap - 1 && (got = esp_http_client_read(h, response + used, (int)response_cap - 1 - used)) > 0)
                 used += got;
@@ -573,13 +579,13 @@ static bool json_ascii(const char *s, char *out, size_t cap)
 #undef PUT
 }
 
-bool rn_dbx_open(bool listing, char *err, size_t n)
+bool rn_dbx_open(char *err, size_t n)
 {
     if (task) {
         seterr(err, n, "setup is open");
         return false;
     }
-    response_cap = listing ? RESPONSE_SYNC : RESPONSE_SETUP;
+    response_cap = RESPONSE_SETUP;
     response     = calloc(1, response_cap);
     access_token = calloc(1, TOKEN_MAX);
     if (!response || !access_token) {
@@ -630,7 +636,7 @@ static void error_summary(int status, char *err, size_t n, const char *what)
     cJSON_Delete(j);
 }
 
-bool rn_dbx_list(const char *folder, rn_dbx_entry_cb cb, void *ctx, char *err, size_t n)
+bool rn_dbx_list(const char *folder, const char *page_path, rn_dbx_entry_cb cb, void *ctx, char *err, size_t n)
 {
     char body[512];
     cJSON *b = cJSON_CreateObject();
@@ -642,51 +648,42 @@ bool rn_dbx_list(const char *folder, rn_dbx_entry_cb cb, void *ctx, char *err, s
         seterr(err, n, "list: path too long");
         return false;
     }
-    int status = api_json(LIST_URL, body);
+    bool first = true;
+    char *next_body = NULL;
     for (;;) {
-        if (status == 409 && strstr(response, "not_found")) return true;  // no folder yet: empty
+        FILE *page = fopen(page_path, "w+b");
+        if (!page) {
+            cJSON_free(next_body);
+            seterr(err, n, "list: cannot create SD page");
+            return false;
+        }
+        const char *request = next_body ? next_body : body;
+        int status = http(first ? LIST_URL : LIST_MORE_URL, request, strlen(request), "application/json", true, page);
+        cJSON_free(next_body);
+        next_body = NULL;
         if (status != 200) {
+            fclose(page);
+            if (status == 409 && first && strstr(response, "path/not_found")) return true;
             error_summary(status, err, n, "list");
             return false;
         }
-        cJSON *j = cJSON_Parse(response);
-        if (!j) {
-            seterr(err, n, "list: bad reply");
+        char *cursor = NULL;
+        bool parsed = !fseek(page, 0, SEEK_SET) && rn_dbx_parse_page(page, cb, ctx, &cursor);
+        if (fclose(page) != 0 || !parsed) {
+            free(cursor);
+            seterr(err, n, "list: invalid page or SD write failed");
             return false;
         }
-        const cJSON *entries = cJSON_GetObjectItemCaseSensitive(j, "entries"), *e;
-        cJSON_ArrayForEach(e, entries)
-        {
-            const cJSON *tag = cJSON_GetObjectItemCaseSensitive(e, ".tag");
-            if (!cJSON_IsString(tag) || strcmp(tag->valuestring, "file")) continue;
-            rn_dbx_entry_t ent = {0};
-            const cJSON *name = cJSON_GetObjectItemCaseSensitive(e, "name");
-            const cJSON *hash = cJSON_GetObjectItemCaseSensitive(e, "content_hash");
-            const cJSON *size = cJSON_GetObjectItemCaseSensitive(e, "size");
-            if (!cJSON_IsString(name) || strlen(name->valuestring) >= sizeof ent.name) continue;
-            snprintf(ent.name, sizeof ent.name, "%s", name->valuestring);
-            if (cJSON_IsString(hash)) snprintf(ent.hash, sizeof ent.hash, "%s", hash->valuestring);
-            if (cJSON_IsNumber(size)) ent.size = (uint32_t)size->valuedouble;
-            cb(&ent, ctx);
-        }
-        const cJSON *more   = cJSON_GetObjectItemCaseSensitive(j, "has_more");
-        const cJSON *cursor = cJSON_GetObjectItemCaseSensitive(j, "cursor");
-        bool again          = cJSON_IsTrue(more) && cJSON_IsString(cursor);
-        char *next          = NULL;
-        if (again) {
-            cJSON *c = cJSON_CreateObject();
-            cJSON_AddStringToObject(c, "cursor", cursor->valuestring);
-            next = cJSON_PrintUnformatted(c);
-            cJSON_Delete(c);
-        }
-        cJSON_Delete(j);
-        if (!again) return true;
-        if (!next) {
+        if (!cursor) return true;
+        cJSON *c = cJSON_CreateObject();
+        if (c && cJSON_AddStringToObject(c, "cursor", cursor)) next_body = cJSON_PrintUnformatted(c);
+        free(cursor);
+        cJSON_Delete(c);
+        if (!next_body) {
             seterr(err, n, "list: out of memory");
             return false;
         }
-        status = api_json(LIST_MORE_URL, next);
-        cJSON_free(next);
+        first = false;
     }
 }
 
@@ -757,7 +754,7 @@ bool rn_dbx_download(const char *path, const char *local, char *err, size_t n)
     char part[300];
     snprintf(part, sizeof part, "%s.part", local);
     result_header = calloc(1, 1024);
-    uint8_t *buf  = malloc(CHUNK);
+    uint8_t *buf  = (uint8_t *)response;
     FILE *f       = fopen(part, "wb");
     esp_http_client_handle_t h = (result_header && buf && f) ? open_content(DOWNLOAD_URL, arg) : NULL;
     bool ok = false;
@@ -799,7 +796,6 @@ bool rn_dbx_download(const char *path, const char *local, char *err, size_t n)
         esp_http_client_cleanup(h);
     }
     if (f && fclose(f) != 0) ok = false;
-    free(buf);
     free(result_header);
     result_header = NULL;
     if (ok) {
@@ -825,7 +821,7 @@ bool rn_dbx_upload(const char *local, const char *path, rn_dbx_progress_cb cb, v
     }
     snprintf(arg, sizeof arg, "{\"path\":%s,\"mode\":\"overwrite\",\"autorename\":false,\"mute\":true}", qp);
     uint32_t total = (uint32_t)st.st_size;
-    uint8_t *buf   = malloc(CHUNK);
+    uint8_t *buf = (uint8_t *)response;
     FILE *f        = fopen(local, "rb");
     esp_http_client_handle_t h = (buf && f) ? open_content(UPLOAD_URL, arg) : NULL;
     bool ok = false;
@@ -890,6 +886,5 @@ bool rn_dbx_upload(const char *local, const char *path, rn_dbx_progress_cb cb, v
         esp_http_client_cleanup(h);
     }
     if (f) fclose(f);
-    free(buf);
     return ok;
 }

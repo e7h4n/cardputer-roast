@@ -10,3 +10,6 @@ g++ -std=gnu++17 -O1 -Wall -I"$ROOT/main" -I"$ROOT/tools/preview/stubs" -I"$CJSO
     "$ROOT/tools/tests/test_control.cpp" "$APP/roast_control.cpp" "$APP/roast_curve.cpp" "$CJSON/cJSON.c" \
     -o "$OUT/test_control"
 "$OUT/test_control"
+g++ -std=gnu++17 -O1 -Wall -I"$APP" -I"$ROOT/.deps/rapidjson/include" \
+    "$ROOT/tools/tests/test_dropbox_page.cpp" "$APP/net/dropbox_page.cpp" -o "$OUT/test_dropbox_page"
+"$OUT/test_dropbox_page"
