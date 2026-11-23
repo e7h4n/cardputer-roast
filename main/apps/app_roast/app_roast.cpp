@@ -158,7 +158,7 @@ void AppRoast::onClose()
     blankExternal();
     GetHAL().display.fillScreen(0);
     GetHAL().delay(100);
-    okou_enter_setup();
+    okou_enter_bootloader();
 }
 
 void AppRoast::startLink(bool sim)
