@@ -28,7 +28,7 @@ opens in Artisan. It runs as a native application managed by ESP Hub.
   itself at the safety temperature or long after the curve has ended.
 - **Fan control with floors.** Fan ±1 % or ±0.1 %; going below 50 % and 40 % needs a deliberate long press.
 - **Curve editor.** Start temperature, first crack and drop (time and temperature), edited on the device with the
-  curve and its development beside them, saved to the SD card.
+  calculated development below, saved to the SD card.
 - **Logs.** Every roast is written as `.csv` (1 Hz), `.json` summary and `.alog` for Artisan.
 - **ESP Hub networking and Dropbox pairing.** ESP Hub configures Wi-Fi. The Dropbox-only Bluetooth helper authorizes your own Dropbox app (App folder access).
 - **Dropbox sync.** Curves live in Dropbox: synced at every boot, and every curve saved or deleted on the device is
@@ -44,7 +44,7 @@ Rendered from the firmware's own drawing code by the desktop preview (`tools/pre
 | | |
 |---|---|
 | ![Connect](docs/screenshots/connect.png) Connect: scans for `E-Meter…BLE` | ![Prep](docs/screenshots/prep.png) Prep: curve → batch → fan → charge |
-| ![Curves](docs/screenshots/curves.png) Curve library | ![Editor](docs/screenshots/editor.png) Curve editor: nodes and the curve side by side |
+| ![Curves](docs/screenshots/curves.png) Curve library | ![Editor](docs/screenshots/editor.png) Curve editor: targets and development |
 | ![Roasting](docs/screenshots/roast.png) Roasting: Maillard, first crack expected | ![After FC](docs/screenshots/roast-fc.png) After first crack: development window on the phase bar |
 | ![Drop now](docs/screenshots/drop-now.png) Drop-now temperature reached | ![Chart](docs/screenshots/chart.png) Chart: bean, target, RoR, heater |
 | ![Cooling](docs/screenshots/cooling.png) Cooling: progress to the cold temperature | ![Summary](docs/screenshots/summary.png) Summary, saved to SD |
@@ -54,7 +54,7 @@ Rendered from the firmware's own drawing code by the desktop preview (`tools/pre
 
 This project builds a native ESP-IDF application for an ESP Hub-provisioned Cardputer ADV. Register and provision the board through ESP Hub once; existing Hub devices keep their identity and saved networks.
 
-CI publishes the application `.bin`, `SHA256SUMS`, and `esphub.json`. Call `launcher.enter`, wait for an online launcher, then `ota.install(kind="micropython", url=<release binary URL>)`. The kind is the existing application-binary compatibility channel; the firmware is native C++ and contains no Python interpreter. Check the transfer log and the next `cardputer-roast` boot.
+CI publishes the native application binary with its SHA-256. SDK 4.1.0 reports Roast as a native app. On this EspHub release, install the verified binary over USB into the Cardputer-Adv app partition at 0x2a0000.
 
 Keep both ESP Hub launchers, the partition table, and NVS. The app slot starts at `0x2a0000` and holds 4 MiB. Do not run the old community Launcher installer or generic `idf.py flash`. The application no longer checks GitHub for updates, downloads `Roast.bin`, or maintains `latest.json`; updates are initiated through ESP Hub after a roast has ended and the fan is off.
 
@@ -68,7 +68,7 @@ the connect screen, or switch *simulator* on in Rules (**O**). The simulator can
 machine is not running.
 
 **H** shows the key map on every page, grouped by colour. The top-right corner shows the battery, the link (green
-dot, or the SIM tag) and a red **SD** tag without a card.
+dot, or the SIM tag).
 
 
 The battery indicator displays the percentage returned by M5Unified, as in the official Cardputer ADV demo. A reading of 0% is displayed as 0%. On USB, the Cardputer ADV power switch must be ON for charging.
@@ -86,7 +86,6 @@ The page walks through four steps: curve → batch → fan → charge.
 | ↑ ↓ (`;` `.`) | Fan ±1 % (Aa held: ±0.1 %). While idle this changes only the start-fan preset. |
 | Enter | Charge: starts the timer and the Cardputer PID along the curve. Needs the fan on and a curve. |
 | X X | Stop the fan. |
-| Tab | Curve preview. |
 | Esc Esc | Back to Launcher. Blocked while the fan is running. |
 
 ### Roasting
@@ -120,7 +119,7 @@ chart has its own screen:
   (its time, or sooner the drop temperature at the current RoR); while cooling the time since the drop.
 - **Summary:** the whole roast under four cells: total time, development (time and %), drop temperature, weight
   loss.
-- **Otherwise:** the selected curve.
+- **Connect and Prep:** the selected roast plan.
 
 Wiring (as in the Cap TFT V2): SCK 40 and MOSI 14 (shared with the SD card, SPI2), CS 5, DC 6, RST 3; the backlight
 is tied to 3.3 V. The screen takes the bus lock for each write, so the SD card keeps working. There is no frame buffer
@@ -344,19 +343,18 @@ Roast drops by itself at the end of the development (time or drop temperature, s
 when the curve ended more than *auto-drop after end* seconds ago.
 
 ### Curve editor
-The editor has three rows: **Start** (charge temperature), **Crack** and **Drop** (time and temperature), with the
-curve beside them and, under them, the development they set: how long, how fast, how hot at most. It warns when the
+The editor has three rows: **Start** (charge temperature), **Crack** and **Drop** (time and temperature). Below the rows it shows the development they set: how long, how fast, how hot at most. It warns when the
 development is faster than the roast arrives at first crack ("RoR has to rise into the crack").
 
 - **Enter** (or a digit) edits the row: minutes, Enter, seconds, Enter, temperature, Enter. Tab skips the time.
   First crack must come before the drop and be cooler; the drop is at most 30:00.
 - **Space** on Start switches the charge temperature on or off (off: the preset's); Backspace resets it.
-- **S** saves to `roast/curves/` on the SD card, **N** renames, **B** sets the batch size, **Tab** previews.
+- **S** saves to `roast/curves/` on the SD card, **N** renames, **B** sets the batch size.
 
 New curves start at first crack 7:30 / 200 °C and drop 9:00 / 210 °C.
 
 ## SD card
-The card must be FAT32. Without one, logs live only in memory until the summary is closed.
+Roast requires a writable FAT32 card. If mounting fails, insert the card and press Enter to retry. Charging requires a writable CSV journal.
 
 | Path | Contents |
 |---|---|

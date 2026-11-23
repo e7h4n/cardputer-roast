@@ -55,9 +55,9 @@ void Hal::display_init()
 {
     mclog::tagInfo(_tag, "display init");
 
-    // RGB332 canvas uses ~32 KB, leaving room for resident ESP Hub TLS plus BLE.
+    // Five 27-row bands replace a 32,400-byte framebuffer while MQTT, BLE and Dropbox share SRAM.
     canvas.setColorDepth(8);
-    if (!canvas.createSprite(display.width(), display.height())) mclog::tagError(_tag, "canvas alloc failed");
+    if (!canvas.createSprite(display.width(), 27)) mclog::tagError(_tag, "canvas alloc failed");
 }
 
 // https://github.com/78/xiaozhi-esp32/blob/main/main/main.cc
