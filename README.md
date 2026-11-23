@@ -129,14 +129,19 @@ Without the cap attached nothing changes.
 
 ### ESP Hub networking and Dropbox Bluetooth authorization
 
+**O → Wi-Fi settings** scans nearby networks. Choose one with Enter, or press **M** to enter an SSID manually. Enter the password and wait for the connection result. The SDK saves the credentials after obtaining an IP address.
+
+For EspHub BLE Wi-Fi provisioning, start the beacon on your computer. With the fan off, open **O → Enter Bootloader** and press **Enter** twice to reboot into the provisioning window.
+
+
 ESP Hub owns Wi-Fi credentials, connection/reconnection, and SNTP. The application no longer reads/writes `rn_wifi` or exposes a BLE Wi-Fi provisioning characteristic. Configure Wi-Fi through ESP Hub.
 
-Open **O → Dropbox** with the fan off. The roaster link closes because the two roles share NimBLE. The screen shows the passkey and read-only Hub network status. Closing setup stops Dropbox Bluetooth, not the Hub Wi-Fi connection.
+Open **O → Dropbox setup** with the fan off. The roaster link closes because the two roles share NimBLE. The screen shows the passkey and read-only Hub network status. Closing setup stops Dropbox Bluetooth, not the Hub Wi-Fi connection.
 
 The authenticated/encrypted Dropbox GATT protocol is retained: service `c9a81001-9a9d-4f55-a621-5b4e7699b647`, config characteristic `...1005...` (v2 authorize/forget/check packets), status `...1006...`, and notifications `...1004...`. The old Wi-Fi-write characteristic `...1002...` is removed; use the bundled `tools/dropbox-setup.html` helper rather than requiring that characteristic. Open [the Dropbox setup page](https://e7h4n.github.io/cardputer-roast/) in Chrome on a Bluetooth-capable computer. CI publishes it with GitHub Pages. App key, secret, and refresh token remain in `rn_dropbox`, never returned to the client or logged.
 
 ### Dropbox sync
-Wi-Fi and Dropbox are required: until both are set up, Roast opens the setup screen at boot. Everything below lives in
+Wi-Fi and Dropbox are required: until both are set up, Roast opens Settings at boot. Everything below lives in
 the Dropbox app's folder (Dropbox › Apps › *app name*). Every transfer is checked against Dropbox's `content_hash`;
 nothing is retried: a failure stops with its reason on screen.
 

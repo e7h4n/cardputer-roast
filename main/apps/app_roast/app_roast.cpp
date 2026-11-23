@@ -19,6 +19,12 @@
 #include <mooncake_log.h>
 #include <esp_system.h>
 #include "okou_agent.h"
+#include "okou_agent_ext.h"
+#include <atomic>
+#ifndef LGFX_LINUX_FB
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#endif
 #include <cmath>
 #include <climits>
 #include <cstring>
@@ -30,6 +36,19 @@ using namespace roast;
 using namespace roast::ui;
 
 static const char* TAG = "Roast";
+
+// The scanner owns this buffer until it publishes its result to the UI.
+static okou_ap_t s_wifiAp[16];
+static constexpr int kScanIdle = -3, kScanRunning = -2;
+static std::atomic<int> s_wifiScan{kScanIdle};
+
+static void scanWifiTask(void*)
+{
+    s_wifiScan.store(okou_wifi_scan(s_wifiAp, sizeof(s_wifiAp) / sizeof(s_wifiAp[0]), 2500));
+#ifndef LGFX_LINUX_FB
+    vTaskDelete(nullptr);
+#endif
+}
 
 /* --------------------------------- rules --------------------------------- */
 void RoastRules::load()
@@ -126,7 +145,7 @@ void AppRoast::startWithCard()
         toast("Test boot: no Dropbox sync", WARN, 4000);
     } else if (!configured) {
         _netRequired = true;
-        openNetwork();
+        openSettings();
     } else if (skip) {
         startLink();
     } else {
@@ -180,6 +199,7 @@ void AppRoast::onRunning()
     handleKeys();
     pollFanBarrier();
     pollSync();
+    pollWifi();
     pollSave();
     if (_phase == Phase::Roasting || _phase == Phase::Cooling) tickRoast();
 
@@ -770,6 +790,9 @@ void AppRoast::onKey(const Keyboard::KeyEvent_t& e)
             break;
         case Screen::Help:
             if (code == KEY_ESC || code == KEY_ENTER || code == KEY_H) _screen = _backScreen;
+            break;
+        case Screen::Wifi:
+            keyWifi(code);
             break;
         case Screen::Network:
             keyNetwork(code);
@@ -1388,6 +1411,19 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
         r.unit  = unit;
         v.push_back(r);
     };
+    group("SETUP", CURVE);
+    RuleRow boot;
+    boot.label = "Enter Bootloader";
+    boot.bootloader = true;
+    v.push_back(boot);
+    RuleRow wifi;
+    wifi.label = "Wi-Fi settings";
+    wifi.wifiSettings = true;
+    v.push_back(wifi);
+    RuleRow netRow;
+    netRow.label   = "Dropbox setup";
+    netRow.network = true;
+    v.push_back(netRow);
     group("SAFETY", DROP);
     rowF("auto-drop at", &_rules.safetyBT, nullptr, 150, 260, 1, "°");
     rowI("after curve end", &_rules.afterEnd, nullptr, 0, 900, 10, " s");
@@ -1413,11 +1449,6 @@ std::vector<AppRoast::RuleRow> AppRoast::ruleRows()
     v.push_back(obsRow);
     rowI("SV lookahead", &_rules.svLookahead, nullptr, 0, 20, 1, " s");
     rowF("floor cap", &_rules.floorCap, nullptr, 1, 8, 0.5f, "°");
-    group("SYNC", CURVE);
-    RuleRow netRow;
-    netRow.label   = "Dropbox";
-    netRow.network = true;
-    v.push_back(netRow);
     group("MODE", SIM);
     RuleRow sim;
     sim.label     = "simulator";
@@ -1438,6 +1469,7 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
     bool range = r.f[1] || r.i[1];
     auto cur   = [&](int k) { return r.f[k] ? *r.f[k] : (float)*r.i[k]; };
     if (!_setEditing) {
+        if (code != KEY_ENTER && _pendingKey == kBootloaderConfirm) _pendingKey = 0;
         switch (code) {
             case KEY_UP:
                 if (_setSel > 0) _setSel--;
@@ -1446,8 +1478,21 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
                 if (_setSel < n - 1) _setSel++;
                 return true;
             case KEY_ENTER:
+                if (r.bootloader) {
+                    if (_phase != Phase::Idle || _fanRunning) {
+                        toast("Stop the fan first", WARN, 3000);
+                    } else if (confirm(kBootloaderConfirm, "", true)) {
+                        _rules.save();
+                        close();  // release the roaster link, then enter the EspHub Bootloader
+                    }
+                    return true;
+                }
                 if (r.simToggle) {
                     setSimulator(!(_link && _link->isSimulated()));
+                    return true;
+                }
+                if (r.wifiSettings) {
+                    openWifi();
                     return true;
                 }
                 if (r.network) {
@@ -1467,7 +1512,13 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
                 return true;
             case KEY_ESC:
                 _rules.save();
-                _screen = _setBack;
+                if (_netRequired) {
+                    char ssid[33];
+                    if (roast_net_esphub_network(ssid) && roast_net_saved_dropbox()) restartApp(false);
+                    else toast("Set up Wi-Fi and Dropbox first", WARN);
+                } else {
+                    _screen = _setBack;
+                }
                 return true;
             default:
                 return false;
@@ -1541,6 +1592,8 @@ void AppRoast::openInput(const std::string& title, const std::string& init, bool
     _input.title   = title;
     _input.buf     = init;
     _input.numeric = numeric;
+    _input.secret  = false;
+    _input.limit   = 24;
     _input.hint    = hint;
     _input.done    = std::move(done);
 }
@@ -1549,18 +1602,29 @@ void AppRoast::keyInput(const Keyboard::KeyEvent_t& e, int code)
 {
     if (code == KEY_ENTER) {
         _input.active = false;
-        if (_input.done) _input.done(_input.buf);
+        auto done = std::move(_input.done);
+        std::string value = std::move(_input.buf);
+        const bool secret = _input.secret;
+        _input.buf.clear();
+        if (done) done(value);
+        if (secret) std::fill(value.begin(), value.end(), '\0');
         return;
     }
     if (code == KEY_ESC || (code == KEY_GRAVE && _input.numeric)) {
+        if (_input.secret) std::fill(_input.buf.begin(), _input.buf.end(), '\0');
+        _input.buf.clear();
+        _input.done = {};
         _input.active = false;
         return;
     }
     if (code == KEY_BACKSPACE) {
-        if (!_input.buf.empty()) _input.buf.pop_back();
+        if (!_input.buf.empty()) {
+            if (_input.secret) _input.buf.back() = '\0';
+            _input.buf.pop_back();
+        }
         return;
     }
-    if (!e.keyName || strlen(e.keyName) != 1 || _input.buf.size() >= 24) return;
+    if (!e.keyName || strlen(e.keyName) != 1 || _input.buf.size() >= _input.limit) return;
     char c = e.keyName[0];
     if (_input.numeric) {
         if (isdigit((unsigned char)c) || c == '.' || c == '-' || c == ':') _input.buf += c;
@@ -1734,7 +1798,7 @@ bool AppRoast::keySync(int code)
         return true;
     }
     if (code == KEY_O) {
-        openNetwork();
+        openSettings();
         return true;
     }
     if (code == KEY_ESC) {
@@ -1750,7 +1814,7 @@ bool AppRoast::keySync(int code)
 /* ------------------------- Wi-Fi & Dropbox setup ------------------------- */
 void AppRoast::openSettings()
 {
-    _setBack    = _screen == Screen::Connect ? Screen::Connect : Screen::Prep;
+    _setBack    = _screen;
     _setSel     = 0;
     _setEditing = false;
     refreshNetSummary();
@@ -1759,13 +1823,88 @@ void AppRoast::openSettings()
 
 void AppRoast::refreshNetSummary()
 {
-    char ssid[33];
-    bool wifi    = roast_net_esphub_network(ssid);
-    bool dropbox = roast_net_saved_dropbox();
-    if (!wifi && !dropbox)
-        _netSummary = "ESP Hub Wi-Fi / Dropbox setup";
-    else
-        _netSummary = std::string(wifi ? ssid : "ESP Hub offline") + (dropbox ? " · Dropbox" : " · no Dropbox");
+    _netSummary = roast_net_saved_dropbox() ? "Configured" : "Not configured";
+}
+
+void AppRoast::openWifi()
+{
+    if (_phase != Phase::Idle || _fanRunning) {
+        toast("Stop the fan before Wi-Fi setup", WARN);
+        return;
+    }
+    _screen = Screen::Wifi;
+    scanWifi();
+}
+
+bool AppRoast::wifiScanning() const
+{
+    return s_wifiScan.load() == kScanRunning;
+}
+
+void AppRoast::scanWifi()
+{
+    if (_wifiJoining || s_wifiScan.load() == kScanRunning) return;
+    _wifiNetworks.clear();
+    _wifiSelected = 0;
+    s_wifiScan.store(kScanRunning);
+#ifdef LGFX_LINUX_FB
+    scanWifiTask(nullptr);
+#else
+    if (xTaskCreate(scanWifiTask, "roast_scan", 4096, nullptr, 2, nullptr) != pdPASS)
+        s_wifiScan.store(-1);
+#endif
+}
+
+void AppRoast::pollWifi()
+{
+    const int count = s_wifiScan.load();
+    if (count >= -1) {
+        if (_screen == Screen::Wifi || (_screen == Screen::Help && _backScreen == Screen::Wifi)) {
+            for (int i = 0; i < count; ++i) _wifiNetworks.emplace_back(s_wifiAp[i].ssid);
+            if (count < 0) toast("Wi-Fi scan failed", WARN);
+            _dirty = true;
+        }
+        s_wifiScan.store(kScanIdle);
+    }
+    if (!_wifiJoining) return;
+    const char* status = okou_wifi_join_state();
+    if (strcmp(status, "joining") == 0) return;
+    _wifiJoining = false;
+    const bool saved = strcmp(status, "saved") == 0;
+    refreshNetSummary();
+    toast(saved ? "Wi-Fi connected and saved" : "Wi-Fi connection failed", saved ? GO : DROP, 3500);
+}
+
+void AppRoast::promptWifiPassword(std::string ssid, bool hidden)
+{
+    openInput("Wi-Fi password", "", false, "Leave blank for an open network", [this, ssid = std::move(ssid), hidden](const std::string& password) {
+        _wifiJoining = okou_wifi_join(ssid.c_str(), password.c_str(), hidden);
+        if (!_wifiJoining) toast("Wi-Fi request unavailable", WARN);
+    });
+    _input.secret = true;
+    _input.limit = 64;
+}
+
+void AppRoast::keyWifi(int code)
+{
+    if (_wifiJoining) return;
+    if (code == KEY_ESC) {
+        _screen = Screen::Settings;
+    } else if (code == KEY_S) {
+        scanWifi();
+    } else if (code == KEY_M) {
+        openInput("Network name (SSID)", "", false, "Use for visible or hidden networks", [this](const std::string& ssid) {
+            if (ssid.empty()) toast("Enter a network name", WARN);
+            else promptWifiPassword(ssid, true);
+        });
+        _input.limit = 32;
+    } else if (code == KEY_UP) {
+        _wifiSelected = std::max(0, _wifiSelected - 1);
+    } else if (code == KEY_DOWN && _wifiSelected + 1 < (int)_wifiNetworks.size()) {
+        ++_wifiSelected;
+    } else if (code == KEY_ENTER && !_wifiNetworks.empty()) {
+        promptWifiPassword(_wifiNetworks[_wifiSelected], false);
+    }
 }
 
 // Setup needs NimBLE for itself (and the memory BLE + Wi-Fi + TLS take), so the roaster link closes meanwhile.
