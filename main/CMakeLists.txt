@@ -14,4 +14,5 @@ set(MY_INCLUDE_DIRS
 
 idf_component_register(SRCS "main.cpp" ${MY_SRCS}
                     INCLUDE_DIRS ${MY_INCLUDE_DIRS}
+    PRIV_INCLUDE_DIRS "../.deps/rapidjson/include"
 )

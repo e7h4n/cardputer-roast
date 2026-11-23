@@ -352,6 +352,18 @@ int main()
         CHECK(std::fabs(with) < 0.3f);
     }
 
+    {
+        const auto entries = ListCurves();
+        const int durations[] = {535, 555, 180};
+        CHECK(entries.size() >= 3);
+        for (int i = 0; i < 3; ++i) {
+            Curve selected;
+            CHECK(OpenLibraryCurve(entries[i], selected));
+            CHECK(selected.endTime() == durations[i]);
+            CHECK(entries[i].matches(selected));
+        }
+    }
+
     // --- curves from first crack and drop: through both points, no corners, development at one speed
     {
         Curve c;

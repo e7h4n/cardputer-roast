@@ -1,2 +1,2 @@
 #pragma once
-inline int okou_enter_setup() { return 0; }
+inline int okou_enter_bootloader() { return 0; }

@@ -16,7 +16,7 @@ Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE*
 - **按计划发展。** 曲线上的一爆 → 排豆决定发展：发展多长、发展多快（升温速度）、最多到多少度。按 F 之后，从豆子实际一爆时的豆温开始，按这个速度升温；时间到了或豆温到了就自动排豆。Y（转黄）和 G（一爆结束）只是打点，留给事后分析。
 - **提醒和安全兜底。** 用整条彩色底栏提示：即将自动排豆、火力顶满、RoR 过低、蓝牙断开。Roast 不发声，提醒只在屏幕上显示。除了发展结束时排豆，豆温达到安全上限、或曲线结束很久之后也会自动排豆。
 - **带保护的风力控制。** 风力每次调 1% 或 0.1%；要降到 50% 和 40% 以下，必须特意长按。
-- **曲线编辑器。** 只有初始温度、一爆开始和排豆（时间和温度）三行，直接在设备上编辑，旁边实时显示曲线和它规划的发展，保存到 SD 卡。
+- **曲线编辑器。** 只有初始温度、一爆开始和排豆（时间和温度）三行，直接在设备上编辑，下方显示规划的发展时间和升温速度，保存到 SD 卡。
 - **烘焙记录。** 每锅都会保存 `.csv`（每秒一行）、`.json` 总结，以及可导入 Artisan 的 `.alog`。
 - **ESP Hub 网络和 Dropbox 蓝牙授权。** Wi-Fi 交给 ESP Hub；仅通过蓝牙配置自己的 Dropbox app（App folder 权限）。
 - **Dropbox 同步。** 曲线以 Dropbox 为准：每次开机同步一次，在设备上保存或删除曲线会马上写回 Dropbox。每锅的记录在总结页、风机关掉之后存到 Dropbox。
@@ -29,7 +29,7 @@ Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE*
 | | |
 |---|---|
 | ![连接](docs/screenshots/connect.png) 连接页：搜索 `E-Meter…BLE` | ![准备](docs/screenshots/prep.png) 准备页：曲线 → 批次 → 开风 → 投豆 |
-| ![曲线库](docs/screenshots/curves.png) 曲线库 | ![编辑器](docs/screenshots/editor.png) 曲线编辑器：节点表和曲线并排 |
+| ![曲线库](docs/screenshots/curves.png) 曲线库 | ![编辑器](docs/screenshots/editor.png) 曲线编辑器：节点和发展参数 |
 | ![烘焙中](docs/screenshots/roast.png) 烘焙中：美拉德阶段，显示预计一爆 | ![一爆后](docs/screenshots/roast-fc.png) 一爆后：阶段条上框出发展窗口 |
 | ![立即排豆](docs/screenshots/drop-now.png) 到达立即排豆温度 | ![曲线图](docs/screenshots/chart.png) 曲线图：豆温、目标、RoR、火力 |
 | ![冷却](docs/screenshots/cooling.png) 冷却：降到冷机温度的进度 | ![总结](docs/screenshots/summary.png) 总结，已保存到 SD 卡 |
@@ -39,7 +39,7 @@ Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE*
 
 本项目现在构建原生 ESP-IDF 应用，通过 ESP Hub 安装。先完成 Cardputer ADV 的 ESP Hub 注册和 USB 配网；已有 ESP Hub 的设备无需重新配网或清空闪存。
 
-CI 发布原生应用镜像和 SHA-256。SDK 3 将 Roast 标记为原生应用。此版 EspHub 可通过 USB 将已核验的镜像写入 Cardputer-Adv 的 app 分区（0x2a0000）。
+CI 发布原生应用镜像和 SHA-256。SDK 4.1.0 将 Roast 标记为原生应用。此版 EspHub 可通过 USB 将已核验的镜像写入 Cardputer-Adv 的 app 分区（0x2a0000）。
 
 保留 ESP Hub 的两个 launcher、NVS、配网和设备身份；应用位于 `0x2a0000`，大小上限 4 MiB。不要使用旧社区 Launcher 安装工具或通用 `idf.py flash` 覆盖分区表。固件不再自行检查 GitHub 更新、下载 `Roast.bin` 或维护 `latest.json`。更新由 ESP Hub 发起，执行更新前应让烘焙结束并关闭风机。
 
@@ -50,7 +50,7 @@ CI 发布原生应用镜像和 SHA-256。SDK 3 将 Roast 标记为原生应用�
 
 Roast 会自动搜索名为 `E-Meter…BLE` 的设备并连接。没有机器想先试用，可以在连接页按 **D**，或在规则页（**O**）里打开 *simulator*（模拟器）。只有机器没在运行时才能切换模拟器。
 
-任何页面按 **H** 都能看到按颜色分组的按键说明。右上角显示电量、连接状态（绿点，模拟器时是 SIM 标签），没插 SD 卡时显示红色 **SD** 标签。
+任何页面按 **H** 都能看到按颜色分组的按键说明。右上角显示电量、连接状态（绿点，模拟器时是 SIM 标签）。
 
 
 电量与 Cardputer ADV 官方示例一致，直接显示 M5Unified 返回的百分比，包括 0%。连接 USB 时，Cardputer ADV 的电源开关需置于 ON 才能充电。
@@ -68,7 +68,6 @@ Roast 会自动搜索名为 `E-Meter…BLE` 的设备并连接。没有机器想
 | ↑ ↓（`;` `.`） | 风力 ±1%（按住 Aa：±0.1%）。待机时只改开风的预设值，不会向机器发指令。 |
 | Enter | 投豆：开始计时，Cardputer PID 开始按曲线控制火力。必须先开风、选好曲线。 |
 | X X | 停风。 |
-| Tab | 曲线预览。 |
 | Esc Esc | 返回 Launcher。风机运行时不能退出。 |
 
 ### 烘焙中
@@ -94,7 +93,7 @@ Roast 会自动搜索名为 `E-Meter…BLE` 的设备并连接。没有机器想
 
 - **烘焙和冷却中：**实时曲线（豆温、目标、到排豆为止的 RoR、火力面积、打点）。顶栏四格等宽：时间、豆温、RoR，以及下一个节点：按 F 之前是预计一爆时间（按豆温现在领先或落后曲线的幅度，算到曲线一爆温度的时间）；按 F 之后是预计剩余发展时间（发展时间到，或按当前 RoR 先到排豆温度，取先到的）；冷却时是排豆后过了多久。
 - **总结页：**整锅曲线，顶栏四格：总时长、发展（时间和比例）、排豆温度、失重率。
-- **其他时候：**显示当前选中的曲线。
+- **连接和准备页面：**显示当前烘焙计划。
 
 接线（与 Cap TFT V2 一致）：SCK 40、MOSI 14（和 SD 卡共用 SPI2）、CS 5、DC 6、RST 3，背光直接接 3.3 V。外屏每次写入都会先锁住总线，SD 卡照常工作。Cardputer 没有 PSRAM，放不下整帧缓冲：每帧分成 320×16 的条带，主循环每转一次画一条，最多每秒一帧，内容没变就不画。Wi-Fi 和 TLS 运行期间（同步、保存记录）外屏保留最后一帧。没装外屏时一切照旧。
 
@@ -239,16 +238,16 @@ A 锅的曲线（一爆 7:30 / 199，排豆 10:00 / 210，即发展 2:30、4.4 �
 Roast 在发展结束时自动排豆（时间到或豆温到，见[曲线和发展](#曲线和发展)）；另外两个安全兜底：豆温达到安全温度，或曲线结束后超过"曲线结束后多久自动排豆"设定的时间。
 
 ### 曲线编辑器
-编辑器只有三行：**Start**（投豆起始温度）、**Crack** 和 **Drop**（时间和温度）。旁边显示曲线，下面显示它决定的发展：多长、多快、最多到多少度。如果发展速度比豆子到一爆时的 RoR 还快，会提示（"RoR has to rise into the crack"）。
+编辑器只有三行：**Start**（投豆起始温度）、**Crack** 和 **Drop**（时间和温度）。下面显示它决定的发展：多长、多快、最多到多少度。如果发展速度比豆子到一爆时的 RoR 还快，会提示（"RoR has to rise into the crack"）。
 
 - **Enter**（或直接输入数字）编辑这一行：分钟，Enter，秒，Enter，温度，Enter。Tab 可以跳过时间直接改温度。一爆必须早于排豆、温度低于排豆；排豆最晚 30:00。
 - 在 Start 行按 **空格** 开关起始温度（关掉就用预设的）；Backspace 恢复。
-- **S** 保存到 SD 卡的 `roast/curves/`，**N** 重命名，**B** 设置投豆量，**Tab** 预览。
+- **S** 保存到 SD 卡的 `roast/curves/`，**N** 重命名，**B** 设置投豆量。
 
 新曲线默认一爆 7:30 / 200 °C，排豆 9:00 / 210 °C。
 
 ## SD 卡
-SD 卡需要 FAT32 格式。没有 SD 卡时，记录只保存在内存里，关闭总结页后就没有了。
+Roast 需要一张可写的 FAT32 SD 卡。挂载失败时，插好卡后按 Enter 重试。投豆前必须成功创建并写入 CSV 记录。
 
 | 路径 | 内容 |
 |---|---|
