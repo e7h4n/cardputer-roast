@@ -358,6 +358,8 @@ int main()
         CHECK(previews.size() == full.size());
         for (size_t i = 0; i < previews.size(); ++i) {
             auto& preview = previews[i];
+            CHECK(preview.table.empty());
+            CHECK(LoadPreview(preview));
             CHECK(preview.table.size() < full[i].table.size() / 4);
             CHECK(preview.endTime() == full[i].endTime());
             NEAR(preview.at(preview.endTime()), full[i].at(full[i].endTime()));

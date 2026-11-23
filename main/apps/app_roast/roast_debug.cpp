@@ -1,3 +1,5 @@
+#include <memory>
+#include <new>
 /*
  * USB-serial remote for testing the Roast app on a real Cardputer without touching it.
  * Active only while the app is open. Line commands on the USB Serial/JTAG port:
@@ -276,22 +278,36 @@ void DebugPollMain()
         if (sscanf(line.c_str() + 4, "%99s %ld %ld", path, &off, &len) != 3 || off < 0 || len <= 0 || len > 3072) {
             printf("ERR b64 <file> <offset> <length<=3072>\n");
         } else if (FILE* f = fopen(path, "rb")) {
-            static uint8_t buf[3072];
-            static char out[4100];
-            size_t n = 0;
-            if (fseek(f, off, SEEK_SET) == 0) n = fread(buf, 1, (size_t)len, f);
-            fclose(f);
-            static const char* tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-            size_t o = 0;
-            for (size_t i = 0; i < n; i += 3) {
-                uint32_t v = buf[i] << 16 | (i + 1 < n ? buf[i + 1] << 8 : 0) | (i + 2 < n ? buf[i + 2] : 0);
-                out[o++]   = tbl[(v >> 18) & 63];
-                out[o++]   = tbl[(v >> 12) & 63];
-                out[o++]   = i + 1 < n ? tbl[(v >> 6) & 63] : '=';
-                out[o++]   = i + 2 < n ? tbl[v & 63] : '=';
+            // Keep the existing single-line reply. Stage only this request's bytes
+            // so a short read (including EOF) still reports the actual length.
+            std::unique_ptr<uint8_t[]> buf(new (std::nothrow) uint8_t[len]);
+            if (!buf) {
+                fclose(f);
+                puts("ERR b64 out of memory");
+                fflush(stdout);
+                return;
             }
-            out[o] = 0;
-            printf("B64 %u %s\n", (unsigned)n, out);
+            size_t n = fseek(f, off, SEEK_SET) == 0 ? fread(buf.get(), 1, len, f) : 0;
+            fclose(f);
+            static constexpr char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            flockfile(stdout);
+            printf("B64 %u ", (unsigned)n);
+            char chunk[128];
+            size_t used = 0;
+            for (size_t i = 0; i < n; i += 3) {
+                uint32_t v = (buf[i] << 16) | ((i + 1 < n ? buf[i + 1] : 0) << 8) | (i + 2 < n ? buf[i + 2] : 0);
+                chunk[used++] = alphabet[(v >> 18) & 63];
+                chunk[used++] = alphabet[(v >> 12) & 63];
+                chunk[used++] = i + 1 < n ? alphabet[(v >> 6) & 63] : '=';
+                chunk[used++] = i + 2 < n ? alphabet[v & 63] : '=';
+                if (used == sizeof chunk) {
+                    fwrite(chunk, 1, used, stdout);
+                    used = 0;
+                }
+            }
+            fwrite(chunk, 1, used, stdout);
+            putchar('\n');
+            funlockfile(stdout);
         } else {
             printf("ERR b64 cannot open %s\n", path);
         }

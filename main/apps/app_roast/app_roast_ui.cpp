@@ -619,7 +619,7 @@ void AppRoast::renderDash()
     metric(5, y, HEAT, "heat", fmt0(_snap.heat()) + "%");
     metric(84, y, FAN, "fan", fmt1(_snap.fan()) + "%");
     const char* trend = "";
-    auto& ss          = _session.samples();
+    auto& ss          = _session.recent();
     if (ss.size() > 16 && ss.back().ror10 != INT16_MIN && ss[ss.size() - 16].ror10 != INT16_MIN) {
         int d = ss.back().ror10 - ss[ss.size() - 16].ror10;
         trend = d < -3 ? "↘" : (d > 3 ? "↗" : "");
@@ -1011,7 +1011,10 @@ void AppRoast::pumpExternal()
     g_target = nullptr;
     _extStrip.pushSprite(&GetHAL().ext, 0, _extRow * kStripH);
     _extVisible = true;
-    if (++_extRow * kStripH >= EH) _extRow = -1;
+    if (++_extRow * kStripH >= EH) {
+        _extRow = -1;
+        if (!live) _extStrip.deleteSprite();  // the panel retains the completed frame
+    }
 }
 
 void AppRoast::blankExternal()
@@ -1050,7 +1053,7 @@ void AppRoast::renderCool()
     int bw    = text(4, 22, fmt1(bt), F47(), cold ? GO : INK);
     if (8 + bw + tw("°C", F14()) < 156) text(8 + bw, 29, "°C", F14(), DIM);
     // cooling rate over the last 30 s of samples
-    auto& ss   = _session.samples();
+    auto& ss   = _session.recent();
     float rate = NAN;
     if (ss.size() > 31) rate = (ss[ss.size() - 31].bt10 - ss.back().bt10) / 10.0f * 2.0f;
     rbox(160, 24, W - 5, 72, 5, CARD);

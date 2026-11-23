@@ -340,6 +340,7 @@ int main(int argc, char** argv)
     for (int i = 0; i < 30; i++) press("down", 30);
     press("up", 60);
     shot("rules_sync_saved");
+    press("esc");  // leave Settings before operating the simulated roaster
 
     press("s");
     shot("fan_on");

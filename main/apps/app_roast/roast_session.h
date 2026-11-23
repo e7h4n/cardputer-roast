@@ -68,19 +68,19 @@ public:
     {
         return _samples;
     }
+    const std::vector<Sample>& recent() const { return _diskHistory ? _recent : _samples; }
     int lastT() const
     {
-        return _samples.empty() ? 0 : _samples.back().t;
+        return recent().empty() ? 0 : recent().back().t;
     }
     float lastBT() const
     {
-        return _samples.empty() ? NAN : _samples.back().bt10 / 10.0f;
+        return recent().empty() ? NAN : recent().back().bt10 / 10.0f;
     }
-    /// Least-squares slope over the last 30 s, degC/min. NAN when not enough data.
-    float rorAt(int idx) const;
+    /// myERoast RoR from the latest 30 measurements, in degrees C per minute.
     float rorNow() const
     {
-        return _samples.empty() ? NAN : rorAt((int)_samples.size() - 1);
+        return recent().empty() || recent().back().ror10 == INT16_MIN ? NAN : recent().back().ror10 / 10.0f;
     }
 
     void setMark(Mark m, int t, float bt);
@@ -141,7 +141,7 @@ public:
     {
         std::vector<Sample>().swap(_samples);
         std::vector<Action>().swap(_actions);
-        std::vector<float>().swap(_curveTable);
+        std::vector<Sample>().swap(_recent);
     }
     void end()
     {
@@ -167,7 +167,13 @@ private:
     bool _ctlSet     = false;
     void writeControl();
     float _ctl[6]    = {};
-    std::vector<float> _curveTable;
+    // With an SD log, _samples is a bounded plot and _recent is the full-rate control window.
+    std::vector<Sample> _recent;
+    size_t _sampleCount = 0, _plotStride = 1;
+    bool _diskHistory = false, _ioFailed = false;
+    float _peakHeat = NAN, _fcRor = NAN, _fc30Ror = NAN, _dropRor = NAN;
+    double _errorSum = 0;
+    int _errorCount = 0, _saturated = 0;
 };
 
 std::string NextLogId();

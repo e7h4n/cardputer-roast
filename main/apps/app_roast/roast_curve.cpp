@@ -266,11 +266,10 @@ static Curve make_builtin(const char* name, const char* note, int batch, std::ve
     c.batchG  = batch;
     c.builtin = true;
     c.pts     = std::move(pts);
-    c.build();
     return c;
 }
 
-std::vector<Curve> BuiltinCurves()
+std::vector<Curve> BuiltinCurves(bool buildTables)
 {
     std::vector<Curve> v;
     v.push_back(make_builtin("Gotiti 200g Light V3", "Development 65 s at 7.4 C/min, max 207 C; untested", 200,
@@ -279,6 +278,7 @@ std::vector<Curve> BuiltinCurves()
                              {{0, 50, PointTag::Charge}, {470, 200, PointTag::FCs}, {555, 211, PointTag::Drop}}));
     v.push_back(make_builtin("Dry run (no beans)", "Low temperature check of the PID, 3 min", 0,
                              {{0, 50, PointTag::Charge}, {120, 100, PointTag::FCs}, {180, 110, PointTag::Drop}}));
+    if (buildTables) for (auto& curve : v) curve.build();
     return v;
 }
 
@@ -480,7 +480,7 @@ static void keepPreview(Curve& curve)
 bool OpenLibraryCurve(const Curve& preview, Curve& out)
 {
     Curve selected;
-    if (preview.readOnly) {
+    if (!preview.path.empty()) {
         if (!LoadCurveFile(preview.path, selected)) return false;
     } else {
         selected = preview;
@@ -493,8 +493,7 @@ bool OpenLibraryCurve(const Curve& preview, Curve& out)
 
 std::vector<Curve> ListCurves(bool sdMounted)
 {
-    std::vector<Curve> v = BuiltinCurves();
-    for (auto& curve : v) keepPreview(curve);
+    std::vector<Curve> v = BuiltinCurves(false);
     if (!sdMounted) return v;
     DIR* d = opendir(kCurveDir);
     if (!d) return v;
@@ -512,12 +511,45 @@ std::vector<Curve> ListCurves(bool sdMounted)
     std::sort(files.begin(), files.end());
     for (auto& f : files) {
         Curve c;
-        if (LoadCurveFile(std::string(kCurveDir) + "/" + f, c)) {
-            keepPreview(c);
-            v.push_back(std::move(c));
-        }
+        c.path = std::string(kCurveDir) + "/" + f;
+        v.push_back(std::move(c));
     }
     return v;
+}
+
+bool LoadPreview(Curve& entry)
+{
+    Curve full;
+    if (!OpenLibraryCurve(entry, full)) return false;
+    keepPreview(full);
+    entry = std::move(full);
+    return true;
+}
+
+void RestoreCurve(bool sdMounted, const std::string& name, const std::string& path, Curve& out)
+{
+    // New selections have a stable path. Older installations stored just the display name.
+    if (sdMounted && !path.empty() && path.compare(0, strlen(kCurveDir) + 1, std::string(kCurveDir) + "/") == 0) {
+        Curve selected;
+        if (LoadCurveFile(path, selected)) {
+            out = std::move(selected);
+            return;
+        }
+    }
+    const bool searchFiles = sdMounted && path != ":builtin" && !name.empty();
+    auto entries = ListCurves(searchFiles);
+    if (searchFiles) {
+        for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
+            Curve candidate;
+            if (OpenLibraryCurve(*it, candidate) && candidate.name == name) {
+                out = std::move(candidate);
+                return;
+            }
+        }
+    }
+    for (const auto& entry : entries)
+        if (entry.builtin && entry.name == name && OpenLibraryCurve(entry, out)) return;
+    OpenLibraryCurve(entries.front(), out);
 }
 
 static std::string safe_filename(const std::string& name)
