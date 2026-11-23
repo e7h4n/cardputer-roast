@@ -98,17 +98,17 @@ static bool DebugPoll(std::string& line)
 
 static void DebugShot()
 {
-    auto& cv = GetHAL().canvas;
-    int w = cv.width(), h = cv.height();
-    const uint8_t* buf = (const uint8_t*)cv.getBuffer();
-    if (!buf) return;
+    auto& screen = GetHAL().drawingSurface();
+    const int w = screen.width(), h = screen.height();
+    std::vector<lgfx::swap565_t> pixels(w);
     printf("SHOT %d %d\n", w, h);
     static const char* hx = "0123456789abcdef";
     std::string row;
     row.reserve(w * 4 + 2);
     for (int y = 0; y < h; y++) {
         row.clear();
-        const uint8_t* p = buf + y * w * 2;
+        screen.readRect(0, y, w, 1, pixels.data());
+        const auto* p = reinterpret_cast<const uint8_t*>(pixels.data());
         for (int i = 0; i < w * 2; i++) {
             row += hx[p[i] >> 4];
             row += hx[p[i] & 15];
