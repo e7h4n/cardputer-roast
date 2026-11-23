@@ -327,11 +327,13 @@ int main(int argc, char** argv)
     press("down");
     press("enter");
     shot("wifi_scan");
+    press("down");
+    shot("wifi_selection");
     press("enter");
     type("secret");
     shot("wifi_password");
     press("enter");
-    if (previewWifiJoins != 1 || previewWifiHidden) return 1;
+    if (previewWifiJoins != 1 || previewWifiHidden || !previewWifiSaved) return 1;
     press("m");
     type("hidden");
     press("enter");

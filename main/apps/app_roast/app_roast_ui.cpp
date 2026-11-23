@@ -1371,8 +1371,12 @@ void AppRoast::renderWifi()
         int first = std::max(0, _wifiSelected - rows + 1);
         int y = 20;
         for (int i = first; i < (int)_wifiNetworks.size() && i < first + rows; ++i, y += 15) {
-            if (i == _wifiSelected) rbox(2, y - 1, W - 3, y + 12, 4, CARD);
-            text(7, y, clipTo(_wifiNetworks[i], W - 16, F12()), F12(), INK);
+            const bool selected = i == _wifiSelected;
+            if (selected) {
+                rbox(2, y - 1, W - 3, y + 12, 4, INK);
+                text(7, y, ">", F12(), ui::WHITE);
+            }
+            text(20, y, clipTo(_wifiNetworks[i], W - 27, F12()), F12(), selected ? ui::WHITE : INK);
         }
     }
     keybar({{"Enter", GO, "join"}, {"S", INK, "scan"}, {"M", INK, "manual"}, {"Esc", FAINT, "back"}});
@@ -1480,7 +1484,7 @@ void AppRoast::renderInput()
     darken(0, 40);
     rbox(0, 40, W - 1, H + 8, 8, CARD);
     rbox(W / 2 - 14, 43, W / 2 + 14, 45, 1, FAINT);
-    text(8, 49, _input.title, F16(), INK);
+    text(8, 49, clipTo(_input.title, W - 16, F16()), F16(), INK);
     rbox(8, 70, W - 9, 92, 4, ui::WHITE);
     band.drawRoundRect(8, 70, W - 16, 23, 4, INK);
     band.drawRoundRect(9, 71, W - 18, 21, 3, INK);

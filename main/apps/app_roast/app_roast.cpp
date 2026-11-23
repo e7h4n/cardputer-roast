@@ -1877,7 +1877,8 @@ void AppRoast::pollWifi()
 
 void AppRoast::promptWifiPassword(std::string ssid, bool hidden)
 {
-    openInput("Wi-Fi password", "", false, "Leave blank for an open network", [this, ssid = std::move(ssid), hidden](const std::string& password) {
+    const std::string title = "Join " + ssid;
+    openInput(title, "", false, "Wi-Fi password · blank for open network", [this, ssid = std::move(ssid), hidden](const std::string& password) {
         _wifiJoining = okou_wifi_join(ssid.c_str(), password.c_str(), hidden);
         if (!_wifiJoining) toast("Wi-Fi request unavailable", WARN);
     });
