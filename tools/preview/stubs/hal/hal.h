@@ -32,6 +32,8 @@ public:
     bool sd = true;
     uint32_t millis();
     void delay(uint32_t) {}
+    lgfx::LovyanGFX& drawingSurface() { return canvas; }
+    void releaseCanvas() {}
     void pushCanvas() {}
     bool sdCardMount() { return sd; }
     void setRoastBleActive(bool) {}

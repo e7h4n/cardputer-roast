@@ -38,9 +38,9 @@ Font F47() { return font::s47b(); }
 // What the drawing helpers draw on: the internal screen's canvas, or the external screen's strip (pumpExternal).
 LGFX_Sprite* g_target = nullptr;
 
-LGFX_Sprite& cv()
+lgfx::LovyanGFX& cv()
 {
-    return g_target ? *g_target : GetHAL().canvas;
+    return g_target ? *g_target : GetHAL().drawingSurface();
 }
 
 int tw(const std::string& s, Font f)
@@ -267,11 +267,16 @@ Strip phaseStrip(int y, int tNow, int dryT, int fcT, float span, int planFc, int
 
 void darken(int y0, int y1)
 {
-    // dim what is behind a sheet: RGB565 stored byte-swapped in the sprite buffer
-    auto* buf = (uint16_t*)cv().getBuffer();
-    if (!buf) return;
+    auto& sprite = g_target ? *g_target : GetHAL().canvas;
+    if (!sprite.getBuffer()) return;
     for (int y = std::max(0, y0); y < std::min(H, y1); y++) {
         for (int x = 0; x < W; x++) {
+            if (sprite.getColorDepth() == 8) {
+                auto& pixel = static_cast<uint8_t*>(sprite.getBuffer())[y * W + x];
+                pixel = (pixel >> 1) & 0x6d;  // halve each RGB332 channel
+                continue;
+            }
+            auto* buf = static_cast<uint16_t*>(sprite.getBuffer());
             uint16_t v = buf[y * W + x];
             v          = (uint16_t)((v >> 8) | (v << 8));
             uint16_t r = (v >> 11) & 31, g = (v >> 5) & 63, b = v & 31;

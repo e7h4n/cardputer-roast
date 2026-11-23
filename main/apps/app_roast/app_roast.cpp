@@ -91,8 +91,14 @@ void AppRoast::onOpen()
 
     _rules.load();
     _sdOk = GetHAL().sdCardMount();
-    reloadCurves();
-    {
+    char ssid[33];
+    const bool bypass = consumeBypass();
+    const bool skip = consumeSkipSync();
+    const bool configured = roast_net_esphub_network(ssid) && roast_net_saved_dropbox();
+    const bool bootSync = !bypass && !skip && configured && _sdOk;
+    // Boot sync restarts the app. Load the curve tables on the boot that uses them.
+    if (!bootSync) {
+        reloadCurves();
         Settings s("roast", false);
         std::string last = s.GetString("curve", "");
         int idx          = 0;
@@ -115,15 +121,10 @@ void AppRoast::onOpen()
     });
     // Wi-Fi and Dropbox are required. Boot syncs the curves from Dropbox (must succeed) and restarts once with a
     // clean heap; that second boot (flagged in RTC memory) skips the sync and connects to the roaster.
-    char ssid[33];
-    // Read the boot marker once and clear it, whichever way this boot goes (a stale "skip sync" must not survive
-    // into the boot after setup).
-    bool bypass = consumeBypass();
-    bool skip   = consumeSkipSync();
     if (bypass) {  // test only: USB console `boot roast`
         startLink();
         toast("Test boot: no Dropbox sync", WARN, 4000);
-    } else if (!roast_net_esphub_network(ssid) || !roast_net_saved_dropbox()) {
+    } else if (!configured) {
         _netRequired = true;
         openNetwork();
     } else if (skip || !_sdOk) {
@@ -1623,6 +1624,7 @@ void AppRoast::pollSave()
         // restarts after the save, so give that memory to Wi-Fi + TLS.
         std::vector<Curve>().swap(_curves);
         releaseExternal();
+        GetHAL().releaseCanvas();
         _saveStarted = sync::Start(sync::Job::SaveRoast, _session.logId());
         if (!_saveStarted) toast("Dropbox save could not start", DROP, 3000);
         _dirty = true;
@@ -1682,6 +1684,7 @@ bool AppRoast::startJob(sync::Job job, const std::string& arg)
         _link.reset();
     }
     _linkState = _prevLinkState = LinkState::Off;
+    GetHAL().releaseCanvas();  // draw directly to the TFT while Dropbox TLS needs a contiguous block
     _session.release();  // the roast's samples are saved; free them for TLS
     _screen = Screen::Sync;
     _dirty  = true;

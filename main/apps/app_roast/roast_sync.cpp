@@ -145,6 +145,9 @@ bool curves()
         if (remove((std::string(kCurveDir) + "/" + de->d_name).c_str())) return fail("could not delete a local curve");
         update([](Status& s) { s.removed++; });
     }
+    const Status totals = Get();
+    ESP_LOGI(TAG, "curve sync complete: downloaded=%d unchanged=%d removed=%d",
+             totals.downloaded, totals.unchanged, totals.removed);
     return true;
 }
 
