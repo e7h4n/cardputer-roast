@@ -22,7 +22,11 @@
     {
         "url": "https://github.com/okou-ai/esphub.git",
         "path": ".deps/esphub",
-        "branch": "73bfa3d162c29f6117c8dfbbc7a3ddb6fc18ad09",
-        "patch": "patches/esphub-iot-response.patch"
+        "branch": "4ba251b3a1951df7754e2afcc1869e760c455d69"
+    },
+    {
+        "url": "https://github.com/Tencent/rapidjson.git",
+        "path": ".deps/rapidjson",
+        "branch": "297637bc0a0f00dc504dbc1a47ebdaa577f8ae19"
     }
 ]

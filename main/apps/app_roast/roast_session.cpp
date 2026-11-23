@@ -14,7 +14,7 @@ namespace roast {
 #define ROAST_SD_ROOT "/sdcard"
 #endif
 static const char* kLogDir = ROAST_SD_ROOT "/roast/logs";
-static const size_t kMaxSamples = 1200;  // 20 minutes at 1 Hz
+
 
 const char* MarkName(Mark m)
 {
@@ -62,12 +62,17 @@ bool EnsureLogDir()
     return EnsureDir(kLogDir);
 }
 
-void Session::reset(const Curve* curve, float greenG, const std::string& bean)
+bool Session::begin(const std::string& id, const Curve* curve, float greenG, const std::string& bean)
 {
     close();
-    _samples.clear();
-    _samples.reserve(kMaxSamples);  // ~19 KB; with BLE up the largest free block is ~31 KB
-    _actions.clear();
+    release();
+    _active = _ioFailed = false;
+    _sampleCount = 0;
+    _plotStride = 1;
+    _peakHeat = _fcRor = _fc30Ror = _dropRor = NAN;
+    _errorSum = 0;
+    _errorCount = _saturated = 0;
+    _ctlSet = false;
     for (int i = 0; i < (int)Mark::Count; i++) {
         _markT[i]  = -1;
         _markBT[i] = NAN;
@@ -79,17 +84,7 @@ void Session::reset(const Curve* curve, float greenG, const std::string& bean)
     _id.clear();
     curveName = curve ? curve->name : "";
     curveEnd  = curve ? curve->endTime() : 0;
-    _curveTable.clear();
-    if (curve) _curveTable = curve->table;
-    _active = true;
-}
-
-float Session::rorAt(int idx) const
-{
-    // Same as myERoast (app.js parseTemperatureData): 30 one-second readings, |BT(now) - BT(29 readings ago)| / 0.5,
-    // shown only after 35 s. Kept identical so numbers match the phone app's RoR.
-    if (idx < 29 || idx >= (int)_samples.size() || _samples[idx].t <= 35) return NAN;
-    return fabsf((_samples[idx].bt10 - _samples[idx - 29].bt10) / 10.0f) / 0.5f;
+    return openLog(id);
 }
 
 void Session::setControl(float heat, float ff, float p, float i, float d, float obs)
@@ -114,32 +109,49 @@ void Session::writeControl()
 
 void Session::addSample(const Sample& in)
 {
+    if (!_csv) return;
     Sample s = in;
-    if (_samples.size() >= kMaxSamples) {
-        // Never grow past the reservation (a vector doubling would need ~38 KB and abort). Keep logging to SD only.
-        if (_csv) {
-            fprintf(_csv, "%d,%.1f,%.1f,%.1f,%.1f,,%d,%d", s.t, s.bt10 / 10.0, s.tgt10 / 10.0, s.heat10 / 10.0,
-                    s.fan10 / 10.0, s.pid, s.mtime);
-            writeControl();
-        }
-        return;
+    if (_recent.size() == 32) _recent.erase(_recent.begin());
+    s.ror10 = INT16_MIN;
+    if (_recent.size() >= 29 && s.t > 35)
+        s.ror10 = 2 * std::abs(s.bt10 - _recent[_recent.size() - 29].bt10);
+    _recent.push_back(s);
+
+    // Keep evenly spaced points plus the latest sample as the chart grows.
+    if (_sampleCount && (_sampleCount - 1) % _plotStride) _samples.pop_back();
+    if (_samples.size() == 160) {
+        for (size_t i = 0; i < 80; ++i) _samples[i] = _samples[2 * i];
+        _samples.resize(80);
+        _plotStride *= 2;
     }
     _samples.push_back(s);
-    float r                = rorAt((int)_samples.size() - 1);
-    _samples.back().ror10  = std::isnan(r) ? INT16_MIN : (int16_t)lroundf(r * 10);
-    if (_csv) {
-        const Sample& x = _samples.back();
-        char ror[12] = "";
-        if (x.ror10 != INT16_MIN) snprintf(ror, sizeof(ror), "%.1f", x.ror10 / 10.0);
-        fprintf(_csv, "%d,%.1f,%.1f,%.1f,%.1f,%s,%d,%d", x.t, x.bt10 / 10.0, x.tgt10 / 10.0, x.heat10 / 10.0,
-                x.fan10 / 10.0, ror, x.pid, x.mtime);
-        writeControl();
-        if (++_sinceFlush >= 10) flush();
+    ++_sampleCount;
+    const int fc = markT(Mark::FCs), drop = markT(Mark::Drop);
+    if (fc >= 0 && s.t <= fc) _fcRor = rorNow();
+    if (fc >= 0 && s.t <= fc + 30) _fc30Ror = rorNow();
+    if (drop < 0 || s.t <= drop) {
+        _peakHeat = std::fmax(_peakHeat, s.heat10 / 10.f);
+        if (s.heat10 >= 950) ++_saturated;
+        if (s.t >= 60 && s.tgt10 > 0) {
+            _errorSum += std::abs(s.bt10 - s.tgt10) / 10.0;
+            ++_errorCount;
+        }
+        if (drop >= 0) _dropRor = rorNow();
     }
+    if (_ioFailed) return;
+    char ror[12] = "";
+    if (s.ror10 != INT16_MIN) snprintf(ror, sizeof(ror), "%.1f", s.ror10 / 10.0);
+    fprintf(_csv, "%d,%.1f,%.1f,%.1f,%.1f,%s,%d,%d", s.t, s.bt10 / 10.0, s.tgt10 / 10.0, s.heat10 / 10.0,
+            s.fan10 / 10.0, ror, s.pid, s.mtime);
+    writeControl();
+    if (ferror(_csv)) _ioFailed = true;
+    if (++_sinceFlush >= 10) flush();
 }
 
 void Session::setMark(Mark m, int t, float bt)
 {
+    if (m == Mark::FCs) _fcRor = _fc30Ror = rorNow();
+    if (m == Mark::Drop) _dropRor = rorNow();
     _markT[(int)m]  = t;
     _markBT[(int)m] = bt;
     if (_csv) fprintf(_csv, "#mark,%d,%s,%.1f\n", t, MarkName(m), bt);
@@ -168,37 +180,19 @@ RoastMetrics Session::metrics() const
     int drop = _markT[(int)Mark::Drop];
     m.total  = drop >= 0 ? drop : lastT();
     int fc   = _markT[(int)Mark::FCs];
-    auto rorNear = [&](int t) -> float {
-        for (int i = (int)_samples.size() - 1; i >= 0; i--)
-            if (_samples[i].t <= t) return _samples[i].ror10 == INT16_MIN ? NAN : _samples[i].ror10 / 10.0f;
-        return NAN;
-    };
     if (fc >= 0) {
-        m.rorAtFC = rorNear(fc);
-        if (lastT() >= fc + 30) m.rorFC30 = rorNear(fc + 30);
+        m.rorAtFC = _fcRor;
+        if (lastT() >= fc + 30) m.rorFC30 = _fc30Ror;
         if (drop >= 0) {
             m.dev     = drop - fc;
             m.devPct  = drop > 0 ? 100.0f * m.dev / drop : NAN;
             m.deltaFC = _markBT[(int)Mark::Drop] - _markBT[(int)Mark::FCs];
         }
     }
-    if (drop >= 0) m.rorAtDrop = rorNear(drop);
-    float mh   = -1;
-    int sat    = 0;
-    double err = 0;
-    int nerr   = 0;
-    for (auto& s : _samples) {
-        if (drop >= 0 && s.t > drop) break;
-        mh = std::max(mh, s.heat10 / 10.0f);
-        if (s.heat10 >= 950) sat++;
-        if (s.t >= 60 && s.tgt10 > 0) {
-            err += fabs((s.bt10 - s.tgt10) / 10.0);
-            nerr++;
-        }
-    }
-    if (mh >= 0) m.maxHeat = mh;
-    m.heatSatSec = sat;
-    if (nerr) m.meanAbsErr = (float)(err / nerr);
+    if (drop >= 0) m.rorAtDrop = _dropRor;
+    m.maxHeat = _peakHeat;
+    m.heatSatSec = _saturated;
+    if (_errorCount) m.meanAbsErr = _errorSum / _errorCount;
     if (_greenG > 0 && _roastedG > 0) m.lossPct = 100.0f * (_greenG - _roastedG) / _greenG;
     return m;
 }
@@ -206,7 +200,6 @@ RoastMetrics Session::metrics() const
 bool Session::openLog(const std::string& id)
 {
     close();
-    _id = id;
     if (!EnsureDir(kLogDir)) return false;
     std::string p = std::string(kLogDir) + "/" + id + ".csv";
     _csv          = fopen(p.c_str(), "w");
@@ -216,14 +209,22 @@ bool Session::openLog(const std::string& id)
     fprintf(_csv, "t,bt,target,heat,fan,ror,pid,machine_t,heat_cmd,ff,p,i,d,obs\n");
     for (auto& a : _actions) fprintf(_csv, "#action,%d,%s\n", a.t, a.text.c_str());
     flush();
+    if (_ioFailed) {
+        close();
+        _ioFailed = false;
+        return false;
+    }
+    _active = true;
+    _id = id;
+    _recent.reserve(32);
+    _samples.reserve(160);
     return true;
 }
 
 void Session::flush()
 {
     if (_csv) {
-        fflush(_csv);
-        fsync(fileno(_csv));
+        if (fflush(_csv) != 0 || fsync(fileno(_csv)) != 0 || ferror(_csv)) _ioFailed = true;
     }
     _sinceFlush = 0;
 }
@@ -231,7 +232,8 @@ void Session::flush()
 void Session::close()
 {
     if (_csv) {
-        fclose(_csv);
+        if (ferror(_csv)) _ioFailed = true;
+        if (fclose(_csv) != 0) _ioFailed = true;
         _csv = nullptr;
     }
 }
@@ -243,19 +245,39 @@ static void add_num(cJSON* o, const char* k, double v, int decimals = 1)
     cJSON_AddNumberToObject(o, k, std::round(v * p) / p);
 }
 
+// FatFs may reject renaming over an existing file. Keep the previous export
+// until the replacement has been closed and can be published.
+static bool publishExport(const std::string& tmp, const std::string& path)
+{
+    if (rename(tmp.c_str(), path.c_str()) == 0) return true;
+    const std::string previous = path + ".bak";
+    if (rename(path.c_str(), previous.c_str()) != 0) return false;
+    if (rename(tmp.c_str(), path.c_str()) == 0) {
+        remove(previous.c_str());
+        return true;
+    }
+    rename(previous.c_str(), path.c_str());
+    return false;
+}
+
 bool Session::finalize(std::string* err)
 {
-    if (_id.empty()) _id = NextLogId();
-    if (!EnsureDir(kLogDir)) {
-        if (err) *err = "No SD card: log kept in memory only";
+    if (_id.empty()) {
+        if (err) *err = "SD card log unavailable";
         return false;
     }
     if (_csv) {
         fprintf(_csv, "#roasted_g,%.1f\n", _roastedG);
         close();
     }
+    if (_ioFailed) {
+        if (err) *err = "SD card log write failed";
+        return false;
+    }
     RoastMetrics m = metrics();
 
+    const std::string base = std::string(kLogDir) + "/" + _id;
+    const std::string jsonTmp = base + ".json.tmp", alogTmp = base + ".alog.tmp";
     // ---- summary json ----
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "id", _id.c_str());
@@ -296,11 +318,10 @@ bool Session::finalize(std::string* err)
     cJSON_Delete(root);
     bool ok = false;
     if (txt) {
-        std::string p = std::string(kLogDir) + "/" + _id + ".json";
-        FILE* f       = fopen(p.c_str(), "wb");
+        FILE* f = fopen(jsonTmp.c_str(), "wb");
         if (f) {
             ok = fputs(txt, f) >= 0;
-            fclose(f);
+            if (fclose(f) != 0) ok = false;
         }
         cJSON_free(txt);
     }
@@ -308,8 +329,7 @@ bool Session::finalize(std::string* err)
     // ---- .alog: streamed JSON (no booleans/null, so it is also a valid Python literal for Artisan).
     // Built with fprintf: a cJSON tree of ~3600 numbers would not fit in the heap next to BLE.
     {
-        std::string p = std::string(kLogDir) + "/" + _id + ".alog";
-        FILE* f       = fopen(p.c_str(), "wb");
+        FILE* f = ok ? fopen(alogTmp.c_str(), "wb") : nullptr;
         if (!f) {
             ok = false;
         } else {
@@ -322,34 +342,59 @@ bool Session::finalize(std::string* err)
                 }
                 return o + "\"";
             };
-            auto idxOf = [&](int t) -> int {
-                if (t < 0) return 0;
-                for (size_t i = 0; i < _samples.size(); i++)
-                    if (_samples[i].t >= t) return (int)i;
-                return (int)_samples.size() - 1;
-            };
             fprintf(f, "{\"version\": \"3.0.2\", \"mode\": \"C\", \"title\": %s, \"beans\": %s, ",
                     jstr(_bean.empty() ? curveName : _bean).c_str(), jstr(_bean).c_str());
             fprintf(f, "\"roastertype\": \"E-Roast\", \"samplinginterval\": 1.0, \"weight\": [%.1f, %.1f, \"g\"], ",
                     _greenG, _roastedG);
             const char* keys[3] = {"timex", "temp1", "temp2"};
-            for (int k = 0; k < 3; k++) {
+            FILE* csv = fopen((base + ".csv").c_str(), "r");
+            int ti[8] = {};
+            const int slots[] = {1, 2, 3, 6};
+            for (int j = 0; j < 4; ++j)
+                if (m.markT[j] >= 0 && _sampleCount) ti[slots[j]] = _sampleCount - 1;
+            float firstBT = NAN;
+            for (int k = 0; k < 3; ++k) {
                 fprintf(f, "\"%s\": [", keys[k]);
-                for (size_t i = 0; i < _samples.size(); i++) {
-                    const Sample& x = _samples[i];
-                    if (k == 0)
-                        fprintf(f, "%s%d.0", i ? ", " : "", x.t);
-                    else
-                        fprintf(f, "%s%.1f", i ? ", " : "", (k == 1 ? x.tgt10 : x.bt10) / 10.0);
-                }
+                size_t count = 0;
+                int previousT = -1;
+                auto write = [&](int t, float target, float bt) {
+                    if (k == 0) {
+                        if (!count) firstBT = bt;
+                        for (int j = 0; j < 4; ++j)
+                            if (previousT < m.markT[j] && t >= m.markT[j]) ti[slots[j]] = count;
+                        previousT = t;
+                        fprintf(f, "%s%d.0", count ? ", " : "", t);
+                    } else {
+                        fprintf(f, "%s%.1f", count ? ", " : "", k == 1 ? target : bt);
+                    }
+                    ++count;
+                };
+                if (csv && fseek(csv, 0, SEEK_SET) == 0) {
+                    char line[256];
+                    while (fgets(line, sizeof line, csv)) {
+                        bool data = line[0] >= '0' && line[0] <= '9';
+                        if (!strchr(line, '\n')) {
+                            int c;
+                            while ((c = fgetc(csv)) != '\n' && c != EOF) {}
+                            if (data) ok = false;
+                            continue;
+                        }
+                        if (!data) continue;
+                        int t;
+                        float bt, target;
+                        if (sscanf(line, "%d,%f,%f,", &t, &bt, &target) != 3) { ok = false; break; }
+                        write(t, target, bt);
+                    }
+                    if (ferror(csv)) ok = false;
+                } else ok = false;
+                if (count != _sampleCount) ok = false;
                 fprintf(f, "], ");
             }
-            int ti[8] = {0, m.markT[0] >= 0 ? idxOf(m.markT[0]) : 0, m.markT[1] >= 0 ? idxOf(m.markT[1]) : 0,
-                         m.markT[2] >= 0 ? idxOf(m.markT[2]) : 0, 0, 0, m.markT[3] >= 0 ? idxOf(m.markT[3]) : 0, 0};
+            if (csv) fclose(csv);
             fprintf(f, "\"timeindex\": [%d, %d, %d, %d, %d, %d, %d, %d], ", ti[0], ti[1], ti[2], ti[3], ti[4], ti[5],
                     ti[6], ti[7]);
             fprintf(f, "\"computed\": {");
-            if (!_samples.empty()) fprintf(f, "\"CHARGE_BT\": %.1f, ", _samples.front().bt10 / 10.0);
+            if (!std::isnan(firstBT)) fprintf(f, "\"CHARGE_BT\": %.1f, ", firstBT);
             const char* ck[] = {"DRY", "FCs", "FCe", "DROP"};
             for (int i = 0; i < 4; i++) {
                 if (m.markT[i] < 0) continue;
@@ -357,10 +402,16 @@ bool Session::finalize(std::string* err)
             }
             if (!std::isnan(m.lossPct)) fprintf(f, "\"weight_loss\": %.1f, ", m.lossPct);
             fprintf(f, "\"totaltime\": %d}}\n", m.total);
-            ok = (fclose(f) == 0) && ok;
+            if (ferror(f)) ok = false;
+            if (fclose(f) != 0) ok = false;
         }
     }
-    if (!ok && err) *err = "SD card write failed";
+    if (ok) ok = publishExport(alogTmp, base + ".alog") && publishExport(jsonTmp, base + ".json");
+    if (!ok) {
+        remove(alogTmp.c_str());
+        remove(jsonTmp.c_str());
+        if (err) *err = "SD card log export failed";
+    }
     return ok;
 }
 

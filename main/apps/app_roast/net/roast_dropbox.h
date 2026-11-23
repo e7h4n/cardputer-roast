@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Dropbox authorization for the setup screen (internal to roast_net). Ported from e7h4n/coffee-watch.
 #pragma once
+#include <stdio.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -24,18 +25,18 @@ bool rn_dropbox_saved(void);
 
 /* ---- Sync client (no setup screen; Wi-Fi must be up). Paths are inside the app folder, UTF-8. ---- */
 typedef struct {
-    char name[128];
+    char name[256];
     char hash[65];  // Dropbox content_hash
-    uint32_t size;
 } rn_dbx_entry_t;
-typedef void (*rn_dbx_entry_cb)(const rn_dbx_entry_t *entry, void *ctx);
+typedef bool (*rn_dbx_entry_cb)(const rn_dbx_entry_t *entry, void *ctx);
 typedef void (*rn_dbx_progress_cb)(uint32_t done, uint32_t total, void *ctx);
 
-/// Loads the saved account, waits for the clock and gets a fresh access token.
+/// Loads the saved account, sets the clock (SNTP) and gets a fresh access token.
 bool rn_dbx_open(char *err, size_t errlen);
 void rn_dbx_close(void);
 /// Files directly in `folder` (a missing folder lists as empty).
-bool rn_dbx_list(const char *folder, rn_dbx_entry_cb cb, void *ctx, char *err, size_t errlen);
+bool rn_dbx_parse_page(FILE *fp, rn_dbx_entry_cb cb, void *ctx, char **next);
+bool rn_dbx_list(const char *folder, const char *page_path, rn_dbx_entry_cb cb, void *ctx, char *err, size_t errlen);
 /// Downloads to `local` (via `local`.part), checking Dropbox's content_hash.
 bool rn_dbx_download(const char *path, const char *local, char *err, size_t errlen);
 /// Uploads `local` to `path`, overwriting, streamed from the card; only a matching content_hash counts.

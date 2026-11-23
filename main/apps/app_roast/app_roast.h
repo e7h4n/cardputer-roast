@@ -47,7 +47,7 @@ public:
     void onClose() override;
 
 private:
-    enum class Screen : uint8_t { Connect, Prep, Roast, Cool, Summary, Curves, Editor, Settings, Help, Network, Sync };
+    enum class Screen : uint8_t { Storage, Connect, Prep, Roast, Cool, Summary, Curves, Editor, Settings, Help, Network, Sync };
     enum class Phase : uint8_t { Idle, FanOn, Roasting, Cooling, Done };
 
     struct Input {
@@ -86,10 +86,9 @@ private:
     roast::LinkState _prevLinkState = roast::LinkState::Off;
     RoastRules _rules;
     roast::Session _session;
-    std::vector<roast::Curve> _curves;
+    std::vector<roast::CurveEntry> _curves;
     roast::Curve _curve;  // working copy of the selected curve
     bool _hasCurve = false;
-    bool _sdOk     = false;
     std::string _bean;
 
     Screen _screen     = Screen::Connect;
@@ -179,6 +178,7 @@ private:
     bool _netRequired = false;  // Wi-Fi or Dropbox not set up yet: setup is the only way forward
     // The roast is saved to Dropbox from the summary, in the background, once the fan is off (the link closes then).
     uint32_t _saveAt   = 0;      // when to start (lets the fan-stop command reach the roaster first); 0 = not planned
+    bool _exportReady = false;  // complete local files available for upload
     bool _saveStarted  = false;
     bool _saveReported = false;  // the outcome was toasted
     void planSave();
@@ -221,9 +221,11 @@ private:
     bool confirm(int key, const std::string& msg, bool quiet = false);
     bool confirmPending(int key) const;
 
-    void selectCurve(int idx);
-    void loadStartupCurves();
-    void reloadCurves();
+    bool selectCurve(int idx);
+    static constexpr int kCurveRows = 5;
+    void rememberCurve();
+    void startWithCard();
+    void loadSelectedCurve();
     void startFan();
     void charge();
     void drop(const char* why);
@@ -247,11 +249,12 @@ private:
 
     // ---- rendering (app_roast_ui.cpp)
     void render();
+    void drawFrame();
     void renderConnect();
     void renderPrep();
     void renderRoast();
     void renderDash();
-    void renderChart(int x, int y, int w, int h, bool withText, const roast::Curve* preview = nullptr);
+    void renderChart(int x, int y, int w, int h, bool withText);
     void renderCool();
     void renderSummary();
     void renderCurves();
@@ -269,10 +272,10 @@ private:
     uint32_t _extKey    = 0;   // what the screen shows now (externalKey())
     uint32_t _extDrawMs = 0;   // when the last frame started
     bool _extVisible = false;
-    uint32_t externalKey(const roast::Curve* preview);
+    uint32_t externalKey();
     void pumpExternal();
     void renderExternalPlan(int y);
-    void renderExternal(int top, const roast::Curve* preview);  // the whole frame, shifted up by `top` (the strip's first row)
+    void renderExternal(int top);  // the whole frame, shifted up by `top` (the strip's first row)
     void blankExternal();
     void releaseExternal();        // free the strip (before Wi-Fi + TLS); the next frame allocates it again
     int renderStatus(bool draw = true);  // returns the left edge of the status corner

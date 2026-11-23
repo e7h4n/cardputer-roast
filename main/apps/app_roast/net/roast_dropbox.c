@@ -37,11 +37,9 @@
 #define TAG "rn-dropbox"
 #define NVS_NS "rn_dropbox"
 #define TOKEN_URL "https://api.dropboxapi.com/oauth2/token"
-#define LIST_URL "https://api.dropboxapi.com/2/files/list_folder"
-#define LIST_MORE_URL "https://api.dropboxapi.com/2/files/list_folder/continue"
 #define WRITE_SCOPE "files.content.write"
-#define RESPONSE_SETUP 4096  // setup: token and upload replies are ~1.5 KB
-#define RESPONSE_SYNC 16384  // sync: folder listings
+#define RESPONSE_SIZE 4096  // shared by small API replies, SD reads and file transfers
+
 #define TOKEN_MAX 2049
 #define HASH_BLOCK (4 * 1024 * 1024)
 
@@ -66,7 +64,6 @@ static SemaphoreHandle_t finished;
 static TaskHandle_t task;
 static atomic_bool busy, have_credentials;
 static char *response, *access_token;
-static size_t response_cap;
 
 static void set_state(const char *state, const char *error)
 {
@@ -82,7 +79,7 @@ static void set_state(const char *state, const char *error)
 static void wipe_session(void)
 {
     if (access_token) mbedtls_platform_zeroize(access_token, TOKEN_MAX);
-    if (response) mbedtls_platform_zeroize(response, response_cap);
+    if (response) mbedtls_platform_zeroize(response, RESPONSE_SIZE);
 }
 
 static bool store(bool erase)
@@ -141,38 +138,19 @@ static bool clock_ready(void)
     return ready;
 }
 
-// The Hub and Dropbox must not create simultaneous outgoing HTTPS sessions on this board.
-extern void roast_https_acquire(void);
-extern void roast_https_release(void);
-
-static esp_http_client_handle_t https_client_init(const esp_http_client_config_t *cfg)
+static int http(const char *url, const char *body, size_t length, const char *type, bool authorized, FILE *page)
 {
-    roast_https_acquire();
-    esp_http_client_handle_t h = esp_http_client_init(cfg);
-    if (!h) roast_https_release();
-    return h;
-}
-
-static void https_client_cleanup(esp_http_client_handle_t h)
-{
-    esp_http_client_cleanup(h);
-    roast_https_release();
-}
-
-static int http(const char *url, const char *body, size_t length, const char *type, bool authorized, const char *api_arg)
-{
-    mbedtls_platform_zeroize(response, response_cap);
+    mbedtls_platform_zeroize(response, RESPONSE_SIZE);
     esp_http_client_config_t cfg = {.url = url, .timeout_ms = 15000, .crt_bundle_attach = esp_crt_bundle_attach,
                                     .disable_auto_redirect = true, .buffer_size = 2048, .buffer_size_tx = 4096};
-    esp_http_client_handle_t h = https_client_init(&cfg);
+    esp_http_client_handle_t h = esp_http_client_init(&cfg);
     if (!h) return -1;
     esp_http_client_set_method(h, HTTP_METHOD_POST);
     if (type) esp_http_client_set_header(h, "Content-Type", type);
-    if (api_arg) esp_http_client_set_header(h, "Dropbox-API-Arg", api_arg);
     if (authorized) {
         char *auth = malloc(strlen(access_token) + 8);
         if (!auth) {
-            https_client_cleanup(h);
+            esp_http_client_cleanup(h);
             return -1;
         }
         sprintf(auth, "Bearer %s", access_token);
@@ -191,34 +169,23 @@ static int http(const char *url, const char *body, size_t length, const char *ty
             }
             offset += (size_t)written;
         }
-        if (sent && esp_http_client_fetch_headers(h) >= 0) {
-            int used = 0, got = 0;
-            const bool listing = !strcmp(url, LIST_URL) || !strcmp(url, LIST_MORE_URL);
-            for (;;) {
-                got = esp_http_client_read(h, response + used, (int)response_cap - 1 - used);
-                if (got <= 0) break;
-                used += got;
-                if (used != (int)response_cap - 1) continue;
-
-                char extra;
-                got = esp_http_client_read(h, &extra, 1);
-                if (got <= 0) break;
-                size_t next = response_cap * 2;
-                char *larger = listing && next <= RESPONSE_SYNC ? realloc(response, next) : NULL;
-                if (!larger) {
-                    got = -1;
-                    break;
-                }
-                response = larger;
-                response_cap = next;
-                response[used++] = extra;
+        bool headers = sent && esp_http_client_fetch_headers(h) >= 0;
+        if (headers && page && esp_http_client_get_status_code(h) == 200) {
+            int got;
+            while ((got = esp_http_client_read(h, response, RESPONSE_SIZE)) > 0) {
+                if (fwrite(response, 1, got, page) != (size_t)got) break;
             }
+            if (got == 0 && esp_http_client_is_complete_data_received(h) && fflush(page) == 0) status = 200;
+        } else if (headers) {
+            int used = 0, got = 0;
+            while (used < RESPONSE_SIZE - 1 && (got = esp_http_client_read(h, response + used, RESPONSE_SIZE - 1 - used)) > 0)
+                used += got;
             response[used] = 0;
             if (got >= 0 && esp_http_client_is_complete_data_received(h)) status = esp_http_client_get_status_code(h);
         }
     }
     esp_http_client_close(h);
-    https_client_cleanup(h);
+    esp_http_client_cleanup(h);
     return status;
 }
 
@@ -314,7 +281,7 @@ static const char *token_response(bool initial)
             error = "missing_scope";
     }
     free_private_json(json);
-    mbedtls_platform_zeroize(response, response_cap);
+    mbedtls_platform_zeroize(response, RESPONSE_SIZE);
     return error;
 }
 
@@ -322,7 +289,13 @@ static bool refresh(void)
 {
     int status = post_form(form("grant_type", "refresh_token", "refresh_token", account.refresh, "client_id", account.key,
                                 "client_secret", account.secret, NULL));
-    return status == 200 && !token_response(false);
+    if (status != 200) {
+        ESP_LOGW(TAG, "token refresh failed (HTTP status %d)", status);
+        return false;
+    }
+    const char *error = token_response(false);
+    if (error) ESP_LOGW(TAG, "token refresh: %s", error);
+    return !error;
 }
 
 static void begin_auth(const cw_dropbox_command_t *c)
@@ -342,7 +315,7 @@ static void begin_auth(const cw_dropbox_command_t *c)
                            : cJSON_IsString(e) && !strcmp(e->valuestring, "invalid_client") ? "client_rejected"
                                                                                             : "authorization_rejected";
         free_private_json(j);
-        mbedtls_platform_zeroize(response, response_cap);
+        mbedtls_platform_zeroize(response, RESPONSE_SIZE);
         set_state("failed", why);
         return;
     }
@@ -408,8 +381,7 @@ static void dropbox_task(void *arg)
 bool rn_dropbox_start(void)
 {
     if (task) return true;
-    response_cap = RESPONSE_SETUP;
-    response     = calloc(1, response_cap);
+    response     = calloc(1, RESPONSE_SIZE);
     access_token = calloc(1, TOKEN_MAX);
     commands     = xQueueCreate(4, sizeof(item_t));
     finished     = xSemaphoreCreateBinary();
@@ -478,8 +450,9 @@ int rn_dropbox_status(char *out, int capacity)
 /* =============================================================== sync client */
 #define DOWNLOAD_URL "https://content.dropboxapi.com/2/files/download"
 #define UPLOAD_URL "https://content.dropboxapi.com/2/files/upload"
+#define LIST_URL "https://api.dropboxapi.com/2/files/list_folder"
+#define LIST_MORE_URL "https://api.dropboxapi.com/2/files/list_folder/continue"
 #define DELETE_URL "https://api.dropboxapi.com/2/files/delete_v2"
-#define CHUNK 4096  // one TLS record (CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN); 8 KB left too little heap at save time
 
 static void seterr(char *err, size_t n, const char *fmt, ...)
 {
@@ -546,7 +519,7 @@ bool rn_dbx_local_hash(const char *local, char out[65])
 {
     FILE *f = fopen(local, "rb");
     if (!f) return false;
-    uint8_t *buf = malloc(CHUNK);
+    uint8_t *buf = (uint8_t *)response;
     if (!buf) {
         fclose(f);
         return false;
@@ -554,10 +527,9 @@ bool rn_dbx_local_hash(const char *local, char out[65])
     hasher_t h;
     hash_init(&h);
     size_t n;
-    while ((n = fread(buf, 1, CHUNK, f)) > 0) hash_update(&h, buf, n);
+    while ((n = fread(buf, 1, RESPONSE_SIZE, f)) > 0) hash_update(&h, buf, n);
     bool ok = !ferror(f);
     fclose(f);
-    free(buf);
     hash_final(&h, out);
     return ok;
 }
@@ -615,8 +587,7 @@ bool rn_dbx_open(char *err, size_t n)
         seterr(err, n, "setup is open");
         return false;
     }
-    response_cap = RESPONSE_SETUP;
-    response     = calloc(1, response_cap);
+    response     = calloc(1, RESPONSE_SIZE);
     access_token = calloc(1, TOKEN_MAX);
     if (!response || !access_token) {
         rn_dbx_close();
@@ -643,7 +614,6 @@ void rn_dbx_close(void)
     free(response);
     free(access_token);
     response = access_token = NULL;
-    response_cap            = 0;
     mbedtls_platform_zeroize(&account, sizeof account);
 }
 
@@ -655,74 +625,67 @@ static int api_json(const char *url, const char *body)
 
 static void error_summary(int status, char *err, size_t n, const char *what)
 {
+    if (status < 0) {
+        seterr(err, n, "%s: Dropbox unreachable or incomplete reply", what);
+        return;
+    }
     cJSON *j          = cJSON_Parse(response);
     const cJSON *summ = cJSON_GetObjectItemCaseSensitive(j, "error_summary");
-    if (status < 0)
-        seterr(err, n, "%s: Dropbox unreachable", what);
-    else if (cJSON_IsString(summ))
+    if (cJSON_IsString(summ))
         seterr(err, n, "%s: %.60s", what, summ->valuestring);
     else
         seterr(err, n, "%s: HTTP %d", what, status);
     cJSON_Delete(j);
 }
 
-bool rn_dbx_list(const char *folder, rn_dbx_entry_cb cb, void *ctx, char *err, size_t n)
+bool rn_dbx_list(const char *folder, const char *page_path, rn_dbx_entry_cb cb, void *ctx, char *err, size_t n)
 {
     char body[512];
     cJSON *b = cJSON_CreateObject();
     cJSON_AddStringToObject(b, "path", folder);
-    cJSON_AddNumberToObject(b, "limit", 4);
+    cJSON_AddNumberToObject(b, "limit", 25);
     bool okb = cJSON_PrintPreallocated(b, body, sizeof body, false);
     cJSON_Delete(b);
     if (!okb) {
         seterr(err, n, "list: path too long");
         return false;
     }
-    int status = api_json(LIST_URL, body);
+    bool first = true;
+    char *next_body = NULL;
     for (;;) {
-        if (status == 409 && strstr(response, "not_found")) return true;  // no folder yet: empty
+        FILE *page = fopen(page_path, "w+b");
+        if (!page) {
+            cJSON_free(next_body);
+            seterr(err, n, "list: cannot create SD page");
+            return false;
+        }
+        const char *request = next_body ? next_body : body;
+        int status = http(first ? LIST_URL : LIST_MORE_URL, request, strlen(request), "application/json", true, page);
+        cJSON_free(next_body);
+        next_body = NULL;
         if (status != 200) {
+            fclose(page);
+            if (status == 409 && first && strstr(response, "path/not_found")) return true;
             error_summary(status, err, n, "list");
             return false;
         }
-        cJSON *j = cJSON_Parse(response);
-        if (!j) {
-            seterr(err, n, "list: bad reply");
+        char *cursor = NULL;
+        bool parsed = !fseek(page, 0, SEEK_SET) && rn_dbx_parse_page(page, cb, ctx, &cursor);
+        if (fclose(page) != 0 || !parsed) {
+            free(cursor);
+            seterr(err, n, "list: invalid page or SD write failed");
             return false;
         }
-        const cJSON *entries = cJSON_GetObjectItemCaseSensitive(j, "entries"), *e;
-        cJSON_ArrayForEach(e, entries)
-        {
-            const cJSON *tag = cJSON_GetObjectItemCaseSensitive(e, ".tag");
-            if (!cJSON_IsString(tag) || strcmp(tag->valuestring, "file")) continue;
-            rn_dbx_entry_t ent = {0};
-            const cJSON *name = cJSON_GetObjectItemCaseSensitive(e, "name");
-            const cJSON *hash = cJSON_GetObjectItemCaseSensitive(e, "content_hash");
-            const cJSON *size = cJSON_GetObjectItemCaseSensitive(e, "size");
-            if (!cJSON_IsString(name) || strlen(name->valuestring) >= sizeof ent.name) continue;
-            snprintf(ent.name, sizeof ent.name, "%s", name->valuestring);
-            if (cJSON_IsString(hash)) snprintf(ent.hash, sizeof ent.hash, "%s", hash->valuestring);
-            if (cJSON_IsNumber(size)) ent.size = (uint32_t)size->valuedouble;
-            cb(&ent, ctx);
-        }
-        const cJSON *more   = cJSON_GetObjectItemCaseSensitive(j, "has_more");
-        const cJSON *cursor = cJSON_GetObjectItemCaseSensitive(j, "cursor");
-        bool again          = cJSON_IsTrue(more) && cJSON_IsString(cursor);
-        char *next          = NULL;
-        if (again) {
-            cJSON *c = cJSON_CreateObject();
-            cJSON_AddStringToObject(c, "cursor", cursor->valuestring);
-            next = cJSON_PrintUnformatted(c);
-            cJSON_Delete(c);
-        }
-        cJSON_Delete(j);
-        if (!again) return true;
-        if (!next) {
+        if (!cursor) return true;
+        cJSON *c = cJSON_CreateObject();
+        if (c && cJSON_AddStringToObject(c, "cursor", cursor)) next_body = cJSON_PrintUnformatted(c);
+        free(cursor);
+        cJSON_Delete(c);
+        if (!next_body) {
             seterr(err, n, "list: out of memory");
             return false;
         }
-        status = api_json(LIST_MORE_URL, next);
-        cJSON_free(next);
+        first = false;
     }
 }
 
@@ -758,13 +721,13 @@ static esp_http_client_handle_t open_content(const char *url, const char *arg)
     esp_http_client_config_t cfg = {.url = url, .timeout_ms = 20000, .crt_bundle_attach = esp_crt_bundle_attach,
                                     .disable_auto_redirect = true, .buffer_size = 2048, .buffer_size_tx = 4096,
                                     .event_handler = on_event};
-    esp_http_client_handle_t h = https_client_init(&cfg);
+    esp_http_client_handle_t h = esp_http_client_init(&cfg);
     if (!h) return NULL;
     esp_http_client_set_method(h, HTTP_METHOD_POST);
     esp_http_client_set_header(h, "Dropbox-API-Arg", arg);
     char *auth = malloc(strlen(access_token) + 8);
     if (!auth) {
-        https_client_cleanup(h);
+        esp_http_client_cleanup(h);
         return NULL;
     }
     sprintf(auth, "Bearer %s", access_token);
@@ -777,7 +740,7 @@ static esp_http_client_handle_t open_content(const char *url, const char *arg)
 static void read_reply(esp_http_client_handle_t h)
 {
     int used = 0, got;
-    while (used < (int)response_cap - 1 && (got = esp_http_client_read(h, response + used, (int)response_cap - 1 - used)) > 0)
+    while (used < RESPONSE_SIZE - 1 && (got = esp_http_client_read(h, response + used, RESPONSE_SIZE - 1 - used)) > 0)
         used += got;
     response[used] = 0;
 }
@@ -793,7 +756,7 @@ bool rn_dbx_download(const char *path, const char *local, char *err, size_t n)
     char part[300];
     snprintf(part, sizeof part, "%s.part", local);
     result_header = calloc(1, 1024);
-    uint8_t *buf  = malloc(CHUNK);
+    uint8_t *buf  = (uint8_t *)response;
     FILE *f       = fopen(part, "wb");
     esp_http_client_handle_t h = (result_header && buf && f) ? open_content(DOWNLOAD_URL, arg) : NULL;
     bool ok = false;
@@ -812,7 +775,7 @@ bool rn_dbx_download(const char *path, const char *local, char *err, size_t n)
             hash_init(&hs);
             int r;
             bool wrote = true;
-            while ((r = esp_http_client_read(h, (char *)buf, CHUNK)) > 0) {
+            while ((r = esp_http_client_read(h, (char *)buf, RESPONSE_SIZE)) > 0) {
                 hash_update(&hs, buf, (size_t)r);
                 if (fwrite(buf, 1, (size_t)r, f) != (size_t)r) wrote = false;
             }
@@ -832,10 +795,9 @@ bool rn_dbx_download(const char *path, const char *local, char *err, size_t n)
     }
     if (h) {
         esp_http_client_close(h);
-        https_client_cleanup(h);
+        esp_http_client_cleanup(h);
     }
     if (f && fclose(f) != 0) ok = false;
-    free(buf);
     free(result_header);
     result_header = NULL;
     if (ok) {
@@ -861,7 +823,7 @@ bool rn_dbx_upload(const char *local, const char *path, rn_dbx_progress_cb cb, v
     }
     snprintf(arg, sizeof arg, "{\"path\":%s,\"mode\":\"overwrite\",\"autorename\":false,\"mute\":true}", qp);
     uint32_t total = (uint32_t)st.st_size;
-    uint8_t *buf   = malloc(CHUNK);
+    uint8_t *buf = (uint8_t *)response;
     FILE *f        = fopen(local, "rb");
     esp_http_client_handle_t h = (buf && f) ? open_content(UPLOAD_URL, arg) : NULL;
     bool ok = false;
@@ -878,7 +840,7 @@ bool rn_dbx_upload(const char *local, const char *path, rn_dbx_progress_cb cb, v
             uint32_t sent = 0;
             bool fine     = true;
             while (sent < total) {
-                size_t r = fread(buf, 1, CHUNK, f);
+                size_t r = fread(buf, 1, RESPONSE_SIZE, f);
                 if (r == 0) {
                     fine = false;
                     seterr(err, n, "upload: card read failed");
@@ -923,9 +885,8 @@ bool rn_dbx_upload(const char *local, const char *path, rn_dbx_progress_cb cb, v
     }
     if (h) {
         esp_http_client_close(h);
-        https_client_cleanup(h);
+        esp_http_client_cleanup(h);
     }
     if (f) fclose(f);
-    free(buf);
     return ok;
 }

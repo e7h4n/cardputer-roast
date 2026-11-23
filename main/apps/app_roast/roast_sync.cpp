@@ -13,7 +13,9 @@
 #include <functional>
 #include <cctype>
 #include <cstdio>
-#include <set>
+#include <cerrno>
+#include <memory>
+#include <strings.h>
 #include <vector>
 
 #ifndef ROAST_SD_ROOT
@@ -91,25 +93,31 @@ bool fail(const char* why)
 // Card := "/Roast Curves" as it is now (last writer wins: the device pushes its own edits right away).
 bool curves()
 {
-    struct Ctx {
-        std::vector<rn_dbx_entry_t> files;
-    } ctx;
+    const char *manifestPath = ROAST_SD_ROOT "/roast/.sync-index";
+    const char *pagePath = ROAST_SD_ROOT "/roast/.sync-page";
+    struct Cleanup {
+        const char *index, *page;
+        ~Cleanup() { remove(index); remove(page); }
+    } cleanup{manifestPath, pagePath};
+    using File = std::unique_ptr<FILE, decltype(&fclose)>;
+    File manifest(fopen(manifestPath, "w+b"), fclose);
+    if (!manifest) return fail("cannot create sync files on SD");
     step("listing Dropbox curves");
-    if (!rn_dbx_list(
-            kCurvesFolder,
-            [](const rn_dbx_entry_t* e, void* c) {
-                if (isCurveFile(e->name)) static_cast<Ctx*>(c)->files.push_back(*e);
-            },
-            &ctx, s_err, sizeof s_err))
+    auto record = [](const rn_dbx_entry_t *e, void *ctx) {
+        return !isCurveFile(e->name) || fwrite(e, sizeof(*e), 1, static_cast<FILE *>(ctx)) == 1;
+    };
+    if (!rn_dbx_list(kCurvesFolder, pagePath, record, manifest.get(), s_err, sizeof s_err))
         return fail(s_err);
-    mkdir(ROAST_SD_ROOT "/roast", 0755);
-    mkdir(kCurveDir, 0755);
-    std::set<std::string> keep;
-    for (auto& e : ctx.files) {
-        keep.insert(lower(e.name));
+    if (fflush(manifest.get()) || fseek(manifest.get(), 0, SEEK_SET)) return fail("cannot finish SD index");
+    if (mkdir(kCurveDir, 0755) && errno != EEXIST) return fail("cannot create curve directory");
+    rn_dbx_entry_t e;
+    for (;;) {
+        size_t bytes = fread(&e, 1, sizeof e, manifest.get());
+        if (!bytes && feof(manifest.get()) && !ferror(manifest.get())) break;
+        if (bytes != sizeof e) return fail("cannot read SD index");
         std::string local = std::string(kCurveDir) + "/" + e.name;
         char have[65];
-        if (rn_dbx_local_hash(local.c_str(), have) && e.hash[0] && !strcmp(have, e.hash)) {
+        if (e.hash[0] && rn_dbx_local_hash(local.c_str(), have) && !strcmp(have, e.hash)) {
             update([](Status& s) { s.unchanged++; });
             continue;
         }
@@ -118,20 +126,30 @@ bool curves()
         if (!rn_dbx_download(remote.c_str(), local.c_str(), s_err, sizeof s_err)) return fail(s_err);
         update([](Status& s) { s.downloaded++; });
     }
-    std::vector<std::string> extra;
-    if (DIR* d = opendir(kCurveDir)) {
-        while (dirent* de = readdir(d)) {
-            std::string n = de->d_name;
-            if (n.empty() || n[0] == '.') continue;
-            if (!keep.count(lower(n))) extra.push_back(n);
+    // FAT directories are small on this device. Scan the disk index instead
+    // of retaining all names in SRAM. Only prune after every page and download succeeded.
+    std::unique_ptr<DIR, decltype(&closedir)> dir(opendir(kCurveDir), closedir);
+    if (!dir) return fail("cannot open curve directory");
+    for (;;) {
+        errno = 0;
+        dirent *de = readdir(dir.get());
+        if (!de) {
+            if (errno) return fail("cannot read curve directory");
+            break;
         }
-        closedir(d);
-    }
-    for (auto& n : extra) {
-        step("removing", n);
-        if (remove((std::string(kCurveDir) + "/" + n).c_str()) != 0) return fail("could not delete a local curve");
+        if (de->d_name[0] == '.' || !isCurveFile(de->d_name)) continue;
+        if (fseek(manifest.get(), 0, SEEK_SET)) return fail("cannot rewind SD index");
+        size_t n;
+        while ((n = fread(&e, 1, sizeof e, manifest.get())) == sizeof e && strcasecmp(e.name, de->d_name)) {}
+        if (n == sizeof e) continue;
+        if (n || ferror(manifest.get()) || !feof(manifest.get())) return fail("cannot read SD index");
+        step("removing", de->d_name);
+        if (remove((std::string(kCurveDir) + "/" + de->d_name).c_str())) return fail("could not delete a local curve");
         update([](Status& s) { s.removed++; });
     }
+    const Status totals = Get();
+    ESP_LOGI(TAG, "curve sync complete: downloaded=%d unchanged=%d removed=%d",
+             totals.downloaded, totals.unchanged, totals.removed);
     return true;
 }
 
@@ -199,7 +217,9 @@ void run(void*)
 {
     bool ok = false;
     step("waiting for ESP Hub Wi-Fi");
-    if (!roast_net_wait_for_network(kWifiWait, s_err, sizeof s_err)) {
+    if (s_job == Job::Curves && mkdir(ROAST_SD_ROOT "/roast", 0755) && errno != EEXIST) {
+        fail("SD card unavailable");
+    } else if (!roast_net_wait_for_network(kWifiWait, s_err, sizeof s_err)) {
         fail(s_err);
     } else {
         if (s_job == Job::Curves && !okou_connected()) {
