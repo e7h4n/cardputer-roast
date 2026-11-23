@@ -10,6 +10,8 @@
 #include <hal.h>
 #include <apps/app_roast/roast_debug.h>
 #include "okou_agent.h"
+#include "okou_agent_ext.h"
+#include "esp_netif_sntp.h"
 extern "C" {
 #include "okou_ble.h"
 }
@@ -17,9 +19,16 @@ extern "C" {
 
 using namespace mooncake;
 
+static const char native_profile[] __attribute__((section(".rodata_custom_desc"), aligned(4))) =
+    "cardputer-roast/native/cardputer-adv";
+
 // Potentially slow Hub commands (e.g. scans) must not run in the roaster control loop.
 static void hub_commands(void*)
 {
+    while (!okou_net_has_ip()) vTaskDelay(pdMS_TO_TICKS(100));
+    esp_sntp_config_t clock = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    esp_err_t result = esp_netif_sntp_init(&clock);
+    if (result != ESP_OK) ESP_LOGW("roast", "SNTP start: %s", esp_err_to_name(result));
     while (true) okou_poll(50);
 }
 
@@ -38,7 +47,7 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(okou_agent_start(&hub));
     ESP_ERROR_CHECK(xTaskCreate(hub_commands, "roast_hub_cmd", 4096, nullptr, 2, nullptr) == pdPASS
                     ? ESP_OK : ESP_ERR_NO_MEM);
-    ESP_LOGI("roast", "ESP Hub native roast ready: cardputer-adv");
+    ESP_LOGI("roast", "ESP Hub native roast ready: %s", native_profile);
 
     // Native application in the ESP Hub app slot; Roast owns the whole screen.
     GetHAL().display.setBrightness(255);
