@@ -22,7 +22,7 @@
     {
         "url": "https://github.com/okou-ai/esphub.git",
         "path": ".deps/esphub",
-        "branch": "1877c53431c45d886914cf8ef7aded5a0f60264f"
+        "branch": "6dacdd61561646bc90b622ca3e2200c1ab3176df"
     },
     {
         "url": "https://github.com/Tencent/rapidjson.git",
