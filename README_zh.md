@@ -39,7 +39,7 @@ Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE*
 
 本项目现在构建原生 ESP-IDF 应用，通过 ESP Hub 安装。先完成 Cardputer ADV 的 ESP Hub 注册和 USB 配网；已有 ESP Hub 的设备无需重新配网或清空闪存。
 
-CI 发布原生应用镜像和 SHA-256。SDK 5.0.1 将 Roast 标记为原生应用。可通过 EspHub 原生应用 OTA 安装已核验的镜像，也可用 USB 写入 Cardputer-Adv 的 app 分区（0x2a0000）。
+CI 发布原生应用镜像和 SHA-256。SDK 5.0.2 将 Roast 标记为原生应用。可通过 EspHub 原生应用 OTA 安装已核验的镜像，也可用 USB 写入 Cardputer-Adv 的 app 分区（0x2a0000）。
 
 保留 ESP Hub 的两个 launcher、NVS、配网和设备身份；应用位于 `0x2a0000`，大小上限 4 MiB。不要使用旧社区 Launcher 安装工具或通用 `idf.py flash` 覆盖分区表。固件不再自行检查 GitHub 更新、下载 `Roast.bin` 或维护 `latest.json`。更新由 ESP Hub 发起，执行更新前应让烘焙结束并关闭风机。
 
