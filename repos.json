@@ -21,7 +21,7 @@
     },
     {
         "url": "https://github.com/okou-ai/esphub-firmware.git",
-        "path": ".deps/esphub",
+        "path": ".deps/esphub-firmware",
         "branch": "6e599bd3ea1731ebef8715cd6c601fc4a6d61c54"
     },
     {
