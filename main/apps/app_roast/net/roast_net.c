@@ -2,8 +2,8 @@
 /* Dropbox-only Bluetooth setup. Networking is owned by ESP Hub. */
 #include "roast_net.h"
 #include "roast_dropbox.h"
-#include "okou_agent.h"
-#include "okou_agent_ext.h"
+#include "eh_agent.h"
+#include "eh_agent_ext.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdatomic.h>
@@ -78,10 +78,10 @@ void rn_dropbox_changed(const char *state, const char *error)
 bool roast_net_esphub_network(char ssid[33])
 {
     ssid[0] = 0;
-    if (okou_wifi_current(ssid, 33)) return true;
+    if (eh_wifi_current(ssid, 33)) return true;
     cJSON *networks = cJSON_CreateArray();
     if (!networks) return false;
-    okou_wifi_saved_json(networks);
+    eh_wifi_saved_json(networks);
     cJSON *first = cJSON_GetArrayItem(networks, 0);
     const cJSON *name = first ? cJSON_GetObjectItem(first, "ssid") : NULL;
     if (cJSON_IsString(name)) snprintf(ssid, 33, "%s", name->valuestring);
@@ -96,7 +96,7 @@ static void refresh_network_view(void)
 {
     char ssid[33], ip[16] = "";
     bool saved = roast_net_esphub_network(ssid);
-    bool up = okou_net_has_ip();
+    bool up = eh_net_has_ip();
     esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     esp_netif_ip_info_t info;
     if (up && sta && esp_netif_get_ip_info(sta, &info) == ESP_OK)
@@ -454,7 +454,7 @@ rn_view_t roast_net_view(void)
 bool roast_net_wait_for_network(int timeout_ms, char *err, size_t errlen)
 {
     for (int waited = 0; waited <= timeout_ms; waited += 100) {
-        if (okou_net_has_ip()) return true;
+        if (eh_net_has_ip()) return true;
         if (waited < timeout_ms) vTaskDelay(pdMS_TO_TICKS(100));
     }
     snprintf(err, errlen, "ESP Hub Wi-Fi offline; configure it through ESP Hub");

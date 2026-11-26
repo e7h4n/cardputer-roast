@@ -18,8 +18,8 @@
 #include <hal/utils/settings/settings.h>
 #include <mooncake_log.h>
 #include <esp_system.h>
-#include "okou_agent.h"
-#include "okou_agent_ext.h"
+#include "eh_agent.h"
+#include "eh_agent_ext.h"
 #include <atomic>
 #ifndef LGFX_LINUX_FB
 #include <freertos/FreeRTOS.h>
@@ -38,13 +38,13 @@ using namespace roast::ui;
 static const char* TAG = "Roast";
 
 // The scanner owns this buffer until it publishes its result to the UI.
-static okou_ap_t s_wifiAp[16];
+static eh_ap_t s_wifiAp[16];
 static constexpr int kScanIdle = -3, kScanRunning = -2;
 static std::atomic<int> s_wifiScan{kScanIdle};
 
 static void scanWifiTask(void*)
 {
-    s_wifiScan.store(okou_wifi_scan(s_wifiAp, sizeof(s_wifiAp) / sizeof(s_wifiAp[0]), 2500));
+    s_wifiScan.store(eh_wifi_scan(s_wifiAp, sizeof(s_wifiAp) / sizeof(s_wifiAp[0]), 2500));
 #ifndef LGFX_LINUX_FB
     vTaskDelete(nullptr);
 #endif
@@ -177,7 +177,7 @@ void AppRoast::onClose()
     blankExternal();
     GetHAL().display.fillScreen(0);
     GetHAL().delay(100);
-    okou_enter_bootloader();
+    eh_enter_bootloader();
 }
 
 void AppRoast::startLink(bool sim)
@@ -1856,7 +1856,7 @@ void AppRoast::pollWifi()
         s_wifiScan.store(kScanIdle);
     }
     if (!_wifiJoining) return;
-    const char* status = okou_wifi_join_state();
+    const char* status = eh_wifi_join_state();
     if (strcmp(status, "joining") == 0) return;
     _wifiJoining = false;
     const bool saved = strcmp(status, "saved") == 0;
@@ -1868,7 +1868,7 @@ void AppRoast::promptWifiPassword(std::string ssid, bool hidden)
 {
     const std::string title = "Join " + ssid;
     openInput(title, "", false, "Wi-Fi password · blank for open network", [this, ssid = std::move(ssid), hidden](const std::string& password) {
-        _wifiJoining = okou_wifi_join(ssid.c_str(), password.c_str(), hidden);
+        _wifiJoining = eh_wifi_join(ssid.c_str(), password.c_str(), hidden);
         if (!_wifiJoining) toast("Wi-Fi request unavailable", WARN);
     });
     _input.secret = true;

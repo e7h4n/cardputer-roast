@@ -12,7 +12,7 @@ def validate(data):
 if __name__=='__main__':
     binary=Path(sys.argv[1]);data=binary.read_bytes();sha=validate(data)
     version=sys.argv[2];repo=os.environ.get('GITHUB_REPOSITORY','e7h4n/cardputer-roast')
-    manifest={'board':'m5stack/cardputer-adv','kind':'native','native':True,'version':version,'file':binary.name,'size':len(data),'sha256':sha,'app_offset':0x2a0000,'image_profile':PROFILE[:-1].decode(),'url':f'https://github.com/{repo}/releases/download/{version}/{binary.name}'}
+    manifest={'board':'m5stack/cardputer-adv','kind':'app','native':True,'version':version,'file':binary.name,'size':len(data),'sha256':sha,'app_offset':0x2a0000,'image_profile':PROFILE[:-1].decode(),'url':f'https://github.com/{repo}/releases/download/{version}/{binary.name}'}
     (binary.parent/'SHA256SUMS').write_text(f'{sha}  {binary.name}\n')
     (binary.parent/'esphub.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print(json.dumps(manifest))

@@ -52,9 +52,9 @@ Rendered from the firmware's own drawing code by the desktop preview (`tools/pre
 
 ## Install and update with ESP Hub
 
-This project builds a native ESP-IDF application for an ESP Hub-provisioned Cardputer ADV. Register and provision the board through ESP Hub once; existing Hub devices keep their identity and saved networks.
+This project builds a native ESP-IDF application for an ESP Hub-provisioned Cardputer ADV. SDK 8 uses the EspHub 2.x registration and Wi-Fi settings. Boards provisioned with a 1.x bootloader need fresh USB provisioning to connect to EspHub 2.x.
 
-CI publishes the native application binary with its SHA-256. SDK 7.0.0 reports Roast as a native app. Install the verified binary with ESP Hub native OTA or write it over USB to the Cardputer-Adv app partition at 0x2a0000.
+CI publishes the native application binary with its SHA-256. SDK 8.0.0 reports the Roast application name and version. Install the verified binary with EspHub OTA (`kind: app`) or write it over USB to the Cardputer-Adv app partition at 0x2a0000.
 
 Keep both ESP Hub launchers, the partition table, and NVS. The app slot starts at `0x2a0000` and holds 4 MiB. Do not run the old community Launcher installer or generic `idf.py flash`. The application no longer checks GitHub for updates, downloads `Roast.bin`, or maintains `latest.json`; updates are initiated through ESP Hub after a roast has ended and the fan is off.
 
