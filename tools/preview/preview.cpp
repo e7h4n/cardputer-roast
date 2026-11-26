@@ -1,4 +1,5 @@
-#include "okou_agent.h"
+#include "eh_agent.h"
+#include "eh_agent_ext.h"
 // Desktop preview: runs the real Roast app (app_roast*.cpp, curves, session, simulator) against a fake HAL and a
 // fake clock, drives it with scripted key presses through a whole roast, and writes every page as a 240x135 PNG.
 //
@@ -460,6 +461,11 @@ int main(int argc, char** argv)
     press("enter");
     shot("bootloader_confirm");
     if (app.closed) return 1;
+    previewBootloaderPresent = false;
+    press("enter");
+    if (app.closed) return 1;
+    previewBootloaderPresent = true;
+    press("enter");
     press("enter");
     if (!app.closed) return 1;
     return 0;

@@ -37,9 +37,9 @@ Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE*
 
 ## 安装与更新（ESP Hub）
 
-本项目现在构建原生 ESP-IDF 应用，通过 ESP Hub 安装。先完成 Cardputer ADV 的 ESP Hub 注册和 USB 配网；已有 ESP Hub 的设备无需重新配网或清空闪存。
+本项目现在构建原生 ESP-IDF 应用，通过 ESP Hub 安装。SDK 8 使用 EspHub 2.x 的注册和 Wi-Fi 配置。此前用 1.x Bootloader 注册的设备，需要重新通过 USB 配置才能连接 EspHub 2.x。
 
-CI 发布原生应用镜像和 SHA-256。SDK 7.0.0 将 Roast 标记为原生应用。可通过 EspHub 原生应用 OTA 安装已核验的镜像，也可用 USB 写入 Cardputer-Adv 的 app 分区（0x2a0000）。
+CI 发布原生应用镜像和 SHA-256。SDK 8.0.0 上报 Roast 的应用名和版本。可通过 EspHub OTA（`kind: app`）安装已核验的镜像，也可用 USB 写入 Cardputer-Adv 的 app 分区（0x2a0000）。
 
 保留 ESP Hub 的两个 launcher、NVS、配网和设备身份；应用位于 `0x2a0000`，大小上限 4 MiB。不要使用旧社区 Launcher 安装工具或通用 `idf.py flash` 覆盖分区表。固件不再自行检查 GitHub 更新、下载 `Roast.bin` 或维护 `latest.json`。更新由 ESP Hub 发起，执行更新前应让烘焙结束并关闭风机。
 
@@ -101,10 +101,10 @@ Roast 会自动搜索名为 `E-Meter…BLE` 的设备并连接。没有机器想
 
 **O → Wi-Fi settings** 会扫描附近网络。用 Enter 选中，或按 **M** 手动输入 SSID。输完密码后等待连接结果。SDK 在取得 IP 地址后才保存网络。
 
-用 EspHub 蓝牙配网时，先在电脑启动信标。关闭风机后按 **O → Enter Bootloader**，连按两次 **Enter**，设备就会重启进入配网窗口。
+在已注册的 EspHub 2.x 设备上使用蓝牙配网时，关闭风机，打开 **O → Enter Bootloader** 并连按两次 **Enter**，再用 EspHub Wi-Fi 工具连接设备。
 
 
-Wi-Fi 凭据、连接、重连和 SNTP 都由 ESP Hub SDK 管理。固件不再读取或写入 `rn_wifi`，也不提供 BLE Wi-Fi 配网特征。通过 ESP Hub 配置 Wi-Fi。
+EspHub 管理已保存的 Wi-Fi 网络和重连。Roast 获取 IP 后启动 SNTP 校时。固件不再读取或写入 `rn_wifi`，也不提供 BLE Wi-Fi 配网特征。通过 ESP Hub 配置 Wi-Fi。
 
 按 **O → Dropbox setup** 打开蓝牙授权页，仅在风机关闭时可进入。烘豆机连接先释放，因为它与 Dropbox 配置共享 NimBLE。页面显示配对码和只读的 ESP Hub 网络状态；退出时只停止 Dropbox 蓝牙服务，不关闭 Hub 的 Wi-Fi。
 

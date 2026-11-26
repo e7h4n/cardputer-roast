@@ -216,6 +216,7 @@ private:
     void openSettings();
 
     // ---- logic (app_roast.cpp)
+    void closeToBootloader();
     void startLink(bool sim = false);
     void setSimulator(bool on);
     bool _netWasSim = false;  // reopen the simulator rather than BLE when network setup closes
