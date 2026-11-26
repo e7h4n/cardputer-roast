@@ -101,10 +101,10 @@ Roast 会自动搜索名为 `E-Meter…BLE` 的设备并连接。没有机器想
 
 **O → Wi-Fi settings** 会扫描附近网络。用 Enter 选中，或按 **M** 手动输入 SSID。输完密码后等待连接结果。SDK 在取得 IP 地址后才保存网络。
 
-用 EspHub 蓝牙配网时，先在电脑启动信标。关闭风机后按 **O → Enter Bootloader**，连按两次 **Enter**，设备就会重启进入配网窗口。
+在已注册的 EspHub 2.x 设备上使用蓝牙配网时，关闭风机，打开 **O → Enter Bootloader** 并连按两次 **Enter**，再用 EspHub Wi-Fi 工具连接设备。
 
 
-Wi-Fi 凭据、连接、重连和 SNTP 都由 ESP Hub SDK 管理。固件不再读取或写入 `rn_wifi`，也不提供 BLE Wi-Fi 配网特征。通过 ESP Hub 配置 Wi-Fi。
+EspHub 管理已保存的 Wi-Fi 网络和重连。Roast 获取 IP 后启动 SNTP 校时。固件不再读取或写入 `rn_wifi`，也不提供 BLE Wi-Fi 配网特征。通过 ESP Hub 配置 Wi-Fi。
 
 按 **O → Dropbox setup** 打开蓝牙授权页，仅在风机关闭时可进入。烘豆机连接先释放，因为它与 Dropbox 配置共享 NimBLE。页面显示配对码和只读的 ESP Hub 网络状态；退出时只停止 Dropbox 蓝牙服务，不关闭 Hub 的 Wi-Fi。
 

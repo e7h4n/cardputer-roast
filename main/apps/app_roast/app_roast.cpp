@@ -154,6 +154,15 @@ void AppRoast::startWithCard()
     _dirty = true;
 }
 
+void AppRoast::closeToBootloader()
+{
+    if (!eh_bootloader_partition()) {
+        toast("Set up EspHub 2.x over USB", WARN, 3500);
+        return;
+    }
+    close();
+}
+
 void AppRoast::onClose()
 {
     mclog::tagInfo(TAG, "on close");
@@ -211,7 +220,7 @@ void AppRoast::onRunning()
         } else if (_phase == Phase::Roasting) {
             toast("Roasting: drop before exit", ui::DROP);
         } else {
-            close();
+            closeToBootloader();
             return;
         }
     }
@@ -750,7 +759,7 @@ void AppRoast::onKey(const Keyboard::KeyEvent_t& e)
     switch (_screen) {
         case Screen::Storage:
             if (code == KEY_ENTER) startWithCard();
-            else if (code == KEY_ESC) close();
+            else if (code == KEY_ESC) closeToBootloader();
             break;
         case Screen::Connect:
             keyConnect(code);
@@ -807,7 +816,7 @@ bool AppRoast::keyConnect(int code)
         return true;
     }
     if (code == KEY_ESC) {
-        close();
+        closeToBootloader();
         return true;
     }
     return false;
@@ -944,7 +953,7 @@ bool AppRoast::keyPrep(int code, bool shift)
             if (_phase == Phase::FanOn) {
                 toast("Fan is on: X X to stop it first", WARN, 3000);
             } else if (confirm(KEY_ESC, "Esc again to exit")) {
-                close();
+                closeToBootloader();
             }
             return true;
         default:
@@ -1472,7 +1481,7 @@ bool AppRoast::keySettings(const Keyboard::KeyEvent_t& e, int code)
                         toast("Stop the fan first", WARN, 3000);
                     } else if (confirm(kBootloaderConfirm, "", true)) {
                         _rules.save();
-                        close();  // release the roaster link, then enter the EspHub Bootloader
+                        closeToBootloader();  // release the roaster link, then enter the EspHub Bootloader
                     }
                     return true;
                 }
@@ -1792,7 +1801,7 @@ bool AppRoast::keySync(int code)
     }
     if (code == KEY_ESC) {
         if (boot)
-            close();
+            closeToBootloader();
         else
             restartApp(true);
         return true;

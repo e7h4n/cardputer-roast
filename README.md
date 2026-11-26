@@ -131,10 +131,10 @@ Without the cap attached nothing changes.
 
 **O → Wi-Fi settings** scans nearby networks. Choose one with Enter, or press **M** to enter an SSID manually. Enter the password and wait for the connection result. The SDK saves the credentials after obtaining an IP address.
 
-For EspHub BLE Wi-Fi provisioning, start the beacon on your computer. With the fan off, open **O → Enter Bootloader** and press **Enter** twice to reboot into the provisioning window.
+For BLE Wi-Fi provisioning on a registered EspHub 2.x board, turn the fan off, open **O → Enter Bootloader** and press **Enter** twice. Connect to the board with the EspHub Wi-Fi tool.
 
 
-ESP Hub owns Wi-Fi credentials, connection/reconnection, and SNTP. The application no longer reads/writes `rn_wifi` or exposes a BLE Wi-Fi provisioning characteristic. Configure Wi-Fi through ESP Hub.
+EspHub manages saved Wi-Fi networks and reconnection. Roast starts SNTP after it obtains an IP address. The application no longer reads/writes `rn_wifi` or exposes a BLE Wi-Fi provisioning characteristic. Configure Wi-Fi through ESP Hub.
 
 Open **O → Dropbox setup** with the fan off. The roaster link closes because the two roles share NimBLE. The screen shows the passkey and read-only Hub network status. Closing setup stops Dropbox Bluetooth, not the Hub Wi-Fi connection.
 
