@@ -54,7 +54,7 @@ Rendered from the firmware's own drawing code by the desktop preview (`tools/pre
 
 This project builds a native ESP-IDF application for an ESP Hub-provisioned Cardputer ADV. SDK 8 uses the EspHub 2.x registration and Wi-Fi settings. Boards provisioned with a 1.x bootloader need fresh USB provisioning to connect to EspHub 2.x.
 
-CI publishes the native application binary with its SHA-256. SDK 8.0.0 reports the Roast application name and version. Install the verified binary with EspHub OTA (`kind: app`) or write it over USB to the Cardputer-Adv app partition at 0x2a0000.
+CI publishes the native application binary with its SHA-256. Roast reports its application name, version and SDK version to EspHub. Install the verified binary with EspHub OTA (`kind: app`) or write it over USB to the Cardputer-Adv app partition at 0x2a0000.
 
 Keep both ESP Hub launchers, the partition table, and NVS. The app slot starts at `0x2a0000` and holds 4 MiB. Do not run the old community Launcher installer or generic `idf.py flash`. The application no longer checks GitHub for updates, downloads `Roast.bin`, or maintains `latest.json`; updates are initiated through ESP Hub after a roast has ended and the fan is off.
 
@@ -443,6 +443,8 @@ ESP-IDF **v5.5**:
 python3 fetch_repos.py        # clones M5GFX, M5Unified, mooncake, ... into components/
 idf.py build                  # -> build/cardputer-roast.bin (the ESP Hub native app image)
 ```
+CMake fetches the `eh_agent` component from `esphub-ai/esphub-sdk` at the tag pinned in `sdk.version`.
+
 CI uses `espressif/idf:v5.5`. Main releases are `v0.4.<commit count>`; tagged builds use their tag. Manual branch runs publish an `esphub-<short sha>` prerelease. Each release contains the application `.bin`, `SHA256SUMS`, and an ESP Hub deployment manifest (`esphub.json`). Version comes from `ROAST_VERSION` → `PROJECT_VER`.
 
 ### Desktop preview

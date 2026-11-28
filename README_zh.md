@@ -39,7 +39,7 @@ Cardputer Roast 把 **M5Stack Cardputer ADV** 变成 **E-Roast / E-Meter621 BLE*
 
 本项目现在构建原生 ESP-IDF 应用，通过 ESP Hub 安装。SDK 8 使用 EspHub 2.x 的注册和 Wi-Fi 配置。此前用 1.x Bootloader 注册的设备，需要重新通过 USB 配置才能连接 EspHub 2.x。
 
-CI 发布原生应用镜像和 SHA-256。SDK 8.0.0 上报 Roast 的应用名和版本。可通过 EspHub OTA（`kind: app`）安装已核验的镜像，也可用 USB 写入 Cardputer-Adv 的 app 分区（0x2a0000）。
+CI 发布原生应用镜像和 SHA-256。Roast 会向 EspHub 上报应用名、应用版本和 SDK 版本。可通过 EspHub OTA（`kind: app`）安装已核验的镜像，也可用 USB 写入 Cardputer-Adv 的 app 分区（0x2a0000）。
 
 保留 ESP Hub 的两个 launcher、NVS、配网和设备身份；应用位于 `0x2a0000`，大小上限 4 MiB。不要使用旧社区 Launcher 安装工具或通用 `idf.py flash` 覆盖分区表。固件不再自行检查 GitHub 更新、下载 `Roast.bin` 或维护 `latest.json`。更新由 ESP Hub 发起，执行更新前应让烘焙结束并关闭风机。
 
@@ -330,6 +330,8 @@ Roast 需要一张可写的 FAT32 SD 卡。挂载失败时，插好卡后按 Ent
 python3 fetch_repos.py        # 把 M5GFX、M5Unified、mooncake 等依赖克隆到 components/
 idf.py build                  # 生成 build/cardputer-roast.bin（ESP Hub 原生应用镜像）
 ```
+CMake 从 `esphub-ai/esphub-sdk` 获取 `eh_agent` 组件，版本由 `sdk.version` 中的标签指定。
+
 CI 使用 `espressif/idf:v5.5`，main 发布 `v0.4.<提交数>`，手动分支构建发布 `esphub-<短 SHA>` 预发布版本。附件为应用 `.bin`、`SHA256SUMS` 和 ESP Hub 部署清单 `esphub.json`。
 
 ### 桌面预览
