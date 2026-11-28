@@ -20,11 +20,6 @@
         "branch": "v1.3.0"
     },
     {
-        "url": "https://github.com/okou-ai/esphub-firmware.git",
-        "path": ".deps/esphub-firmware",
-        "branch": "803e095a79c7cf57ed3c33d7feb631719381480f"
-    },
-    {
         "url": "https://github.com/Tencent/rapidjson.git",
         "path": ".deps/rapidjson",
         "branch": "297637bc0a0f00dc504dbc1a47ebdaa577f8ae19"
